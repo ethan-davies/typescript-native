@@ -184,6 +184,55 @@ describe("Parser", () => {
     }
   });
 
+  it("parses enum declarations and variant access", () => {
+    const { ast, diagnostics } = parse(`
+      enum Direction {
+        Up,
+        Down,
+        Left,
+        Right,
+      }
+      function main(): void {
+        let direction: Direction = Direction.Up;
+        print(direction);
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(ast.body).toHaveLength(2);
+    expect(ast.body[0]).toMatchObject({
+      kind: "EnumDeclaration",
+      name: { name: "Direction" },
+    });
+    if (ast.body[0]?.kind === "EnumDeclaration") {
+      expect(ast.body[0].variants.map((v) => v.name.name)).toEqual([
+        "Up",
+        "Down",
+        "Left",
+        "Right",
+      ]);
+    }
+
+    if (ast.body[1]?.kind !== "FunctionDeclaration") {
+      return;
+    }
+    const decl = ast.body[1].body[0];
+    expect(decl?.kind).toBe("VariableDeclaration");
+    if (decl?.kind === "VariableDeclaration") {
+      expect(decl.typeAnnotation).toMatchObject({
+        kind: "NamedType",
+        name: "Direction",
+      });
+      expect(decl.initializer.kind).toBe("MemberExpression");
+      if (decl.initializer.kind === "MemberExpression") {
+        expect(decl.initializer.object).toMatchObject({
+          kind: "Identifier",
+          name: "Direction",
+        });
+        expect(decl.initializer.property.name).toBe("Up");
+      }
+    }
+  });
+
   it("parses arithmetic precedence, parentheses, and unary minus", () => {
     const { ast, diagnostics } = parse(`
       function main(): void {

@@ -116,6 +116,21 @@ describe("Lexer", () => {
     ]);
   });
 
+  it("tokenizes the enum keyword", () => {
+    const { tokens, diagnostics } = lex(`enum Direction { Up, Down }`);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens.map((t) => t.kind)).toEqual([
+      TokenKind.Enum,
+      TokenKind.Identifier,
+      TokenKind.LBrace,
+      TokenKind.Identifier,
+      TokenKind.Comma,
+      TokenKind.Identifier,
+      TokenKind.RBrace,
+      TokenKind.Eof,
+    ]);
+  });
+
   it("tokenizes loop keywords and update operators", () => {
     const { tokens, diagnostics } = lex(
       `while for break continue ++ -- += -=`,

@@ -9,6 +9,8 @@ import type {
   CallExpression,
   CharLiteral,
   ContinueStatement,
+  EnumDeclaration,
+  EnumVariant,
   Expression,
   ExpressionStatement,
   FloatLiteral,
@@ -62,10 +64,11 @@ const UPDATE_OPS = new Set<TokenKind>([TokenKind.PlusPlus, TokenKind.MinusMinus]
 /**
  * Recursive-descent parser:
  *
- *   program      = (functionDecl | structDecl)*
+ *   program      = (functionDecl | structDecl | enumDecl)*
  *   functionDecl = "function" Ident "(" params? ")" ":" type block
  *   structDecl   = "struct" Ident "{" structField* "}"
  *   structField  = Ident ":" type ";"
+ *   enumDecl     = "enum" Ident "{" (Ident ("," Ident)* ","?)? "}"
  *   params       = param ("," param)*
  *   param        = Ident ":" type
  *   statement    = varDecl | assignment | updateStmt | returnStmt
@@ -117,6 +120,13 @@ export class Parser {
         } else {
           break;
         }
+      } else if (this.check(TokenKind.Enum)) {
+        const decl = this.parseEnumDeclaration();
+        if (decl) {
+          body.push(decl);
+        } else {
+          break;
+        }
       } else if (this.check(TokenKind.Function)) {
         const fn = this.parseFunctionDeclaration();
         if (fn) {
@@ -126,7 +136,7 @@ export class Parser {
         }
       } else {
         this.diagnostics.error(
-          `Expected 'function' or 'struct', found '${this.peek().lexeme}'`,
+          `Expected 'function', 'struct', or 'enum', found '${this.peek().lexeme}'`,
           this.peek().span,
           "E0103",
         );
@@ -224,6 +234,85 @@ export class Parser {
       name,
       typeAnnotation,
       span: { start, end },
+    };
+  }
+
+  private parseEnumDeclaration(): EnumDeclaration | null {
+    const start = this.peek().span.start;
+
+    if (!this.expect(TokenKind.Enum, "Expected 'enum'")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const nameToken = this.expect(TokenKind.Identifier, "Expected enum name");
+    if (!nameToken) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    if (!this.expect(TokenKind.LBrace, "Expected '{' after enum name")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const variants: EnumVariant[] = [];
+    if (!this.check(TokenKind.RBrace) && !this.isAtEnd()) {
+      const first = this.parseEnumVariant();
+      if (!first) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      variants.push(first);
+
+      while (this.check(TokenKind.Comma)) {
+        this.advance();
+        if (this.check(TokenKind.RBrace)) {
+          break;
+        }
+        const variant = this.parseEnumVariant();
+        if (!variant) {
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        variants.push(variant);
+      }
+    }
+
+    const rbrace = this.expect(TokenKind.RBrace, "Expected '}' after enum variants");
+    if (!rbrace) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    return {
+      kind: "EnumDeclaration",
+      name,
+      variants,
+      span: { start, end: rbrace.span.end },
+    };
+  }
+
+  private parseEnumVariant(): EnumVariant | null {
+    const nameToken = this.expect(TokenKind.Identifier, "Expected enum variant name");
+    if (!nameToken) {
+      return null;
+    }
+
+    return {
+      kind: "EnumVariant",
+      name: {
+        kind: "Identifier",
+        name: nameToken.lexeme,
+        span: nameToken.span,
+      },
+      span: nameToken.span,
     };
   }
 
@@ -1576,7 +1665,11 @@ export class Parser {
 
   private synchronizeToTopLevel(): void {
     while (!this.isAtEnd()) {
-      if (this.check(TokenKind.Function) || this.check(TokenKind.Struct)) {
+      if (
+        this.check(TokenKind.Function) ||
+        this.check(TokenKind.Struct) ||
+        this.check(TokenKind.Enum)
+      ) {
         return;
       }
       this.advance();

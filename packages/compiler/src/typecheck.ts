@@ -1,4 +1,5 @@
 import type {
+  EnumDeclaration,
   Expression,
   FunctionDeclaration,
   PrimitiveTypeName,
@@ -21,7 +22,12 @@ export interface StructValueType {
   readonly name: string;
 }
 
-export type ValueType = PrimitiveValueType | ArrayValueType | StructValueType;
+export interface EnumValueType {
+  readonly kind: "enum";
+  readonly name: string;
+}
+
+export type ValueType = PrimitiveValueType | ArrayValueType | StructValueType | EnumValueType;
 
 export type ReturnType = ValueType | "void";
 
@@ -34,6 +40,12 @@ export interface StructDef {
   readonly name: string;
   readonly fields: StructFieldDef[];
   readonly decl: StructDeclaration;
+}
+
+export interface EnumDef {
+  readonly name: string;
+  readonly variants: ReadonlyMap<string, number>;
+  readonly decl: EnumDeclaration;
 }
 
 interface Binding {
@@ -55,7 +67,8 @@ const EQUALITY_PRIMITIVES = new Set<PrimitiveValueType>(["i32", "i64", "f32", "f
  * Type-check a validated program: inference, annotations, arithmetic, calls, returns.
  */
 export function typecheck(program: Program, diagnostics: DiagnosticCollector): void {
-  const structs = collectStructs(program, diagnostics);
+  const enums = collectEnums(program, diagnostics);
+  const structs = collectStructs(program, enums, diagnostics);
   const functions = new Map<string, FunctionSig>();
 
   for (const decl of program.body) {
@@ -82,6 +95,15 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
       continue;
     }
 
+    if (enums.has(fn.name.name)) {
+      diagnostics.error(
+        `Name '${fn.name.name}' is already used as an enum`,
+        fn.name.span,
+        "E0330",
+      );
+      continue;
+    }
+
     if (functions.has(fn.name.name)) {
       diagnostics.error(
         `Duplicate function '${fn.name.name}'`,
@@ -94,7 +116,7 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
     const params: ValueType[] = [];
     let paramsOk = true;
     for (const param of fn.params) {
-      const paramType = resolveAnnotation(param.typeAnnotation, structs, diagnostics);
+      const paramType = resolveAnnotation(param.typeAnnotation, structs, enums, diagnostics);
       if (paramType === null) {
         paramsOk = false;
         continue;
@@ -106,7 +128,7 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
       continue;
     }
 
-    const returnType = resolveReturnType(fn.returnType, structs, diagnostics);
+    const returnType = resolveReturnType(fn.returnType, structs, enums, diagnostics);
     if (returnType === undefined) {
       continue;
     }
@@ -121,13 +143,87 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
 
   for (const decl of program.body) {
     if (decl.kind === "FunctionDeclaration") {
-      checkFunction(decl, functions, structs, diagnostics);
+      checkFunction(decl, functions, structs, enums, diagnostics);
     }
   }
 }
 
+function collectEnums(
+  program: Program,
+  diagnostics: DiagnosticCollector,
+): Map<string, EnumDef> {
+  const enums = new Map<string, EnumDef>();
+  const structNames = new Set<string>();
+
+  for (const decl of program.body) {
+    if (decl.kind === "StructDeclaration") {
+      structNames.add(decl.name.name);
+    }
+  }
+
+  for (const decl of program.body) {
+    if (decl.kind !== "EnumDeclaration") {
+      continue;
+    }
+
+    if (enums.has(decl.name.name)) {
+      diagnostics.error(
+        `Duplicate enum '${decl.name.name}'`,
+        decl.name.span,
+        "E0328",
+      );
+      continue;
+    }
+
+    if (structNames.has(decl.name.name)) {
+      diagnostics.error(
+        `Name '${decl.name.name}' is already used as a struct`,
+        decl.name.span,
+        "E0330",
+      );
+      continue;
+    }
+
+    if (decl.variants.length === 0) {
+      diagnostics.error(
+        `Enum '${decl.name.name}' must have at least one variant`,
+        decl.name.span,
+        "E0334",
+      );
+      continue;
+    }
+
+    const variants = new Map<string, number>();
+    let variantsOk = true;
+    for (let i = 0; i < decl.variants.length; i += 1) {
+      const variant = decl.variants[i]!;
+      if (variants.has(variant.name.name)) {
+        diagnostics.error(
+          `Duplicate variant '${variant.name.name}' in enum '${decl.name.name}'`,
+          variant.name.span,
+          "E0329",
+        );
+        variantsOk = false;
+        continue;
+      }
+      variants.set(variant.name.name, i);
+    }
+
+    if (variantsOk) {
+      enums.set(decl.name.name, {
+        name: decl.name.name,
+        variants,
+        decl,
+      });
+    }
+  }
+
+  return enums;
+}
+
 function collectStructs(
   program: Program,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): Map<string, StructDef> {
   const structs = new Map<string, StructDef>();
@@ -143,6 +239,15 @@ function collectStructs(
         `Duplicate struct '${decl.name.name}'`,
         decl.name.span,
         "E0328",
+      );
+      continue;
+    }
+
+    if (enums.has(decl.name.name)) {
+      diagnostics.error(
+        `Name '${decl.name.name}' is already used as an enum`,
+        decl.name.span,
+        "E0330",
       );
       continue;
     }
@@ -173,7 +278,7 @@ function collectStructs(
       }
       seen.add(field.name.name);
 
-      const fieldType = resolveAnnotation(field.typeAnnotation, structs, diagnostics);
+      const fieldType = resolveAnnotation(field.typeAnnotation, structs, enums, diagnostics);
       if (fieldType === null) {
         fieldsOk = false;
         continue;
@@ -202,7 +307,7 @@ export function typeToString(type: ValueType | "void"): string {
   if (typeof type === "string") {
     return type;
   }
-  if (type.kind === "struct") {
+  if (type.kind === "struct" || type.kind === "enum") {
     return type.name;
   }
   return `${typeToString(type.element)}[]`;
@@ -219,6 +324,9 @@ export function typesEqual(a: ValueType, b: ValueType): boolean {
     if (a.kind === "struct" && b.kind === "struct") {
       return a.name === b.name;
     }
+    if (a.kind === "enum" && b.kind === "enum") {
+      return a.name === b.name;
+    }
   }
   return false;
 }
@@ -231,6 +339,10 @@ export function isStructType(type: ValueType): type is StructValueType {
   return typeof type === "object" && type.kind === "struct";
 }
 
+export function isEnumType(type: ValueType): type is EnumValueType {
+  return typeof type === "object" && type.kind === "enum";
+}
+
 export function isNumericType(type: ValueType): type is PrimitiveValueType {
   return typeof type === "string" && NUMERIC_PRIMITIVES.has(type);
 }
@@ -241,9 +353,12 @@ export function isIntegerType(type: ValueType): boolean {
 
 /**
  * Convert a type annotation to a value type.
- * Named types become struct types (existence is validated by typecheck via resolveAnnotation).
+ * Named types become struct or enum types when `namedKinds` is provided.
  */
-export function annotationToValueType(ann: TypeAnnotation): ValueType | null {
+export function annotationToValueType(
+  ann: TypeAnnotation,
+  namedKinds?: ReadonlyMap<string, "struct" | "enum">,
+): ValueType | null {
   if (ann.kind === "PrimitiveType") {
     if (ann.name === "void") {
       return null;
@@ -251,9 +366,10 @@ export function annotationToValueType(ann: TypeAnnotation): ValueType | null {
     return ann.name;
   }
   if (ann.kind === "NamedType") {
-    return { kind: "struct", name: ann.name };
+    const kind = namedKinds?.get(ann.name) ?? "struct";
+    return { kind, name: ann.name };
   }
-  const element = annotationToValueType(ann.element);
+  const element = annotationToValueType(ann.element, namedKinds);
   if (element === null) {
     return null;
   }
@@ -263,6 +379,7 @@ export function annotationToValueType(ann: TypeAnnotation): ValueType | null {
 function resolveAnnotation(
   ann: TypeAnnotation,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): ValueType | null {
   if (ann.kind === "PrimitiveType") {
@@ -277,13 +394,16 @@ function resolveAnnotation(
     return ann.name;
   }
   if (ann.kind === "NamedType") {
-    if (!structs.has(ann.name)) {
-      diagnostics.error(`Unknown type '${ann.name}'`, ann.span, "E0104");
-      return null;
+    if (enums.has(ann.name)) {
+      return { kind: "enum", name: ann.name };
     }
-    return { kind: "struct", name: ann.name };
+    if (structs.has(ann.name)) {
+      return { kind: "struct", name: ann.name };
+    }
+    diagnostics.error(`Unknown type '${ann.name}'`, ann.span, "E0104");
+    return null;
   }
-  const element = resolveAnnotation(ann.element, structs, diagnostics);
+  const element = resolveAnnotation(ann.element, structs, enums, diagnostics);
   if (element === null) {
     return null;
   }
@@ -293,35 +413,52 @@ function resolveAnnotation(
 function resolveReturnType(
   ann: TypeAnnotation,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): ReturnType | undefined {
   if (ann.kind === "PrimitiveType" && ann.name === "void") {
     return "void";
   }
-  const value = resolveAnnotation(ann, structs, diagnostics);
+  const value = resolveAnnotation(ann, structs, enums, diagnostics);
   if (value === null) {
     return undefined;
   }
   return value;
 }
 
+function namedKindsFrom(
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+): Map<string, "struct" | "enum"> {
+  const named = new Map<string, "struct" | "enum">();
+  for (const name of structs.keys()) {
+    named.set(name, "struct");
+  }
+  for (const name of enums.keys()) {
+    named.set(name, "enum");
+  }
+  return named;
+}
+
 function checkFunction(
   fn: FunctionDeclaration,
   functions: Map<string, FunctionSig>,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): void {
   const scope = new Map<string, Binding>();
+  const namedKinds = namedKindsFrom(structs, enums);
   const returnType =
     fn.returnType.kind === "PrimitiveType" && fn.returnType.name === "void"
       ? ("void" as const)
-      : annotationToValueType(fn.returnType);
+      : annotationToValueType(fn.returnType, namedKinds);
   if (returnType === null) {
     return;
   }
 
   for (const param of fn.params) {
-    const paramType = annotationToValueType(param.typeAnnotation);
+    const paramType = annotationToValueType(param.typeAnnotation, namedKinds);
     if (paramType === null) {
       continue;
     }
@@ -340,7 +477,7 @@ function checkFunction(
   }
 
   for (const stmt of fn.body) {
-    checkStatement(stmt, scope, functions, structs, returnType, diagnostics, 0);
+    checkStatement(stmt, scope, functions, structs, enums, returnType, diagnostics, 0);
   }
 
   if (returnType !== "void") {
@@ -360,6 +497,7 @@ function checkStatement(
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   returnType: ReturnType,
   diagnostics: DiagnosticCollector,
   loopDepth: number,
@@ -377,7 +515,7 @@ function checkStatement(
 
       let annotated: ValueType | null = null;
       if (stmt.typeAnnotation) {
-        annotated = resolveAnnotation(stmt.typeAnnotation, structs, diagnostics);
+        annotated = resolveAnnotation(stmt.typeAnnotation, structs, enums, diagnostics);
         if (annotated === null) {
           return;
         }
@@ -388,6 +526,7 @@ function checkStatement(
         scope,
         functions,
         structs,
+        enums,
         diagnostics,
         false,
         annotated,
@@ -416,7 +555,7 @@ function checkStatement(
       return;
     }
     case "AssignmentStatement": {
-      checkAssignment(stmt, scope, functions, structs, diagnostics);
+      checkAssignment(stmt, scope, functions, structs, enums, diagnostics);
       return;
     }
     case "UpdateStatement": {
@@ -443,7 +582,7 @@ function checkStatement(
       return;
     }
     case "ExpressionStatement": {
-      checkExpression(stmt.expression, scope, functions, structs, diagnostics, true);
+      checkExpression(stmt.expression, scope, functions, structs, enums, diagnostics, true);
       return;
     }
     case "ReturnStatement": {
@@ -467,7 +606,7 @@ function checkStatement(
         return;
       }
 
-      const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
+      const valueType = checkExpression(stmt.value, scope, functions, structs, enums, diagnostics);
       if (!valueType) {
         return;
       }
@@ -481,7 +620,7 @@ function checkStatement(
       return;
     }
     case "IfStatement": {
-      const condType = checkExpression(stmt.condition, scope, functions, structs, diagnostics);
+      const condType = checkExpression(stmt.condition, scope, functions, structs, enums, diagnostics);
       if (condType && condType !== "bool") {
         diagnostics.error(
           `If condition must be 'bool', got '${typeToString(condType)}'`,
@@ -490,22 +629,22 @@ function checkStatement(
         );
       }
       for (const s of stmt.consequent) {
-        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth);
+        checkStatement(s, scope, functions, structs, enums, returnType, diagnostics, loopDepth);
       }
       if (stmt.alternate === null) {
         return;
       }
       if (Array.isArray(stmt.alternate)) {
         for (const s of stmt.alternate) {
-          checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth);
+          checkStatement(s, scope, functions, structs, enums, returnType, diagnostics, loopDepth);
         }
       } else {
-        checkStatement(stmt.alternate, scope, functions, structs, returnType, diagnostics, loopDepth);
+        checkStatement(stmt.alternate, scope, functions, structs, enums, returnType, diagnostics, loopDepth);
       }
       return;
     }
     case "WhileStatement": {
-      const condType = checkExpression(stmt.condition, scope, functions, structs, diagnostics);
+      const condType = checkExpression(stmt.condition, scope, functions, structs, enums, diagnostics);
       if (condType && condType !== "bool") {
         diagnostics.error(
           `While condition must be 'bool', got '${typeToString(condType)}'`,
@@ -514,16 +653,16 @@ function checkStatement(
         );
       }
       for (const s of stmt.body) {
-        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth + 1);
+        checkStatement(s, scope, functions, structs, enums, returnType, diagnostics, loopDepth + 1);
       }
       return;
     }
     case "ForStatement": {
       if (stmt.initializer) {
-        checkStatement(stmt.initializer, scope, functions, structs, returnType, diagnostics, loopDepth);
+        checkStatement(stmt.initializer, scope, functions, structs, enums, returnType, diagnostics, loopDepth);
       }
       if (stmt.condition) {
-        const condType = checkExpression(stmt.condition, scope, functions, structs, diagnostics);
+        const condType = checkExpression(stmt.condition, scope, functions, structs, enums, diagnostics);
         if (condType && condType !== "bool") {
           diagnostics.error(
             `For condition must be 'bool', got '${typeToString(condType)}'`,
@@ -533,15 +672,15 @@ function checkStatement(
         }
       }
       if (stmt.update) {
-        checkStatement(stmt.update, scope, functions, structs, returnType, diagnostics, loopDepth);
+        checkStatement(stmt.update, scope, functions, structs, enums, returnType, diagnostics, loopDepth);
       }
       for (const s of stmt.body) {
-        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth + 1);
+        checkStatement(s, scope, functions, structs, enums, returnType, diagnostics, loopDepth + 1);
       }
       return;
     }
     case "ForInStatement": {
-      const iterableType = checkExpression(stmt.iterable, scope, functions, structs, diagnostics);
+      const iterableType = checkExpression(stmt.iterable, scope, functions, structs, enums, diagnostics);
       if (!iterableType) {
         return;
       }
@@ -571,7 +710,7 @@ function checkStatement(
       });
 
       for (const s of stmt.body) {
-        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth + 1);
+        checkStatement(s, scope, functions, structs, enums, returnType, diagnostics, loopDepth + 1);
       }
 
       scope.delete(stmt.name.name);
@@ -597,6 +736,7 @@ function checkAssignment(
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): void {
   if (stmt.target.kind === "Identifier") {
@@ -625,7 +765,7 @@ function checkAssignment(
       }
     }
 
-    const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
+    const valueType = checkExpression(stmt.value, scope, functions, structs, enums, diagnostics);
     if (!valueType) {
       return;
     }
@@ -640,7 +780,7 @@ function checkAssignment(
   }
 
   if (stmt.target.kind === "MemberExpression") {
-    const fieldType = checkMemberLvalue(stmt.target, scope, functions, structs, diagnostics);
+    const fieldType = checkMemberLvalue(stmt.target, scope, functions, structs, enums, diagnostics);
     if (!fieldType) {
       return;
     }
@@ -656,7 +796,7 @@ function checkAssignment(
       }
     }
 
-    const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
+    const valueType = checkExpression(stmt.value, scope, functions, structs, enums, diagnostics);
     if (!valueType) {
       return;
     }
@@ -671,8 +811,8 @@ function checkAssignment(
   }
 
   // Index assignment: arr[i] = value — allowed even if arr is const
-  const objectType = checkExpression(stmt.target.object, scope, functions, structs, diagnostics);
-  const indexType = checkExpression(stmt.target.index, scope, functions, structs, diagnostics);
+  const objectType = checkExpression(stmt.target.object, scope, functions, structs, enums, diagnostics);
+  const indexType = checkExpression(stmt.target.index, scope, functions, structs, enums, diagnostics);
   if (!objectType || !indexType) {
     return;
   }
@@ -705,7 +845,7 @@ function checkAssignment(
     }
   }
 
-  const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
+  const valueType = checkExpression(stmt.value, scope, functions, structs, enums, diagnostics);
   if (!valueType) {
     return;
   }
@@ -724,9 +864,10 @@ function checkMemberLvalue(
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): ValueType | null {
-  const objectType = checkExpression(expr.object, scope, functions, structs, diagnostics);
+  const objectType = checkExpression(expr.object, scope, functions, structs, enums, diagnostics);
   if (!objectType) {
     return null;
   }
@@ -760,6 +901,7 @@ function checkExpression(
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
   allowVoidCall = false,
   expectedType: ValueType | null = null,
@@ -809,6 +951,7 @@ function checkExpression(
           scope,
           functions,
           structs,
+          enums,
           diagnostics,
           false,
           field.type,
@@ -857,7 +1000,7 @@ function checkExpression(
         expectedType && isArrayType(expectedType) ? expectedType.element : null;
 
       for (const element of expr.elements) {
-        const t = checkExpression(element, scope, functions, structs, diagnostics, false, expectedElement);
+        const t = checkExpression(element, scope, functions, structs, enums, diagnostics, false, expectedElement);
         if (!t) {
           return null;
         }
@@ -899,8 +1042,8 @@ function checkExpression(
       return { kind: "array", element: elementType! };
     }
     case "IndexExpression": {
-      const objectType = checkExpression(expr.object, scope, functions, structs, diagnostics);
-      const indexType = checkExpression(expr.index, scope, functions, structs, diagnostics);
+      const objectType = checkExpression(expr.object, scope, functions, structs, enums, diagnostics);
+      const indexType = checkExpression(expr.index, scope, functions, structs, enums, diagnostics);
       if (!objectType || !indexType) {
         return null;
       }
@@ -923,7 +1066,25 @@ function checkExpression(
       return objectType.element;
     }
     case "MemberExpression": {
-      const objectType = checkExpression(expr.object, scope, functions, structs, diagnostics);
+      // Enum variant access: Direction.Up (type name, not a local binding)
+      if (
+        expr.object.kind === "Identifier" &&
+        enums.has(expr.object.name) &&
+        !scope.has(expr.object.name)
+      ) {
+        const def = enums.get(expr.object.name)!;
+        if (!def.variants.has(expr.property.name)) {
+          diagnostics.error(
+            `Unknown variant '${expr.property.name}' on enum '${def.name}'`,
+            expr.property.span,
+            "E0324",
+          );
+          return null;
+        }
+        return { kind: "enum", name: def.name };
+      }
+
+      const objectType = checkExpression(expr.object, scope, functions, structs, enums, diagnostics);
       if (!objectType) {
         return null;
       }
@@ -971,7 +1132,7 @@ function checkExpression(
       return binding.type;
     }
     case "UnaryExpression": {
-      const operand = checkExpression(expr.operand, scope, functions, structs, diagnostics);
+      const operand = checkExpression(expr.operand, scope, functions, structs, enums, diagnostics);
       if (!operand) {
         return null;
       }
@@ -997,8 +1158,8 @@ function checkExpression(
       return operand;
     }
     case "BinaryExpression": {
-      const left = checkExpression(expr.left, scope, functions, structs, diagnostics);
-      const right = checkExpression(expr.right, scope, functions, structs, diagnostics);
+      const left = checkExpression(expr.left, scope, functions, structs, enums, diagnostics);
+      const right = checkExpression(expr.right, scope, functions, structs, enums, diagnostics);
       if (!left || !right) {
         return null;
       }
@@ -1053,7 +1214,7 @@ function checkExpression(
     }
     case "CallExpression": {
       if (expr.callee.kind === "MemberExpression") {
-        return checkMethodCall(expr, scope, functions, structs, diagnostics, allowVoidCall);
+        return checkMethodCall(expr, scope, functions, structs, enums, diagnostics, allowVoidCall);
       }
 
       if (expr.callee.name === "print") {
@@ -1066,7 +1227,7 @@ function checkExpression(
           return null;
         }
         for (const arg of expr.args) {
-          const argType = checkExpression(arg, scope, functions, structs, diagnostics);
+          const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
           if (!argType) {
             return null;
           }
@@ -1104,7 +1265,7 @@ function checkExpression(
       for (let i = 0; i < expr.args.length; i += 1) {
         const arg = expr.args[i]!;
         const expected = sig.params[i]!;
-        const argType = checkExpression(arg, scope, functions, structs, diagnostics);
+        const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
         if (!argType) {
           return null;
         }
@@ -1139,6 +1300,7 @@ function checkMethodCall(
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
   structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
   allowVoidCall: boolean,
 ): ValueType | null {
@@ -1146,7 +1308,7 @@ function checkMethodCall(
     return null;
   }
 
-  const objectType = checkExpression(expr.callee.object, scope, functions, structs, diagnostics);
+  const objectType = checkExpression(expr.callee.object, scope, functions, structs, enums, diagnostics);
   if (!objectType) {
     return null;
   }
@@ -1173,7 +1335,7 @@ function checkMethodCall(
         return null;
       }
       const arg = expr.args[0]!;
-      const argType = checkExpression(arg, scope, functions, structs, diagnostics);
+      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
       if (!argType) {
         return null;
       }
@@ -1215,7 +1377,7 @@ function checkMethodCall(
         return null;
       }
       const arg = expr.args[0]!;
-      const argType = checkExpression(arg, scope, functions, structs, diagnostics);
+      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
       if (!argType) {
         return null;
       }
@@ -1243,7 +1405,7 @@ function checkMethodCall(
         return null;
       }
       const arg = expr.args[0]!;
-      const argType = checkExpression(arg, scope, functions, structs, diagnostics);
+      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
       if (!argType) {
         return null;
       }
@@ -1260,7 +1422,10 @@ function checkMethodCall(
 }
 
 function supportsEquality(type: ValueType): boolean {
-  return typeof type === "string" && EQUALITY_PRIMITIVES.has(type);
+  if (typeof type === "string") {
+    return EQUALITY_PRIMITIVES.has(type);
+  }
+  return type.kind === "enum";
 }
 
 function typeMismatchMessage(expected: ValueType | PrimitiveTypeName, got: ValueType | PrimitiveTypeName): string {

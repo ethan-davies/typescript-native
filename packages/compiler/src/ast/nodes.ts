@@ -30,6 +30,8 @@ export type AstNode =
   | FunctionDeclaration
   | StructDeclaration
   | StructField
+  | EnumDeclaration
+  | EnumVariant
   | Parameter
   | VariableDeclaration
   | AssignmentStatement
@@ -63,7 +65,7 @@ interface AstNodeBase {
   readonly span: SourceSpan;
 }
 
-export type TopLevelDeclaration = FunctionDeclaration | StructDeclaration;
+export type TopLevelDeclaration = FunctionDeclaration | StructDeclaration | EnumDeclaration;
 
 export interface Program extends AstNodeBase {
   readonly kind: "Program";
@@ -107,6 +109,17 @@ export interface StructDeclaration extends AstNodeBase {
   readonly kind: "StructDeclaration";
   readonly name: Identifier;
   readonly fields: StructField[];
+}
+
+export interface EnumVariant extends AstNodeBase {
+  readonly kind: "EnumVariant";
+  readonly name: Identifier;
+}
+
+export interface EnumDeclaration extends AstNodeBase {
+  readonly kind: "EnumDeclaration";
+  readonly name: Identifier;
+  readonly variants: EnumVariant[];
 }
 
 export interface VariableDeclaration extends AstNodeBase {

@@ -12,6 +12,8 @@ export type {
   CallExpression,
   CharLiteral,
   ContinueStatement,
+  EnumDeclaration,
+  EnumVariant,
   Expression,
   ExpressionStatement,
   FloatLiteral,

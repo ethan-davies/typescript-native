@@ -2,6 +2,7 @@ import type {
   AssignmentStatement,
   BinaryExpression,
   CallExpression,
+  EnumDeclaration,
   Expression,
   ForInStatement,
   ForStatement,
@@ -14,6 +15,7 @@ import type {
   Statement,
   StructDeclaration,
   StructLiteral,
+  TypeAnnotation,
   UnaryExpression,
   UpdateStatement,
   VariableDeclaration,
@@ -22,7 +24,9 @@ import type {
 import {
   annotationToValueType,
   isArrayType,
+  isEnumType,
   isStructType,
+  type EnumValueType,
   type StructValueType,
   type ValueType,
 } from "../typecheck.js";
@@ -58,6 +62,11 @@ interface StructInfo {
   readonly fields: StructFieldInfo[];
 }
 
+interface EnumInfo {
+  readonly name: string;
+  readonly variants: ReadonlyMap<string, number>;
+}
+
 const COMPARISON_OPS = new Set(["==", "!=", "<", "<=", ">", ">="]);
 const LOGICAL_OPS = new Set(["&&", "||"]);
 
@@ -75,6 +84,7 @@ export class LlvmCodegen {
   private locals = new Map<string, LocalBinding>();
   private functions = new Map<string, FunctionSig>();
   private structs = new Map<string, StructInfo>();
+  private enums = new Map<string, EnumInfo>();
   private needsPrintf = false;
   private needsStringRuntime = false;
   private needsArrayRuntime = false;
@@ -91,6 +101,7 @@ export class LlvmCodegen {
     this.locals = new Map();
     this.functions.clear();
     this.structs.clear();
+    this.enums.clear();
     this.needsPrintf = false;
     this.needsStringRuntime = false;
     this.needsArrayRuntime = false;
@@ -98,6 +109,12 @@ export class LlvmCodegen {
     this.needsSprintf = false;
     this.functionBodies.length = 0;
     this.loopStack.length = 0;
+
+    for (const decl of program.body) {
+      if (decl.kind === "EnumDeclaration") {
+        this.registerEnum(decl);
+      }
+    }
 
     for (const decl of program.body) {
       if (decl.kind === "StructDeclaration") {
@@ -111,7 +128,7 @@ export class LlvmCodegen {
       }
       const fn = decl;
       const params = fn.params.map((p) => {
-        const t = annotationToValueType(p.typeAnnotation);
+        const t = this.resolveAnnotation(p.typeAnnotation);
         if (!t) {
           throw new Error(`Codegen: invalid parameter type for '${p.name.name}'`);
         }
@@ -120,7 +137,7 @@ export class LlvmCodegen {
       const returnType =
         fn.returnType.kind === "PrimitiveType" && fn.returnType.name === "void"
           ? ("void" as const)
-          : annotationToValueType(fn.returnType);
+          : this.resolveAnnotation(fn.returnType);
       if (returnType === null) {
         throw new Error(`Codegen: invalid return type for '${fn.name.name}'`);
       }
@@ -178,9 +195,20 @@ export class LlvmCodegen {
       .join("\n");
   }
 
+  private registerEnum(decl: EnumDeclaration): void {
+    const variants = new Map<string, number>();
+    for (let i = 0; i < decl.variants.length; i += 1) {
+      variants.set(decl.variants[i]!.name.name, i);
+    }
+    this.enums.set(decl.name.name, {
+      name: decl.name.name,
+      variants,
+    });
+  }
+
   private registerStruct(decl: StructDeclaration): void {
     const fields = decl.fields.map((field) => {
-      const type = annotationToValueType(field.typeAnnotation);
+      const type = this.resolveAnnotation(field.typeAnnotation);
       if (!type) {
         throw new Error(`Codegen: invalid field type in struct '${decl.name.name}'`);
       }
@@ -190,6 +218,21 @@ export class LlvmCodegen {
       name: decl.name.name,
       fields,
     });
+  }
+
+  private namedKinds(): Map<string, "struct" | "enum"> {
+    const named = new Map<string, "struct" | "enum">();
+    for (const name of this.structs.keys()) {
+      named.set(name, "struct");
+    }
+    for (const name of this.enums.keys()) {
+      named.set(name, "enum");
+    }
+    return named;
+  }
+
+  private resolveAnnotation(ann: TypeAnnotation): ValueType | null {
+    return annotationToValueType(ann, this.namedKinds());
   }
 
   private emitStructTypeDefs(): string[] {
@@ -250,7 +293,7 @@ export class LlvmCodegen {
   }
 
   private emitParameter(param: Parameter, index: number, lines: string[]): void {
-    const type = annotationToValueType(param.typeAnnotation);
+    const type = this.resolveAnnotation(param.typeAnnotation);
     if (!type) {
       throw new Error(`Codegen: invalid parameter type`);
     }
@@ -653,7 +696,7 @@ export class LlvmCodegen {
 
   private resolveDeclType(stmt: VariableDeclaration): ValueType {
     if (stmt.typeAnnotation) {
-      const annotated = annotationToValueType(stmt.typeAnnotation);
+      const annotated = this.resolveAnnotation(stmt.typeAnnotation);
       if (annotated) {
         return annotated;
       }
@@ -689,6 +732,13 @@ export class LlvmCodegen {
         return objectType.element;
       }
       case "MemberExpression": {
+        if (
+          expr.object.kind === "Identifier" &&
+          this.enums.has(expr.object.name) &&
+          !this.locals.has(expr.object.name)
+        ) {
+          return { kind: "enum", name: expr.object.name };
+        }
         const objectType = this.inferExpressionType(expr.object);
         if (isStructType(objectType)) {
           const def = this.structs.get(objectType.name);
@@ -796,6 +846,19 @@ export class LlvmCodegen {
         return this.emitArrayIndexLoad(object.llvm, indexI32, object.type.element, lines);
       }
       case "MemberExpression": {
+        if (
+          expr.object.kind === "Identifier" &&
+          this.enums.has(expr.object.name) &&
+          !this.locals.has(expr.object.name)
+        ) {
+          const def = this.enums.get(expr.object.name)!;
+          const discriminant = def.variants.get(expr.property.name);
+          if (discriminant === undefined) {
+            throw new Error(`Codegen: unknown variant '${expr.property.name}'`);
+          }
+          const type: EnumValueType = { kind: "enum", name: def.name };
+          return { llvm: String(discriminant), type };
+        }
         const objectType = this.inferExpressionType(expr.object);
         if (isStructType(objectType)) {
           return this.emitStructFieldLoad(expr, lines);
@@ -1589,6 +1652,15 @@ export class LlvmCodegen {
       lines.push(
         `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, i8 ${value.llvm})`,
       );
+    } else if (isEnumType(value.type)) {
+      const fmt = this.internString("%d");
+      const fmtPtr = this.nextTemp();
+      lines.push(
+        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
+      );
+      lines.push(
+        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, i32 ${value.llvm})`,
+      );
     } else {
       throw new Error(`Codegen: cannot stringify type for array print`);
     }
@@ -1739,6 +1811,9 @@ function toLlvmType(type: ValueType | "void"): string {
     if (type.kind === "struct") {
       return `%${type.name}`;
     }
+    if (type.kind === "enum") {
+      return "i32";
+    }
     return "ptr";
   }
   switch (type) {
@@ -1763,6 +1838,9 @@ function elementByteSize(type: ValueType, structs?: Map<string, StructInfo>): nu
   if (typeof type === "object") {
     if (type.kind === "struct") {
       return structByteSize(type.name, structs);
+    }
+    if (type.kind === "enum") {
+      return 4;
     }
     return 8; // ptr
   }
@@ -1792,6 +1870,9 @@ function fieldAlign(type: ValueType): number {
   if (typeof type === "object") {
     if (type.kind === "struct") {
       return 8;
+    }
+    if (type.kind === "enum") {
+      return 4;
     }
     return 8;
   }
@@ -1845,6 +1926,9 @@ function typedOne(type: ValueType): string {
 
 function printfSpecifier(type: ValueType): string {
   if (typeof type === "object") {
+    if (type.kind === "enum") {
+      return "%d";
+    }
     throw new Error(`Codegen: cannot print ${type.kind}`);
   }
   switch (type) {
@@ -1866,6 +1950,9 @@ function printfSpecifier(type: ValueType): string {
 
 function printfArgType(type: ValueType): string {
   if (typeof type === "object") {
+    if (type.kind === "enum") {
+      return "i32";
+    }
     throw new Error(`Codegen: cannot print ${type.kind}`);
   }
   switch (type) {

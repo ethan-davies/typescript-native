@@ -1,0 +1,33 @@
+enum Direction {
+  Up,
+  Down,
+  Left,
+  Right
+}
+
+enum Status {
+  Loading,
+  Success,
+  Error
+}
+
+struct Request {
+  status: Status;
+}
+
+function main(): void {
+  let direction: Direction = Direction.Up;
+  if (direction == Direction.Up) {
+    print("Going up");
+  }
+
+  let request = Request {
+    status: Status.Loading
+  };
+  print(request.status);
+
+  request.status = Status.Success;
+  if (request.status != Status.Error) {
+    print(request.status);
+  }
+}

@@ -309,7 +309,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("br label %for.exit.0");
     });
 
-    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, and structs examples", () => {
+    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, structs, and enums examples", () => {
       for (const name of [
         "hello.tsn",
         "variables.tsn",
@@ -318,6 +318,7 @@ describe("compile pipeline", () => {
         "loops.tsn",
         "arrays.tsn",
         "structs.tsn",
+        "enums.tsn",
       ]) {
         const source = readFileSync(join(examplesDir, name), "utf8");
         const result = compile(source);
@@ -351,6 +352,40 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("getelementptr inbounds %Person");
       expect(result.ir).toContain("define void @printPerson(%Person %arg0)");
       expect(result.ir).toContain("%v.John = alloca %Person");
+    });
+
+    it("compiles enum declarations, variant access, comparison, and struct fields", () => {
+      const result = compile(`
+        enum Direction {
+          Up,
+          Down,
+          Left,
+          Right
+        }
+        enum Status {
+          Loading,
+          Success,
+          Error
+        }
+        struct Request {
+          status: Status;
+        }
+        function main(): void {
+          let direction: Direction = Direction.Up;
+          if (direction == Direction.Up) {
+            print(direction);
+          }
+          let request = Request {
+            status: Status.Loading
+          };
+          print(request.status);
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("%Request = type { i32 }");
+      expect(result.ir).toContain("%v.direction = alloca i32");
+      expect(result.ir).toContain("store i32 0, ptr %v.direction");
+      expect(result.ir).toContain("icmp eq i32");
     });
 
     it("compiles array literals, indexing, length, mutation, methods, and for-in", () => {
@@ -834,6 +869,50 @@ describe("compile pipeline", () => {
       `);
       expect(result.success).toBe(false);
       expect(result.diagnostics.some((d) => d.code === "E0333")).toBe(true);
+    });
+
+    it("fails on unknown enum variants", () => {
+      const result = compile(`
+        enum Direction {
+          Up,
+          Down
+        }
+        function main(): void {
+          let d: Direction = Direction.Sideways;
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0324")).toBe(true);
+    });
+
+    it("fails when mixing enum and i32", () => {
+      const result = compile(`
+        enum Direction {
+          Up,
+          Down
+        }
+        function main(): void {
+          let d: Direction = 0;
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0303")).toBe(true);
+    });
+
+    it("fails when enum name clashes with struct", () => {
+      const result = compile(`
+        struct Direction {
+          x: i32;
+        }
+        enum Direction {
+          Up,
+          Down
+        }
+        function main(): void {
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0330")).toBe(true);
     });
   });
 });
