@@ -4,20 +4,37 @@ import type {
   PrimitiveTypeName,
   Program,
   Statement,
+  StructDeclaration,
   TypeAnnotation,
 } from "./ast/nodes.js";
 import type { DiagnosticCollector, SourceSpan } from "./diagnostics/diagnostic.js";
 
 export type PrimitiveValueType = Exclude<PrimitiveTypeName, "void">;
 
-export type ValueType = PrimitiveValueType | ArrayValueType;
-
 export interface ArrayValueType {
   readonly kind: "array";
   readonly element: ValueType;
 }
 
+export interface StructValueType {
+  readonly kind: "struct";
+  readonly name: string;
+}
+
+export type ValueType = PrimitiveValueType | ArrayValueType | StructValueType;
+
 export type ReturnType = ValueType | "void";
+
+export interface StructFieldDef {
+  readonly name: string;
+  readonly type: ValueType;
+}
+
+export interface StructDef {
+  readonly name: string;
+  readonly fields: StructFieldDef[];
+  readonly decl: StructDeclaration;
+}
 
 interface Binding {
   readonly type: ValueType;
@@ -38,14 +55,29 @@ const EQUALITY_PRIMITIVES = new Set<PrimitiveValueType>(["i32", "i64", "f32", "f
  * Type-check a validated program: inference, annotations, arithmetic, calls, returns.
  */
 export function typecheck(program: Program, diagnostics: DiagnosticCollector): void {
+  const structs = collectStructs(program, diagnostics);
   const functions = new Map<string, FunctionSig>();
 
-  for (const fn of program.body) {
+  for (const decl of program.body) {
+    if (decl.kind !== "FunctionDeclaration") {
+      continue;
+    }
+    const fn = decl;
+
     if (fn.name.name === "print") {
       diagnostics.error(
         "Cannot redefine builtin function 'print'",
         fn.name.span,
         "E0310",
+      );
+      continue;
+    }
+
+    if (structs.has(fn.name.name)) {
+      diagnostics.error(
+        `Name '${fn.name.name}' is already used as a struct`,
+        fn.name.span,
+        "E0330",
       );
       continue;
     }
@@ -62,13 +94,8 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
     const params: ValueType[] = [];
     let paramsOk = true;
     for (const param of fn.params) {
-      const paramType = annotationToValueType(param.typeAnnotation);
+      const paramType = resolveAnnotation(param.typeAnnotation, structs, diagnostics);
       if (paramType === null) {
-        diagnostics.error(
-          "'void' cannot be used as a parameter type",
-          param.typeAnnotation.span,
-          "E0302",
-        );
         paramsOk = false;
         continue;
       }
@@ -79,7 +106,11 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
       continue;
     }
 
-    const returnType = annotationToReturnType(fn.returnType);
+    const returnType = resolveReturnType(fn.returnType, structs, diagnostics);
+    if (returnType === undefined) {
+      continue;
+    }
+
     functions.set(fn.name.name, {
       name: fn.name.name,
       params,
@@ -88,9 +119,80 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
     });
   }
 
-  for (const fn of program.body) {
-    checkFunction(fn, functions, diagnostics);
+  for (const decl of program.body) {
+    if (decl.kind === "FunctionDeclaration") {
+      checkFunction(decl, functions, structs, diagnostics);
+    }
   }
+}
+
+function collectStructs(
+  program: Program,
+  diagnostics: DiagnosticCollector,
+): Map<string, StructDef> {
+  const structs = new Map<string, StructDef>();
+  const declarations: StructDeclaration[] = [];
+
+  for (const decl of program.body) {
+    if (decl.kind !== "StructDeclaration") {
+      continue;
+    }
+
+    if (structs.has(decl.name.name) || declarations.some((d) => d.name.name === decl.name.name)) {
+      diagnostics.error(
+        `Duplicate struct '${decl.name.name}'`,
+        decl.name.span,
+        "E0328",
+      );
+      continue;
+    }
+
+    // Placeholder so nested/self references can resolve by name during field typing
+    declarations.push(decl);
+    structs.set(decl.name.name, {
+      name: decl.name.name,
+      fields: [],
+      decl,
+    });
+  }
+
+  for (const decl of declarations) {
+    const fields: StructFieldDef[] = [];
+    const seen = new Set<string>();
+    let fieldsOk = true;
+
+    for (const field of decl.fields) {
+      if (seen.has(field.name.name)) {
+        diagnostics.error(
+          `Duplicate field '${field.name.name}' in struct '${decl.name.name}'`,
+          field.name.span,
+          "E0329",
+        );
+        fieldsOk = false;
+        continue;
+      }
+      seen.add(field.name.name);
+
+      const fieldType = resolveAnnotation(field.typeAnnotation, structs, diagnostics);
+      if (fieldType === null) {
+        fieldsOk = false;
+        continue;
+      }
+      fields.push({ name: field.name.name, type: fieldType });
+    }
+
+    if (fieldsOk) {
+      structs.set(decl.name.name, {
+        name: decl.name.name,
+        fields,
+        decl,
+      });
+    } else {
+      structs.delete(decl.name.name);
+    }
+  }
+
+  return structs;
 }
 
 export function typeToString(type: ValueType | "void"): string {
@@ -100,6 +202,9 @@ export function typeToString(type: ValueType | "void"): string {
   if (typeof type === "string") {
     return type;
   }
+  if (type.kind === "struct") {
+    return type.name;
+  }
   return `${typeToString(type.element)}[]`;
 }
 
@@ -108,13 +213,22 @@ export function typesEqual(a: ValueType, b: ValueType): boolean {
     return a === b;
   }
   if (typeof a === "object" && typeof b === "object") {
-    return typesEqual(a.element, b.element);
+    if (a.kind === "array" && b.kind === "array") {
+      return typesEqual(a.element, b.element);
+    }
+    if (a.kind === "struct" && b.kind === "struct") {
+      return a.name === b.name;
+    }
   }
   return false;
 }
 
 export function isArrayType(type: ValueType): type is ArrayValueType {
   return typeof type === "object" && type.kind === "array";
+}
+
+export function isStructType(type: ValueType): type is StructValueType {
+  return typeof type === "object" && type.kind === "struct";
 }
 
 export function isNumericType(type: ValueType): type is PrimitiveValueType {
@@ -125,12 +239,19 @@ export function isIntegerType(type: ValueType): boolean {
   return type === "i32" || type === "i64";
 }
 
+/**
+ * Convert a type annotation to a value type.
+ * Named types become struct types (existence is validated by typecheck via resolveAnnotation).
+ */
 export function annotationToValueType(ann: TypeAnnotation): ValueType | null {
   if (ann.kind === "PrimitiveType") {
     if (ann.name === "void") {
       return null;
     }
     return ann.name;
+  }
+  if (ann.kind === "NamedType") {
+    return { kind: "struct", name: ann.name };
   }
   const element = annotationToValueType(ann.element);
   if (element === null) {
@@ -139,13 +260,47 @@ export function annotationToValueType(ann: TypeAnnotation): ValueType | null {
   return { kind: "array", element };
 }
 
-function annotationToReturnType(ann: TypeAnnotation): ReturnType {
+function resolveAnnotation(
+  ann: TypeAnnotation,
+  structs: Map<string, StructDef>,
+  diagnostics: DiagnosticCollector,
+): ValueType | null {
+  if (ann.kind === "PrimitiveType") {
+    if (ann.name === "void") {
+      diagnostics.error(
+        "'void' cannot be used as a value type",
+        ann.span,
+        "E0302",
+      );
+      return null;
+    }
+    return ann.name;
+  }
+  if (ann.kind === "NamedType") {
+    if (!structs.has(ann.name)) {
+      diagnostics.error(`Unknown type '${ann.name}'`, ann.span, "E0104");
+      return null;
+    }
+    return { kind: "struct", name: ann.name };
+  }
+  const element = resolveAnnotation(ann.element, structs, diagnostics);
+  if (element === null) {
+    return null;
+  }
+  return { kind: "array", element };
+}
+
+function resolveReturnType(
+  ann: TypeAnnotation,
+  structs: Map<string, StructDef>,
+  diagnostics: DiagnosticCollector,
+): ReturnType | undefined {
   if (ann.kind === "PrimitiveType" && ann.name === "void") {
     return "void";
   }
-  const value = annotationToValueType(ann);
+  const value = resolveAnnotation(ann, structs, diagnostics);
   if (value === null) {
-    return "void";
+    return undefined;
   }
   return value;
 }
@@ -153,10 +308,17 @@ function annotationToReturnType(ann: TypeAnnotation): ReturnType {
 function checkFunction(
   fn: FunctionDeclaration,
   functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
   diagnostics: DiagnosticCollector,
 ): void {
   const scope = new Map<string, Binding>();
-  const returnType = annotationToReturnType(fn.returnType);
+  const returnType =
+    fn.returnType.kind === "PrimitiveType" && fn.returnType.name === "void"
+      ? ("void" as const)
+      : annotationToValueType(fn.returnType);
+  if (returnType === null) {
+    return;
+  }
 
   for (const param of fn.params) {
     const paramType = annotationToValueType(param.typeAnnotation);
@@ -178,7 +340,7 @@ function checkFunction(
   }
 
   for (const stmt of fn.body) {
-    checkStatement(stmt, scope, functions, returnType, diagnostics, 0);
+    checkStatement(stmt, scope, functions, structs, returnType, diagnostics, 0);
   }
 
   if (returnType !== "void") {
@@ -197,6 +359,7 @@ function checkStatement(
   stmt: Statement,
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
   returnType: ReturnType,
   diagnostics: DiagnosticCollector,
   loopDepth: number,
@@ -214,13 +377,8 @@ function checkStatement(
 
       let annotated: ValueType | null = null;
       if (stmt.typeAnnotation) {
-        annotated = annotationToValueType(stmt.typeAnnotation);
+        annotated = resolveAnnotation(stmt.typeAnnotation, structs, diagnostics);
         if (annotated === null) {
-          diagnostics.error(
-            "'void' cannot be used as a variable type",
-            stmt.typeAnnotation.span,
-            "E0302",
-          );
           return;
         }
       }
@@ -229,6 +387,7 @@ function checkStatement(
         stmt.initializer,
         scope,
         functions,
+        structs,
         diagnostics,
         false,
         annotated,
@@ -257,7 +416,7 @@ function checkStatement(
       return;
     }
     case "AssignmentStatement": {
-      checkAssignment(stmt, scope, functions, diagnostics);
+      checkAssignment(stmt, scope, functions, structs, diagnostics);
       return;
     }
     case "UpdateStatement": {
@@ -284,7 +443,7 @@ function checkStatement(
       return;
     }
     case "ExpressionStatement": {
-      checkExpression(stmt.expression, scope, functions, diagnostics, true);
+      checkExpression(stmt.expression, scope, functions, structs, diagnostics, true);
       return;
     }
     case "ReturnStatement": {
@@ -308,7 +467,7 @@ function checkStatement(
         return;
       }
 
-      const valueType = checkExpression(stmt.value, scope, functions, diagnostics);
+      const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
       if (!valueType) {
         return;
       }
@@ -322,7 +481,7 @@ function checkStatement(
       return;
     }
     case "IfStatement": {
-      const condType = checkExpression(stmt.condition, scope, functions, diagnostics);
+      const condType = checkExpression(stmt.condition, scope, functions, structs, diagnostics);
       if (condType && condType !== "bool") {
         diagnostics.error(
           `If condition must be 'bool', got '${typeToString(condType)}'`,
@@ -331,22 +490,22 @@ function checkStatement(
         );
       }
       for (const s of stmt.consequent) {
-        checkStatement(s, scope, functions, returnType, diagnostics, loopDepth);
+        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth);
       }
       if (stmt.alternate === null) {
         return;
       }
       if (Array.isArray(stmt.alternate)) {
         for (const s of stmt.alternate) {
-          checkStatement(s, scope, functions, returnType, diagnostics, loopDepth);
+          checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth);
         }
       } else {
-        checkStatement(stmt.alternate, scope, functions, returnType, diagnostics, loopDepth);
+        checkStatement(stmt.alternate, scope, functions, structs, returnType, diagnostics, loopDepth);
       }
       return;
     }
     case "WhileStatement": {
-      const condType = checkExpression(stmt.condition, scope, functions, diagnostics);
+      const condType = checkExpression(stmt.condition, scope, functions, structs, diagnostics);
       if (condType && condType !== "bool") {
         diagnostics.error(
           `While condition must be 'bool', got '${typeToString(condType)}'`,
@@ -355,16 +514,16 @@ function checkStatement(
         );
       }
       for (const s of stmt.body) {
-        checkStatement(s, scope, functions, returnType, diagnostics, loopDepth + 1);
+        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth + 1);
       }
       return;
     }
     case "ForStatement": {
       if (stmt.initializer) {
-        checkStatement(stmt.initializer, scope, functions, returnType, diagnostics, loopDepth);
+        checkStatement(stmt.initializer, scope, functions, structs, returnType, diagnostics, loopDepth);
       }
       if (stmt.condition) {
-        const condType = checkExpression(stmt.condition, scope, functions, diagnostics);
+        const condType = checkExpression(stmt.condition, scope, functions, structs, diagnostics);
         if (condType && condType !== "bool") {
           diagnostics.error(
             `For condition must be 'bool', got '${typeToString(condType)}'`,
@@ -374,15 +533,15 @@ function checkStatement(
         }
       }
       if (stmt.update) {
-        checkStatement(stmt.update, scope, functions, returnType, diagnostics, loopDepth);
+        checkStatement(stmt.update, scope, functions, structs, returnType, diagnostics, loopDepth);
       }
       for (const s of stmt.body) {
-        checkStatement(s, scope, functions, returnType, diagnostics, loopDepth + 1);
+        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth + 1);
       }
       return;
     }
     case "ForInStatement": {
-      const iterableType = checkExpression(stmt.iterable, scope, functions, diagnostics);
+      const iterableType = checkExpression(stmt.iterable, scope, functions, structs, diagnostics);
       if (!iterableType) {
         return;
       }
@@ -412,7 +571,7 @@ function checkStatement(
       });
 
       for (const s of stmt.body) {
-        checkStatement(s, scope, functions, returnType, diagnostics, loopDepth + 1);
+        checkStatement(s, scope, functions, structs, returnType, diagnostics, loopDepth + 1);
       }
 
       scope.delete(stmt.name.name);
@@ -437,6 +596,7 @@ function checkAssignment(
   stmt: Extract<Statement, { kind: "AssignmentStatement" }>,
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
   diagnostics: DiagnosticCollector,
 ): void {
   if (stmt.target.kind === "Identifier") {
@@ -465,7 +625,7 @@ function checkAssignment(
       }
     }
 
-    const valueType = checkExpression(stmt.value, scope, functions, diagnostics);
+    const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
     if (!valueType) {
       return;
     }
@@ -479,9 +639,40 @@ function checkAssignment(
     return;
   }
 
+  if (stmt.target.kind === "MemberExpression") {
+    const fieldType = checkMemberLvalue(stmt.target, scope, functions, structs, diagnostics);
+    if (!fieldType) {
+      return;
+    }
+
+    if (stmt.operator === "+=" || stmt.operator === "-=") {
+      if (!isNumericType(fieldType)) {
+        diagnostics.error(
+          `Operator '${stmt.operator}' requires a numeric field, got '${typeToString(fieldType)}'`,
+          stmt.target.span,
+          "E0306",
+        );
+        return;
+      }
+    }
+
+    const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
+    if (!valueType) {
+      return;
+    }
+    if (!valueMatchesBinding(stmt.value, valueType, fieldType)) {
+      diagnostics.error(
+        typeMismatchMessage(fieldType, valueType),
+        stmt.value.span,
+        "E0303",
+      );
+    }
+    return;
+  }
+
   // Index assignment: arr[i] = value — allowed even if arr is const
-  const objectType = checkExpression(stmt.target.object, scope, functions, diagnostics);
-  const indexType = checkExpression(stmt.target.index, scope, functions, diagnostics);
+  const objectType = checkExpression(stmt.target.object, scope, functions, structs, diagnostics);
+  const indexType = checkExpression(stmt.target.index, scope, functions, structs, diagnostics);
   if (!objectType || !indexType) {
     return;
   }
@@ -514,7 +705,7 @@ function checkAssignment(
     }
   }
 
-  const valueType = checkExpression(stmt.value, scope, functions, diagnostics);
+  const valueType = checkExpression(stmt.value, scope, functions, structs, diagnostics);
   if (!valueType) {
     return;
   }
@@ -527,10 +718,48 @@ function checkAssignment(
   }
 }
 
+/** Resolve the field type of a member lvalue (allows const struct field mutation). */
+function checkMemberLvalue(
+  expr: Extract<Expression, { kind: "MemberExpression" }>,
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  diagnostics: DiagnosticCollector,
+): ValueType | null {
+  const objectType = checkExpression(expr.object, scope, functions, structs, diagnostics);
+  if (!objectType) {
+    return null;
+  }
+  if (!isStructType(objectType)) {
+    diagnostics.error(
+      `Cannot assign to field of type '${typeToString(objectType)}'`,
+      expr.object.span,
+      "E0331",
+    );
+    return null;
+  }
+  const def = structs.get(objectType.name);
+  if (!def) {
+    diagnostics.error(`Unknown struct '${objectType.name}'`, expr.object.span, "E0104");
+    return null;
+  }
+  const field = def.fields.find((f) => f.name === expr.property.name);
+  if (!field) {
+    diagnostics.error(
+      `Unknown field '${expr.property.name}' on struct '${objectType.name}'`,
+      expr.property.span,
+      "E0324",
+    );
+    return null;
+  }
+  return field.type;
+}
+
 function checkExpression(
   expr: Expression,
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
   diagnostics: DiagnosticCollector,
   allowVoidCall = false,
   expectedType: ValueType | null = null,
@@ -546,6 +775,70 @@ function checkExpression(
       return "string";
     case "CharLiteral":
       return "char";
+    case "StructLiteral": {
+      const def = structs.get(expr.name.name);
+      if (!def) {
+        diagnostics.error(`Unknown struct '${expr.name.name}'`, expr.name.span, "E0104");
+        return null;
+      }
+
+      const seen = new Set<string>();
+      for (const init of expr.fields) {
+        if (seen.has(init.name.name)) {
+          diagnostics.error(
+            `Duplicate field '${init.name.name}' in struct literal`,
+            init.name.span,
+            "E0329",
+          );
+          return null;
+        }
+        seen.add(init.name.name);
+
+        const field = def.fields.find((f) => f.name === init.name.name);
+        if (!field) {
+          diagnostics.error(
+            `Unknown field '${init.name.name}' on struct '${def.name}'`,
+            init.name.span,
+            "E0324",
+          );
+          return null;
+        }
+
+        const valueType = checkExpression(
+          init.value,
+          scope,
+          functions,
+          structs,
+          diagnostics,
+          false,
+          field.type,
+        );
+        if (!valueType) {
+          return null;
+        }
+        if (!valueMatchesBinding(init.value, valueType, field.type)) {
+          diagnostics.error(
+            typeMismatchMessage(field.type, valueType),
+            init.value.span,
+            "E0303",
+          );
+          return null;
+        }
+      }
+
+      for (const field of def.fields) {
+        if (!seen.has(field.name)) {
+          diagnostics.error(
+            `Missing field '${field.name}' in struct literal for '${def.name}'`,
+            expr.span,
+            "E0332",
+          );
+          return null;
+        }
+      }
+
+      return { kind: "struct", name: def.name };
+    }
     case "ArrayLiteral": {
       if (expr.elements.length === 0) {
         if (expectedType && isArrayType(expectedType)) {
@@ -564,7 +857,7 @@ function checkExpression(
         expectedType && isArrayType(expectedType) ? expectedType.element : null;
 
       for (const element of expr.elements) {
-        const t = checkExpression(element, scope, functions, diagnostics, false, expectedElement);
+        const t = checkExpression(element, scope, functions, structs, diagnostics, false, expectedElement);
         if (!t) {
           return null;
         }
@@ -581,7 +874,6 @@ function checkExpression(
           continue;
         }
         if (!valueMatchesBinding(element, t, elementType) && !typesEqual(t, elementType)) {
-          // Allow int lit width coercion into already-chosen integer element type
           if (
             !(
               element.kind === "IntegerLiteral" &&
@@ -607,8 +899,8 @@ function checkExpression(
       return { kind: "array", element: elementType! };
     }
     case "IndexExpression": {
-      const objectType = checkExpression(expr.object, scope, functions, diagnostics);
-      const indexType = checkExpression(expr.index, scope, functions, diagnostics);
+      const objectType = checkExpression(expr.object, scope, functions, structs, diagnostics);
+      const indexType = checkExpression(expr.index, scope, functions, structs, diagnostics);
       if (!objectType || !indexType) {
         return null;
       }
@@ -631,9 +923,26 @@ function checkExpression(
       return objectType.element;
     }
     case "MemberExpression": {
-      const objectType = checkExpression(expr.object, scope, functions, diagnostics);
+      const objectType = checkExpression(expr.object, scope, functions, structs, diagnostics);
       if (!objectType) {
         return null;
+      }
+      if (isStructType(objectType)) {
+        const def = structs.get(objectType.name);
+        if (!def) {
+          diagnostics.error(`Unknown struct '${objectType.name}'`, expr.object.span, "E0104");
+          return null;
+        }
+        const field = def.fields.find((f) => f.name === expr.property.name);
+        if (!field) {
+          diagnostics.error(
+            `Unknown field '${expr.property.name}' on struct '${objectType.name}'`,
+            expr.property.span,
+            "E0324",
+          );
+          return null;
+        }
+        return field.type;
       }
       if (expr.property.name === "length") {
         if (!isArrayType(objectType)) {
@@ -662,7 +971,7 @@ function checkExpression(
       return binding.type;
     }
     case "UnaryExpression": {
-      const operand = checkExpression(expr.operand, scope, functions, diagnostics);
+      const operand = checkExpression(expr.operand, scope, functions, structs, diagnostics);
       if (!operand) {
         return null;
       }
@@ -688,8 +997,8 @@ function checkExpression(
       return operand;
     }
     case "BinaryExpression": {
-      const left = checkExpression(expr.left, scope, functions, diagnostics);
-      const right = checkExpression(expr.right, scope, functions, diagnostics);
+      const left = checkExpression(expr.left, scope, functions, structs, diagnostics);
+      const right = checkExpression(expr.right, scope, functions, structs, diagnostics);
       if (!left || !right) {
         return null;
       }
@@ -744,7 +1053,7 @@ function checkExpression(
     }
     case "CallExpression": {
       if (expr.callee.kind === "MemberExpression") {
-        return checkMethodCall(expr, scope, functions, diagnostics, allowVoidCall);
+        return checkMethodCall(expr, scope, functions, structs, diagnostics, allowVoidCall);
       }
 
       if (expr.callee.name === "print") {
@@ -757,8 +1066,16 @@ function checkExpression(
           return null;
         }
         for (const arg of expr.args) {
-          const argType = checkExpression(arg, scope, functions, diagnostics);
+          const argType = checkExpression(arg, scope, functions, structs, diagnostics);
           if (!argType) {
+            return null;
+          }
+          if (isStructType(argType)) {
+            diagnostics.error(
+              `Cannot print struct value of type '${typeToString(argType)}'; print individual fields instead`,
+              arg.span,
+              "E0333",
+            );
             return null;
           }
         }
@@ -787,7 +1104,7 @@ function checkExpression(
       for (let i = 0; i < expr.args.length; i += 1) {
         const arg = expr.args[i]!;
         const expected = sig.params[i]!;
-        const argType = checkExpression(arg, scope, functions, diagnostics);
+        const argType = checkExpression(arg, scope, functions, structs, diagnostics);
         if (!argType) {
           return null;
         }
@@ -821,6 +1138,7 @@ function checkMethodCall(
   expr: Extract<Expression, { kind: "CallExpression" }>,
   scope: Map<string, Binding>,
   functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
   diagnostics: DiagnosticCollector,
   allowVoidCall: boolean,
 ): ValueType | null {
@@ -828,7 +1146,7 @@ function checkMethodCall(
     return null;
   }
 
-  const objectType = checkExpression(expr.callee.object, scope, functions, diagnostics);
+  const objectType = checkExpression(expr.callee.object, scope, functions, structs, diagnostics);
   if (!objectType) {
     return null;
   }
@@ -855,7 +1173,7 @@ function checkMethodCall(
         return null;
       }
       const arg = expr.args[0]!;
-      const argType = checkExpression(arg, scope, functions, diagnostics);
+      const argType = checkExpression(arg, scope, functions, structs, diagnostics);
       if (!argType) {
         return null;
       }
@@ -897,7 +1215,7 @@ function checkMethodCall(
         return null;
       }
       const arg = expr.args[0]!;
-      const argType = checkExpression(arg, scope, functions, diagnostics);
+      const argType = checkExpression(arg, scope, functions, structs, diagnostics);
       if (!argType) {
         return null;
       }
@@ -925,7 +1243,7 @@ function checkMethodCall(
         return null;
       }
       const arg = expr.args[0]!;
-      const argType = checkExpression(arg, scope, functions, diagnostics);
+      const argType = checkExpression(arg, scope, functions, structs, diagnostics);
       if (!argType) {
         return null;
       }

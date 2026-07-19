@@ -100,6 +100,22 @@ describe("Lexer", () => {
     ]);
   });
 
+  it("tokenizes the struct keyword", () => {
+    const { tokens, diagnostics } = lex(`struct Person { age: i32; }`);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens.map((t) => t.kind)).toEqual([
+      TokenKind.Struct,
+      TokenKind.Identifier,
+      TokenKind.LBrace,
+      TokenKind.Identifier,
+      TokenKind.Colon,
+      TokenKind.Identifier,
+      TokenKind.Semicolon,
+      TokenKind.RBrace,
+      TokenKind.Eof,
+    ]);
+  });
+
   it("tokenizes loop keywords and update operators", () => {
     const { tokens, diagnostics } = lex(
       `while for break continue ++ -- += -=`,

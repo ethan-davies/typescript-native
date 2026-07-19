@@ -53,10 +53,10 @@ describe("compile pipeline", () => {
       const result = compile(`
         function main(): void {
           let age: i32 = 16;
-          let name: string = "Ethan";
+          let name: string = "John";
           let active: bool = true;
           let inferredAge = 16;
-          let inferredName = "Ethan";
+          let inferredName = "John";
           print(age);
           print(name);
           print(active);
@@ -309,7 +309,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("br label %for.exit.0");
     });
 
-    it("compiles the hello, variables, arithmetic, control-flow, loops, and arrays examples", () => {
+    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, and structs examples", () => {
       for (const name of [
         "hello.tsn",
         "variables.tsn",
@@ -317,12 +317,40 @@ describe("compile pipeline", () => {
         "control-flow.tsn",
         "loops.tsn",
         "arrays.tsn",
+        "structs.tsn",
       ]) {
         const source = readFileSync(join(examplesDir, name), "utf8");
         const result = compile(source);
         expect(result.success, name).toBe(true);
         expect(result.ir, name).toContain("define i32 @main()");
       }
+    });
+
+    it("compiles struct declarations, literals, field access, assignment, and params", () => {
+      const result = compile(`
+        struct Person {
+          name: string;
+          age: i32;
+        }
+        function printPerson(person: Person): void {
+          print(person.name);
+          print(person.age);
+        }
+        function main(): void {
+          let John = Person {
+            name: "John",
+            age: 16
+          };
+          printPerson(John);
+          John.age = 17;
+          print(John.age);
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("%Person = type { ptr, i32 }");
+      expect(result.ir).toContain("getelementptr inbounds %Person");
+      expect(result.ir).toContain("define void @printPerson(%Person %arg0)");
+      expect(result.ir).toContain("%v.John = alloca %Person");
     });
 
     it("compiles array literals, indexing, length, mutation, methods, and for-in", () => {
@@ -754,6 +782,58 @@ describe("compile pipeline", () => {
       `);
       expect(result.success).toBe(false);
       expect(result.diagnostics.some((d) => d.code === "E0318")).toBe(true);
+    });
+
+    it("fails on unknown struct type names", () => {
+      const result = compile(`
+        function main(): void {
+          let x: Widget = 1;
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0104")).toBe(true);
+    });
+
+    it("fails on missing struct literal fields", () => {
+      const result = compile(`
+        struct Person {
+          name: string;
+          age: i32;
+        }
+        function main(): void {
+          let p = Person { name: "John" };
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0332")).toBe(true);
+    });
+
+    it("fails on unknown struct fields", () => {
+      const result = compile(`
+        struct Person {
+          age: i32;
+        }
+        function main(): void {
+          let p = Person { age: 1 };
+          print(p.name);
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0324")).toBe(true);
+    });
+
+    it("fails when printing a whole struct value", () => {
+      const result = compile(`
+        struct Person {
+          age: i32;
+        }
+        function main(): void {
+          let p = Person { age: 1 };
+          print(p);
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0333")).toBe(true);
     });
   });
 });

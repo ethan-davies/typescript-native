@@ -1,0 +1,21 @@
+struct Person {
+  name: string;
+  age: i32;
+}
+
+function printPerson(person: Person): void {
+  print(person.name);
+  print(person.age);
+}
+
+function main(): void {
+  let John = Person {
+    name: "John",
+    age: 16
+  };
+
+  printPerson(John);
+
+  John.age = 17;
+  print(John.age);
+}

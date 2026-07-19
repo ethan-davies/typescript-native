@@ -124,11 +124,64 @@ describe("Parser", () => {
   });
 
   it("rejects unknown type names", () => {
-    const { diagnostics } = parse(`
+    const { ast, diagnostics } = parse(`
       function main(): widget {}
     `);
-    expect(diagnostics.hasErrors).toBe(true);
-    expect(diagnostics.diagnostics.some((d) => d.code === "E0104")).toBe(true);
+    // Named types are accepted at parse time; resolution happens in typecheck.
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(ast.body[0]).toMatchObject({
+      kind: "FunctionDeclaration",
+      returnType: { kind: "NamedType", name: "widget" },
+    });
+  });
+
+  it("parses struct declarations, literals, and field assignment", () => {
+    const { ast, diagnostics } = parse(`
+      struct Person {
+        name: string;
+        age: i32;
+      }
+      function main(): void {
+        let p = Person {
+          name: "John",
+          age: 16
+        };
+        p.age = 17;
+        print(p.name);
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(ast.body).toHaveLength(2);
+    expect(ast.body[0]).toMatchObject({
+      kind: "StructDeclaration",
+      name: { name: "Person" },
+    });
+    if (ast.body[0]?.kind === "StructDeclaration") {
+      expect(ast.body[0].fields).toHaveLength(2);
+      expect(ast.body[0].fields[0]?.name.name).toBe("name");
+      expect(ast.body[0].fields[0]?.typeAnnotation).toMatchObject({
+        kind: "PrimitiveType",
+        name: "string",
+      });
+      expect(ast.body[0].fields[1]?.name.name).toBe("age");
+    }
+
+    if (ast.body[1]?.kind !== "FunctionDeclaration") {
+      return;
+    }
+    const body = ast.body[1].body;
+    expect(body[0]?.kind).toBe("VariableDeclaration");
+    if (body[0]?.kind === "VariableDeclaration") {
+      expect(body[0].initializer.kind).toBe("StructLiteral");
+      if (body[0].initializer.kind === "StructLiteral") {
+        expect(body[0].initializer.name.name).toBe("Person");
+        expect(body[0].initializer.fields).toHaveLength(2);
+      }
+    }
+    expect(body[1]?.kind).toBe("AssignmentStatement");
+    if (body[1]?.kind === "AssignmentStatement") {
+      expect(body[1].target.kind).toBe("MemberExpression");
+    }
   });
 
   it("parses arithmetic precedence, parentheses, and unary minus", () => {

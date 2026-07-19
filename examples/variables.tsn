@@ -1,12 +1,12 @@
 function main(): void {
   // Type annotations
   let age: i32 = 16;
-  let name: string = "Ethan";
+  let name: string = "John";
   let active: bool = true;
 
   // Type inference
   let inferredAge = 16; // i32
-  let inferredName = "Ethan"; // string
+  let inferredName = "John"; // string
   let ok = true; // bool
   const pi = 3.14; // f64
   let n: i64 = 100;

@@ -74,7 +74,8 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 **Currently supported:**
 
 - A single top-level `function main(): void` with no parameters (return type required)
-- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, and arrays `T[]`
+- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, arrays `T[]`, and user-defined `struct` types
+- Struct declarations, literals (`Person { name: "...", age: 16 }`), field access, and field assignment
 - `let` / `const` variables with optional annotations and inference (`5` → `i32`, `3.14` → `f64`)
 - Reassignment for `let` only (`=`, `+=`, `-=`, `++`, `--` on numeric lets)
 - Arrays: literals `[1, 2, 3]`, indexing, element assignment, `.length`, `.push` / `.pop` / `.includes` / `.indexOf`
@@ -97,6 +98,7 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 | [`examples/control-flow.tsn`](./examples/control-flow.tsn) | `if` / `elseif` / `else`, comparisons |
 | [`examples/loops.tsn`](./examples/loops.tsn) | `for` / `while`, updates, `break` / `continue` |
 | [`examples/arrays.tsn`](./examples/arrays.tsn) | Array literals, indexing, methods, `for-in` |
+| [`examples/structs.tsn`](./examples/structs.tsn) | Struct decls, literals, fields, params |
 
 ## Development
 

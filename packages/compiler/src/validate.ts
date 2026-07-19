@@ -1,18 +1,22 @@
-import type { Program } from "./ast/nodes.js";
+import type { FunctionDeclaration, Program } from "./ast/nodes.js";
 import type { DiagnosticCollector } from "./diagnostics/diagnostic.js";
 
 /**
  * Semantic checks for program shape beyond pure grammar.
  */
 export function validate(program: Program, diagnostics: DiagnosticCollector): void {
-  if (program.body.length === 0) {
+  const functions = program.body.filter(
+    (decl): decl is FunctionDeclaration => decl.kind === "FunctionDeclaration",
+  );
+
+  if (functions.length === 0) {
     diagnostics.error("Program must define a main() function", program.span, "E0200");
     return;
   }
 
-  const mains = program.body.filter((fn) => fn.name.name === "main");
+  const mains = functions.filter((fn) => fn.name.name === "main");
   if (mains.length === 0) {
-    const first = program.body[0];
+    const first = functions[0];
     diagnostics.error(
       `Entry function must be named 'main', found '${first?.name.name ?? "?"}'`,
       first?.name.span ?? program.span,
@@ -47,7 +51,9 @@ export function validate(program: Program, diagnostics: DiagnosticCollector): vo
     const found =
       main.returnType.kind === "PrimitiveType"
         ? main.returnType.name
-        : "array";
+        : main.returnType.kind === "NamedType"
+          ? main.returnType.name
+          : "array";
     diagnostics.error(
       `Entry function 'main' must return 'void', found '${found}'`,
       main.returnType.span,

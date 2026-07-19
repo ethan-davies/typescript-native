@@ -8,6 +8,7 @@ export enum TokenKind {
   Float = "Float",
 
   Function = "function",
+  Struct = "struct",
   Let = "let",
   Const = "const",
   Return = "return",
@@ -66,6 +67,7 @@ export interface Token {
 
 export const KEYWORDS: ReadonlyMap<string, TokenKind> = new Map([
   ["function", TokenKind.Function],
+  ["struct", TokenKind.Struct],
   ["let", TokenKind.Let],
   ["const", TokenKind.Const],
   ["return", TokenKind.Return],

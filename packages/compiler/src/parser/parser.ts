@@ -1,5 +1,6 @@
 import type {
   ArrayLiteral,
+  Assignable,
   AssignmentStatement,
   BinaryExpression,
   BinaryOperator,
@@ -25,6 +26,11 @@ import type {
   ReturnStatement,
   Statement,
   StringLiteral,
+  StructDeclaration,
+  StructField,
+  StructFieldInit,
+  StructLiteral,
+  TopLevelDeclaration,
   TypeAnnotation,
   UnaryExpression,
   UpdateStatement,
@@ -56,14 +62,17 @@ const UPDATE_OPS = new Set<TokenKind>([TokenKind.PlusPlus, TokenKind.MinusMinus]
 /**
  * Recursive-descent parser:
  *
- *   program      = functionDecl*
+ *   program      = (functionDecl | structDecl)*
  *   functionDecl = "function" Ident "(" params? ")" ":" type block
+ *   structDecl   = "struct" Ident "{" structField* "}"
+ *   structField  = Ident ":" type ";"
  *   params       = param ("," param)*
  *   param        = Ident ":" type
  *   statement    = varDecl | assignment | updateStmt | returnStmt
  *                | ifStmt | whileStmt | forStmt | breakStmt | continueStmt | exprStmt
  *   varDecl      = ("let"|"const") Ident (":" type)? "=" expression ";"
- *   assignment   = (Ident | Ident "[" expression "]") ("=" | "+=" | "-=") expression ";"
+ *   assignment   = assignable ("=" | "+=" | "-=") expression ";"
+ *   assignable   = Ident | Ident "[" expression "]" | Ident ("." Ident)+
  *   updateStmt   = Ident ("++" | "--") ";"
  *   returnStmt   = "return" expression? ";"
  *   ifStmt       = "if" "(" expression ")" block
@@ -80,9 +89,10 @@ const UPDATE_OPS = new Set<TokenKind>([TokenKind.PlusPlus, TokenKind.MinusMinus]
  *   block        = "{" statement* "}"
  *   exprStmt     = callExpr ";"
  *   expression   = or
- *   primary      = "(" expression ")" | arrayLiteral | literal | Ident | callExpr
+ *   primary      = "(" expression ")" | arrayLiteral | structLiteral | literal | Ident | callExpr
  *   postfix      = primary ("[" expression "]" | "." Ident ("(" args? ")")?)*
  *   arrayLiteral = "[" (expression ("," expression)*)? "]"
+ *   structLiteral = Ident "{" (Ident ":" expression ("," Ident ":" expression)*)? "}"
  *   type         = Ident ("[" "]")*
  */
 export class Parser {
@@ -97,22 +107,123 @@ export class Parser {
 
   parse(): Program {
     const start = this.peek().span.start;
-    const functions: FunctionDeclaration[] = [];
+    const body: TopLevelDeclaration[] = [];
 
     while (!this.check(TokenKind.Eof)) {
-      const fn = this.parseFunctionDeclaration();
-      if (fn) {
-        functions.push(fn);
+      if (this.check(TokenKind.Struct)) {
+        const decl = this.parseStructDeclaration();
+        if (decl) {
+          body.push(decl);
+        } else {
+          break;
+        }
+      } else if (this.check(TokenKind.Function)) {
+        const fn = this.parseFunctionDeclaration();
+        if (fn) {
+          body.push(fn);
+        } else {
+          break;
+        }
       } else {
-        break;
+        this.diagnostics.error(
+          `Expected 'function' or 'struct', found '${this.peek().lexeme}'`,
+          this.peek().span,
+          "E0103",
+        );
+        this.synchronizeToTopLevel();
+        if (this.check(TokenKind.Eof)) {
+          break;
+        }
       }
     }
 
     const eof = this.peek();
     return {
       kind: "Program",
-      body: functions,
+      body,
       span: { start, end: eof.span.end },
+    };
+  }
+
+  private parseStructDeclaration(): StructDeclaration | null {
+    const start = this.peek().span.start;
+
+    if (!this.expect(TokenKind.Struct, "Expected 'struct'")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const nameToken = this.expect(TokenKind.Identifier, "Expected struct name");
+    if (!nameToken) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    if (!this.expect(TokenKind.LBrace, "Expected '{' after struct name")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const fields: StructField[] = [];
+    while (!this.check(TokenKind.RBrace) && !this.isAtEnd()) {
+      const field = this.parseStructField();
+      if (!field) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      fields.push(field);
+    }
+
+    const rbrace = this.expect(TokenKind.RBrace, "Expected '}' after struct fields");
+    if (!rbrace) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    return {
+      kind: "StructDeclaration",
+      name,
+      fields,
+      span: { start, end: rbrace.span.end },
+    };
+  }
+
+  private parseStructField(): StructField | null {
+    const start = this.peek().span.start;
+    const nameToken = this.expect(TokenKind.Identifier, "Expected field name");
+    if (!nameToken) {
+      return null;
+    }
+
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    if (!this.expect(TokenKind.Colon, "Expected ':' after field name")) {
+      return null;
+    }
+
+    const typeAnnotation = this.parseType();
+    if (!typeAnnotation) {
+      return null;
+    }
+
+    const semicolon = this.expect(TokenKind.Semicolon, "Expected ';' after field type");
+    const end = semicolon?.span.end ?? typeAnnotation.span.end;
+
+    return {
+      kind: "StructField",
+      name,
+      typeAnnotation,
+      span: { start, end },
     };
   }
 
@@ -273,6 +384,10 @@ export class Parser {
       // numbers[0] = ...
       if (next?.kind === TokenKind.LBracket) {
         return this.parseIndexAssignment(true);
+      }
+      // person.age = ... / a.b.c = ...
+      if (next?.kind === TokenKind.Dot && this.looksLikeMemberAssignment()) {
+        return this.parseMemberAssignment(true);
       }
     }
 
@@ -515,6 +630,9 @@ export class Parser {
       if (next?.kind === TokenKind.LBracket) {
         return this.parseIndexAssignment(true);
       }
+      if (next?.kind === TokenKind.Dot && this.looksLikeMemberAssignment()) {
+        return this.parseMemberAssignment(true);
+      }
     }
 
     this.diagnostics.error("Expected for-loop initializer", this.peek().span, "E0102");
@@ -536,6 +654,9 @@ export class Parser {
     }
     if (next?.kind === TokenKind.LBracket) {
       return this.parseIndexAssignment(false);
+    }
+    if (next?.kind === TokenKind.Dot && this.looksLikeMemberAssignment()) {
+      return this.parseMemberAssignment(false);
     }
 
     this.diagnostics.error("Expected for-loop update", this.peek().span, "E0102");
@@ -708,9 +829,70 @@ export class Parser {
     return this.finishAssignment(start, target, requireSemicolon);
   }
 
+  /**
+   * Peek ahead from current Ident to see if this is `a.b =` / `a.b.c +=` (not a method call).
+   */
+  private looksLikeMemberAssignment(): boolean {
+    let i = this.current + 1;
+    while (i < this.tokens.length) {
+      const tok = this.tokens[i];
+      if (!tok) {
+        return false;
+      }
+      if (tok.kind === TokenKind.Dot) {
+        const prop = this.tokens[i + 1];
+        if (!prop || prop.kind !== TokenKind.Identifier) {
+          return false;
+        }
+        i += 2;
+        continue;
+      }
+      return ASSIGNMENT_OPS.has(tok.kind);
+    }
+    return false;
+  }
+
+  private parseMemberAssignment(requireSemicolon: boolean): AssignmentStatement | null {
+    const start = this.peek().span.start;
+    const nameToken = this.advance();
+    let object: Expression = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    let target: MemberExpression | null = null;
+    while (this.check(TokenKind.Dot)) {
+      this.advance();
+      const propToken = this.expect(TokenKind.Identifier, "Expected property name after '.'");
+      if (!propToken) {
+        return null;
+      }
+      const property: Identifier = {
+        kind: "Identifier",
+        name: propToken.lexeme,
+        span: propToken.span,
+      };
+      target = {
+        kind: "MemberExpression",
+        object,
+        property,
+        span: { start: object.span.start, end: property.span.end },
+      };
+      object = target;
+    }
+
+    if (!target) {
+      this.diagnostics.error("Expected member access in assignment", this.peek().span, "E0103");
+      return null;
+    }
+
+    return this.finishAssignment(start, target, requireSemicolon);
+  }
+
   private finishAssignment(
     start: { line: number; column: number; offset: number },
-    target: Identifier | IndexExpression,
+    target: Assignable,
     requireSemicolon: boolean,
   ): AssignmentStatement | null {
     const opToken = this.advance();
@@ -1047,6 +1229,8 @@ export class Parser {
       expr = this.parseArrayLiteral();
     } else if (this.check(TokenKind.Identifier) && this.checkNext(TokenKind.LParen)) {
       expr = this.parseCallExpression();
+    } else if (this.check(TokenKind.Identifier) && this.checkNext(TokenKind.LBrace)) {
+      expr = this.parseStructLiteral();
     } else if (this.check(TokenKind.Identifier)) {
       const token = this.advance();
       expr = {
@@ -1204,6 +1388,81 @@ export class Parser {
     };
   }
 
+  private parseStructLiteral(): StructLiteral | null {
+    const start = this.peek().span.start;
+    const nameToken = this.advance();
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    if (!this.expect(TokenKind.LBrace, "Expected '{' after struct name")) {
+      return null;
+    }
+
+    const fields: StructFieldInit[] = [];
+    if (!this.check(TokenKind.RBrace)) {
+      const first = this.parseStructFieldInit();
+      if (!first) {
+        return null;
+      }
+      fields.push(first);
+
+      while (this.check(TokenKind.Comma)) {
+        this.advance();
+        if (this.check(TokenKind.RBrace)) {
+          break; // trailing comma
+        }
+        const field = this.parseStructFieldInit();
+        if (!field) {
+          return null;
+        }
+        fields.push(field);
+      }
+    }
+
+    const rbrace = this.expect(TokenKind.RBrace, "Expected '}' after struct fields");
+    const end = rbrace?.span.end ?? this.peek().span.end;
+
+    return {
+      kind: "StructLiteral",
+      name,
+      fields,
+      span: { start, end },
+    };
+  }
+
+  private parseStructFieldInit(): StructFieldInit | null {
+    const start = this.peek().span.start;
+    const nameToken = this.expect(TokenKind.Identifier, "Expected field name");
+    if (!nameToken) {
+      return null;
+    }
+
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    if (!this.expect(TokenKind.Colon, "Expected ':' after field name")) {
+      return null;
+    }
+
+    const value = this.parseExpression();
+    if (!value) {
+      return null;
+    }
+
+    return {
+      kind: "StructFieldInit",
+      name,
+      value,
+      span: { start, end: value.span.end },
+    };
+  }
+
   private parseCallExpression(): CallExpression | null {
     const start = this.peek().span.start;
     const calleeToken = this.expect(TokenKind.Identifier, "Expected function name");
@@ -1263,20 +1522,20 @@ export class Parser {
       return null;
     }
 
-    if (!PRIMITIVE_TYPES.has(token.lexeme)) {
-      this.diagnostics.error(
-        `Unknown type '${token.lexeme}'`,
-        token.span,
-        "E0104",
-      );
-      return null;
+    let type: TypeAnnotation;
+    if (PRIMITIVE_TYPES.has(token.lexeme)) {
+      type = {
+        kind: "PrimitiveType",
+        name: token.lexeme as PrimitiveTypeName,
+        span: token.span,
+      };
+    } else {
+      type = {
+        kind: "NamedType",
+        name: token.lexeme,
+        span: token.span,
+      };
     }
-
-    let type: TypeAnnotation = {
-      kind: "PrimitiveType",
-      name: token.lexeme as PrimitiveTypeName,
-      span: token.span,
-    };
 
     while (this.check(TokenKind.LBracket)) {
       this.advance();
@@ -1317,7 +1576,7 @@ export class Parser {
 
   private synchronizeToTopLevel(): void {
     while (!this.isAtEnd()) {
-      if (this.check(TokenKind.Function)) {
+      if (this.check(TokenKind.Function) || this.check(TokenKind.Struct)) {
         return;
       }
       this.advance();

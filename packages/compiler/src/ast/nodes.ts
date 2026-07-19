@@ -28,6 +28,8 @@ export type BinaryOperator =
 export type AstNode =
   | Program
   | FunctionDeclaration
+  | StructDeclaration
+  | StructField
   | Parameter
   | VariableDeclaration
   | AssignmentStatement
@@ -46,6 +48,8 @@ export type AstNode =
   | IndexExpression
   | MemberExpression
   | ArrayLiteral
+  | StructLiteral
+  | StructFieldInit
   | Identifier
   | StringLiteral
   | IntegerLiteral
@@ -59,9 +63,11 @@ interface AstNodeBase {
   readonly span: SourceSpan;
 }
 
+export type TopLevelDeclaration = FunctionDeclaration | StructDeclaration;
+
 export interface Program extends AstNodeBase {
   readonly kind: "Program";
-  readonly body: FunctionDeclaration[];
+  readonly body: TopLevelDeclaration[];
 }
 
 export type Statement =
@@ -91,6 +97,18 @@ export interface FunctionDeclaration extends AstNodeBase {
   readonly body: Statement[];
 }
 
+export interface StructField extends AstNodeBase {
+  readonly kind: "StructField";
+  readonly name: Identifier;
+  readonly typeAnnotation: TypeAnnotation;
+}
+
+export interface StructDeclaration extends AstNodeBase {
+  readonly kind: "StructDeclaration";
+  readonly name: Identifier;
+  readonly fields: StructField[];
+}
+
 export interface VariableDeclaration extends AstNodeBase {
   readonly kind: "VariableDeclaration";
   readonly mutability: "let" | "const";
@@ -99,7 +117,7 @@ export interface VariableDeclaration extends AstNodeBase {
   readonly initializer: Expression;
 }
 
-export type Assignable = Identifier | IndexExpression;
+export type Assignable = Identifier | IndexExpression | MemberExpression;
 
 export interface AssignmentStatement extends AstNodeBase {
   readonly kind: "AssignmentStatement";
@@ -170,6 +188,7 @@ export type Expression =
   | IndexExpression
   | MemberExpression
   | ArrayLiteral
+  | StructLiteral
   | Identifier
   | StringLiteral
   | IntegerLiteral
@@ -215,6 +234,18 @@ export interface ArrayLiteral extends AstNodeBase {
   readonly elements: Expression[];
 }
 
+export interface StructFieldInit extends AstNodeBase {
+  readonly kind: "StructFieldInit";
+  readonly name: Identifier;
+  readonly value: Expression;
+}
+
+export interface StructLiteral extends AstNodeBase {
+  readonly kind: "StructLiteral";
+  readonly name: Identifier;
+  readonly fields: StructFieldInit[];
+}
+
 export interface Identifier extends AstNodeBase {
   readonly kind: "Identifier";
   readonly name: string;
@@ -251,7 +282,7 @@ export interface CharLiteral extends AstNodeBase {
   readonly raw: string;
 }
 
-export type TypeAnnotation = PrimitiveType | ArrayType;
+export type TypeAnnotation = PrimitiveType | ArrayType | NamedType;
 
 export interface PrimitiveType extends AstNodeBase {
   readonly kind: "PrimitiveType";
@@ -261,4 +292,9 @@ export interface PrimitiveType extends AstNodeBase {
 export interface ArrayType extends AstNodeBase {
   readonly kind: "ArrayType";
   readonly element: TypeAnnotation;
+}
+
+export interface NamedType extends AstNodeBase {
+  readonly kind: "NamedType";
+  readonly name: string;
 }

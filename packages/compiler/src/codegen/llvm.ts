@@ -7,10 +7,13 @@ import type {
   ForStatement,
   FunctionDeclaration,
   IfStatement,
+  MemberExpression,
   Parameter,
   Program,
   ReturnStatement,
   Statement,
+  StructDeclaration,
+  StructLiteral,
   UnaryExpression,
   UpdateStatement,
   VariableDeclaration,
@@ -19,6 +22,8 @@ import type {
 import {
   annotationToValueType,
   isArrayType,
+  isStructType,
+  type StructValueType,
   type ValueType,
 } from "../typecheck.js";
 
@@ -43,6 +48,16 @@ interface LoopContext {
   readonly breakLabel: string;
 }
 
+interface StructFieldInfo {
+  readonly name: string;
+  readonly type: ValueType;
+}
+
+interface StructInfo {
+  readonly name: string;
+  readonly fields: StructFieldInfo[];
+}
+
 const COMPARISON_OPS = new Set(["==", "!=", "<", "<=", ">", ">="]);
 const LOGICAL_OPS = new Set(["&&", "||"]);
 
@@ -59,6 +74,7 @@ export class LlvmCodegen {
   private readonly stringGlobals = new Map<string, { name: string; length: number }>();
   private locals = new Map<string, LocalBinding>();
   private functions = new Map<string, FunctionSig>();
+  private structs = new Map<string, StructInfo>();
   private needsPrintf = false;
   private needsStringRuntime = false;
   private needsArrayRuntime = false;
@@ -74,6 +90,7 @@ export class LlvmCodegen {
     this.stringGlobals.clear();
     this.locals = new Map();
     this.functions.clear();
+    this.structs.clear();
     this.needsPrintf = false;
     this.needsStringRuntime = false;
     this.needsArrayRuntime = false;
@@ -82,7 +99,17 @@ export class LlvmCodegen {
     this.functionBodies.length = 0;
     this.loopStack.length = 0;
 
-    for (const fn of program.body) {
+    for (const decl of program.body) {
+      if (decl.kind === "StructDeclaration") {
+        this.registerStruct(decl);
+      }
+    }
+
+    for (const decl of program.body) {
+      if (decl.kind !== "FunctionDeclaration") {
+        continue;
+      }
+      const fn = decl;
       const params = fn.params.map((p) => {
         const t = annotationToValueType(p.typeAnnotation);
         if (!t) {
@@ -104,10 +131,13 @@ export class LlvmCodegen {
       });
     }
 
-    for (const fn of program.body) {
-      this.emitFunction(fn);
+    for (const decl of program.body) {
+      if (decl.kind === "FunctionDeclaration") {
+        this.emitFunction(decl);
+      }
     }
 
+    const structTypeLines = this.emitStructTypeDefs();
     const globalLines = this.emitStringGlobals();
     const declares: string[] = [];
     if (this.needsPrintf) {
@@ -135,6 +165,8 @@ export class LlvmCodegen {
       "; ModuleID = 'typescript-native'",
       'source_filename = "typescript-native"',
       "",
+      ...structTypeLines,
+      structTypeLines.length > 0 ? "" : null,
       ...globalLines,
       globalLines.length > 0 ? "" : null,
       ...declares,
@@ -144,6 +176,29 @@ export class LlvmCodegen {
     ]
       .filter((line): line is string => line !== null)
       .join("\n");
+  }
+
+  private registerStruct(decl: StructDeclaration): void {
+    const fields = decl.fields.map((field) => {
+      const type = annotationToValueType(field.typeAnnotation);
+      if (!type) {
+        throw new Error(`Codegen: invalid field type in struct '${decl.name.name}'`);
+      }
+      return { name: field.name.name, type };
+    });
+    this.structs.set(decl.name.name, {
+      name: decl.name.name,
+      fields,
+    });
+  }
+
+  private emitStructTypeDefs(): string[] {
+    const lines: string[] = [];
+    for (const info of this.structs.values()) {
+      const fieldTypes = info.fields.map((f) => toLlvmType(f.type)).join(", ");
+      lines.push(`%${info.name} = type { ${fieldTypes} }`);
+    }
+    return lines;
   }
 
   private emitFunction(fn: FunctionDeclaration): void {
@@ -491,6 +546,35 @@ export class LlvmCodegen {
       return;
     }
 
+    if (stmt.target.kind === "MemberExpression") {
+      const fieldPtr = this.emitMemberFieldPtr(stmt.target, lines);
+      const fieldType = this.inferExpressionType(stmt.target);
+      const elemLlvm = toLlvmType(fieldType);
+
+      if (stmt.operator === "=") {
+        const value = this.emitExpression(stmt.value, lines, fieldType);
+        lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${fieldPtr}`);
+        return;
+      }
+
+      const loaded = this.nextTemp();
+      lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${fieldPtr}`);
+      const rhs = this.emitExpression(stmt.value, lines, fieldType);
+      const result = this.nextTemp();
+      const isFloat = fieldType === "f32" || fieldType === "f64";
+      const opcode =
+        stmt.operator === "+="
+          ? isFloat
+            ? "fadd"
+            : "add"
+          : isFloat
+            ? "fsub"
+            : "sub";
+      lines.push(`  ${result} = ${opcode} ${elemLlvm} ${loaded}, ${rhs.llvm}`);
+      lines.push(`  store ${elemLlvm} ${result}, ptr ${fieldPtr}`);
+      return;
+    }
+
     // Index assignment
     const object = this.emitExpression(stmt.target.object, lines);
     if (!isArrayType(object.type)) {
@@ -595,6 +679,8 @@ export class LlvmCodegen {
         }
         return { kind: "array", element: this.inferExpressionType(expr.elements[0]!) };
       }
+      case "StructLiteral":
+        return { kind: "struct", name: expr.name.name };
       case "IndexExpression": {
         const objectType = this.inferExpressionType(expr.object);
         if (!isArrayType(objectType)) {
@@ -603,6 +689,18 @@ export class LlvmCodegen {
         return objectType.element;
       }
       case "MemberExpression": {
+        const objectType = this.inferExpressionType(expr.object);
+        if (isStructType(objectType)) {
+          const def = this.structs.get(objectType.name);
+          if (!def) {
+            throw new Error(`Codegen: unknown struct '${objectType.name}'`);
+          }
+          const field = def.fields.find((f) => f.name === expr.property.name);
+          if (!field) {
+            throw new Error(`Codegen: unknown field '${expr.property.name}'`);
+          }
+          return field.type;
+        }
         if (expr.property.name === "length") {
           return "i32";
         }
@@ -686,6 +784,8 @@ export class LlvmCodegen {
       }
       case "ArrayLiteral":
         return this.emitArrayLiteral(expr.elements, lines, expected);
+      case "StructLiteral":
+        return this.emitStructLiteral(expr, lines);
       case "IndexExpression": {
         const object = this.emitExpression(expr.object, lines);
         if (!isArrayType(object.type)) {
@@ -696,6 +796,10 @@ export class LlvmCodegen {
         return this.emitArrayIndexLoad(object.llvm, indexI32, object.type.element, lines);
       }
       case "MemberExpression": {
+        const objectType = this.inferExpressionType(expr.object);
+        if (isStructType(objectType)) {
+          return this.emitStructFieldLoad(expr, lines);
+        }
         if (expr.property.name !== "length") {
           throw new Error(`Codegen: unknown property '${expr.property.name}'`);
         }
@@ -725,6 +829,118 @@ export class LlvmCodegen {
         }
         return this.emitUserCall(expr, lines, false);
     }
+  }
+
+  private emitStructLiteral(expr: StructLiteral, lines: string[]): EmittedValue {
+    const def = this.structs.get(expr.name.name);
+    if (!def) {
+      throw new Error(`Codegen: unknown struct '${expr.name.name}'`);
+    }
+    const structType: StructValueType = { kind: "struct", name: def.name };
+    const llvmType = toLlvmType(structType);
+    const tmp = this.nextTemp();
+    lines.push(`  ${tmp} = alloca ${llvmType}`);
+
+    const inits = new Map(expr.fields.map((f) => [f.name.name, f.value]));
+    for (let i = 0; i < def.fields.length; i += 1) {
+      const field = def.fields[i]!;
+      const initExpr = inits.get(field.name);
+      if (!initExpr) {
+        throw new Error(`Codegen: missing field '${field.name}' in struct literal`);
+      }
+      const value = this.emitExpression(initExpr, lines, field.type);
+      const fieldPtr = this.emitStructFieldPtr(tmp, def.name, i, lines);
+      lines.push(`  store ${toLlvmType(field.type)} ${value.llvm}, ptr ${fieldPtr}`);
+    }
+
+    const loaded = this.nextTemp();
+    lines.push(`  ${loaded} = load ${llvmType}, ptr ${tmp}`);
+    return { llvm: loaded, type: structType };
+  }
+
+  private emitStructFieldLoad(expr: MemberExpression, lines: string[]): EmittedValue {
+    const fieldPtr = this.emitMemberFieldPtr(expr, lines);
+    const fieldType = this.inferExpressionType(expr);
+    const loaded = this.nextTemp();
+    lines.push(`  ${loaded} = load ${toLlvmType(fieldType)}, ptr ${fieldPtr}`);
+    return { llvm: loaded, type: fieldType };
+  }
+
+  /** Address of the field referenced by a MemberExpression (supports nested a.b.c). */
+  private emitMemberFieldPtr(expr: MemberExpression, lines: string[]): string {
+    const objectType = this.inferExpressionType(expr.object);
+    if (!isStructType(objectType)) {
+      throw new Error("Codegen: member field on non-struct");
+    }
+    const structPtr = this.emitStructAddress(expr.object, objectType, lines);
+    const def = this.structs.get(objectType.name);
+    if (!def) {
+      throw new Error(`Codegen: unknown struct '${objectType.name}'`);
+    }
+    const fieldIndex = def.fields.findIndex((f) => f.name === expr.property.name);
+    if (fieldIndex < 0) {
+      throw new Error(`Codegen: unknown field '${expr.property.name}'`);
+    }
+    return this.emitStructFieldPtr(structPtr, objectType.name, fieldIndex, lines);
+  }
+
+  /** Pointer to a struct value in memory (local alloca, nested field, or temp). */
+  private emitStructAddress(
+    expr: Expression,
+    expected: StructValueType,
+    lines: string[],
+  ): string {
+    if (expr.kind === "Identifier") {
+      const local = this.locals.get(expr.name);
+      if (!local || !isStructType(local.type)) {
+        throw new Error(`Codegen: expected struct local '${expr.name}'`);
+      }
+      return local.ptr;
+    }
+
+    if (expr.kind === "MemberExpression") {
+      const objectType = this.inferExpressionType(expr.object);
+      if (!isStructType(objectType)) {
+        throw new Error("Codegen: nested member on non-struct");
+      }
+      const parentPtr = this.emitStructAddress(expr.object, objectType, lines);
+      const def = this.structs.get(objectType.name);
+      if (!def) {
+        throw new Error(`Codegen: unknown struct '${objectType.name}'`);
+      }
+      const fieldIndex = def.fields.findIndex((f) => f.name === expr.property.name);
+      if (fieldIndex < 0) {
+        throw new Error(`Codegen: unknown field '${expr.property.name}'`);
+      }
+      const fieldType = def.fields[fieldIndex]!.type;
+      if (!isStructType(fieldType) || fieldType.name !== expected.name) {
+        throw new Error("Codegen: nested field is not the expected struct");
+      }
+      return this.emitStructFieldPtr(parentPtr, objectType.name, fieldIndex, lines);
+    }
+
+    const value = this.emitExpression(expr, lines, expected);
+    if (!isStructType(value.type)) {
+      throw new Error("Codegen: expected struct value");
+    }
+    const tmp = this.nextTemp();
+    const llvmType = toLlvmType(value.type);
+    lines.push(`  ${tmp} = alloca ${llvmType}`);
+    lines.push(`  store ${llvmType} ${value.llvm}, ptr ${tmp}`);
+    return tmp;
+  }
+
+  private emitStructFieldPtr(
+    structPtr: string,
+    structName: string,
+    fieldIndex: number,
+    lines: string[],
+  ): string {
+    const fieldPtr = this.nextTemp();
+    lines.push(
+      `  ${fieldPtr} = getelementptr inbounds %${structName}, ptr ${structPtr}, i32 0, i32 ${fieldIndex}`,
+    );
+    return fieldPtr;
   }
 
   private emitArrayLiteral(
@@ -762,7 +978,7 @@ export class LlvmCodegen {
     lines.push(`  ${capPtr} = getelementptr inbounds i8, ptr ${header}, i64 8`);
     lines.push(`  store i64 ${capacity}, ptr ${capPtr}`);
 
-    const elemSize = elementByteSize(elementType);
+    const elemSize = elementByteSize(elementType, this.structs);
     const dataBytes = capacity * elemSize;
     const data = this.nextTemp();
     lines.push(`  ${data} = call ptr @malloc(i64 noundef ${dataBytes})`);
@@ -913,7 +1129,7 @@ export class LlvmCodegen {
     lines.push(`  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`);
     const oldData = this.nextTemp();
     lines.push(`  ${oldData} = load ptr, ptr ${dataField}`);
-    const elemSize = elementByteSize(elementType);
+    const elemSize = elementByteSize(elementType, this.structs);
     const bytes = this.nextTemp();
     lines.push(`  ${bytes} = mul i64 ${newCap}, ${elemSize}`);
     const newData = this.nextTemp();
@@ -1520,6 +1736,9 @@ function toLlvmType(type: ValueType | "void"): string {
     return "void";
   }
   if (typeof type === "object") {
+    if (type.kind === "struct") {
+      return `%${type.name}`;
+    }
     return "ptr";
   }
   switch (type) {
@@ -1540,8 +1759,11 @@ function toLlvmType(type: ValueType | "void"): string {
   }
 }
 
-function elementByteSize(type: ValueType): number {
+function elementByteSize(type: ValueType, structs?: Map<string, StructInfo>): number {
   if (typeof type === "object") {
+    if (type.kind === "struct") {
+      return structByteSize(type.name, structs);
+    }
     return 8; // ptr
   }
   switch (type) {
@@ -1562,9 +1784,50 @@ function elementByteSize(type: ValueType): number {
   }
 }
 
+function alignUp(value: number, align: number): number {
+  return Math.ceil(value / align) * align;
+}
+
+function fieldAlign(type: ValueType): number {
+  if (typeof type === "object") {
+    if (type.kind === "struct") {
+      return 8;
+    }
+    return 8;
+  }
+  switch (type) {
+    case "i32":
+    case "f32":
+      return 4;
+    case "i64":
+    case "f64":
+    case "string":
+      return 8;
+    case "bool":
+    case "char":
+      return 1;
+  }
+}
+
+function structByteSize(name: string, structs?: Map<string, StructInfo>): number {
+  const def = structs?.get(name);
+  if (!def) {
+    return 64;
+  }
+  let offset = 0;
+  let maxAlign = 1;
+  for (const field of def.fields) {
+    const align = fieldAlign(field.type);
+    maxAlign = Math.max(maxAlign, align);
+    offset = alignUp(offset, align);
+    offset += elementByteSize(field.type, structs);
+  }
+  return alignUp(offset, maxAlign);
+}
+
 function typedOne(type: ValueType): string {
   if (typeof type === "object") {
-    throw new Error(`Codegen: cannot increment array type`);
+    throw new Error(`Codegen: cannot increment ${type.kind} type`);
   }
   switch (type) {
     case "i32":
@@ -1582,7 +1845,7 @@ function typedOne(type: ValueType): string {
 
 function printfSpecifier(type: ValueType): string {
   if (typeof type === "object") {
-    throw new Error("Codegen: cannot print array");
+    throw new Error(`Codegen: cannot print ${type.kind}`);
   }
   switch (type) {
     case "i32":
@@ -1603,7 +1866,7 @@ function printfSpecifier(type: ValueType): string {
 
 function printfArgType(type: ValueType): string {
   if (typeof type === "object") {
-    throw new Error("Codegen: cannot print array");
+    throw new Error(`Codegen: cannot print ${type.kind}`);
   }
   switch (type) {
     case "i32":
