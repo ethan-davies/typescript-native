@@ -1,0 +1,31 @@
+{
+  "name": "@typescript-native/cli",
+  "version": "0.0.0",
+  "description": "CLI for the typescript-native language (tsn)",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tsn": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@typescript-native/compiler": "workspace:*",
+    "commander": "^14.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}

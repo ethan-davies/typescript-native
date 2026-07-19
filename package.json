@@ -1,0 +1,28 @@
+{
+  "name": "typescript-native",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A TypeScript-like language that compiles to native code via LLVM",
+  "license": "MIT",
+  "author": "Ethan Davies",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "clean": "pnpm -r run clean",
+    "dev": "pnpm --filter @typescript-native/compiler build && tsx packages/cli/src/cli.ts",
+    "typecheck": "pnpm --filter @typescript-native/compiler build && pnpm -r run typecheck",
+    "test": "pnpm --filter @typescript-native/compiler test",
+    "test:watch": "pnpm --filter @typescript-native/compiler test:watch",
+    "test:coverage": "pnpm --filter @typescript-native/compiler test:coverage"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
