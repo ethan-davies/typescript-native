@@ -40,6 +40,8 @@ export type AstNode =
   | ClassField
   | ClassMethod
   | ConstructorDeclaration
+  | InterfaceDeclaration
+  | InterfaceMethodSignature
   | Parameter
   | VariableDeclaration
   | AssignmentStatement
@@ -81,7 +83,8 @@ export type TopLevelDeclaration =
   | FunctionDeclaration
   | StructDeclaration
   | EnumDeclaration
-  | ClassDeclaration;
+  | ClassDeclaration
+  | InterfaceDeclaration;
 
 export interface Program extends AstNodeBase {
   readonly kind: "Program";
@@ -196,7 +199,25 @@ export interface ClassDeclaration extends AstNodeBase {
   readonly name: Identifier;
   /** Local or qualified superclass name; null if none. */
   readonly superclass: NamedType | null;
+  /** Interfaces this class promises to implement. */
+  readonly implementsTypes: NamedType[];
   readonly members: ClassMember[];
+}
+
+export interface InterfaceMethodSignature extends AstNodeBase {
+  readonly kind: "InterfaceMethodSignature";
+  readonly name: Identifier;
+  readonly params: Parameter[];
+  readonly returnType: TypeAnnotation;
+}
+
+export interface InterfaceDeclaration extends AstNodeBase {
+  readonly kind: "InterfaceDeclaration";
+  readonly exported: boolean;
+  readonly name: Identifier;
+  /** Interfaces this interface extends. */
+  readonly bases: NamedType[];
+  readonly methods: InterfaceMethodSignature[];
 }
 
 export interface VariableDeclaration extends AstNodeBase {

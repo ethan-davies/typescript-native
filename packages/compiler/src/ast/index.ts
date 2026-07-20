@@ -30,6 +30,8 @@ export type {
   ImportDeclaration,
   IndexExpression,
   IntegerLiteral,
+  InterfaceDeclaration,
+  InterfaceMethodSignature,
   MemberExpression,
   NamedType,
   NewExpression,

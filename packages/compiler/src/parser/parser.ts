@@ -27,6 +27,8 @@ import type {
   ImportDeclaration,
   IndexExpression,
   IntegerLiteral,
+  InterfaceDeclaration,
+  InterfaceMethodSignature,
   MemberExpression,
   NamedType,
   NewExpression,
@@ -76,12 +78,13 @@ const UPDATE_OPS = new Set<TokenKind>([TokenKind.PlusPlus, TokenKind.MinusMinus]
 /**
  * Recursive-descent parser:
  *
- *   program      = importDecl* (functionDecl | structDecl | enumDecl | classDecl)*
+ *   program      = importDecl* (functionDecl | structDecl | enumDecl | classDecl | interfaceDecl)*
  *   importDecl   = "import" String ("as" Ident)? ";"
  *   functionDecl = "export"? "function" Ident "(" params? ")" ":" type block
  *   structDecl   = "export"? "struct" Ident "{" (structField | structMethod)* "}"
  *   enumDecl     = "export"? "enum" Ident "{" (Ident ("," Ident)* ","?)? "}"
- *   classDecl    = "export"? "abstract"? "class" Ident ("extends" type)? "{" classMember* "}"
+ *   classDecl    = "export"? "abstract"? "class" Ident ("extends" type)? ("implements" type ("," type)*)? "{" classMember* "}"
+ *   interfaceDecl = "export"? "interface" Ident ("extends" type ("," type)*)? "{" ifaceMethod* "}"
  *   structLiteral = (Ident | Ident "." Ident) "{" fields? "}"
  *   type         = Ident ("." Ident)? ("[" "]")*
  */
@@ -163,6 +166,20 @@ export class Parser {
         } else {
           break;
         }
+      } else if (this.check(TokenKind.Interface)) {
+        if (isAbstract) {
+          this.diagnostics.error(
+            "'abstract' can only be used with classes",
+            this.peek().span,
+            "E0103",
+          );
+        }
+        const decl = this.parseInterfaceDeclaration(exported);
+        if (decl) {
+          body.push(decl);
+        } else {
+          break;
+        }
       } else if (this.check(TokenKind.Class)) {
         const decl = this.parseClassDeclaration(exported, isAbstract);
         if (decl) {
@@ -187,13 +204,13 @@ export class Parser {
       } else {
         if (exported || isAbstract) {
           this.diagnostics.error(
-            `Expected 'function', 'struct', 'enum', or 'class' after modifiers, found '${this.peek().lexeme}'`,
+            `Expected 'function', 'struct', 'enum', 'class', or 'interface' after modifiers, found '${this.peek().lexeme}'`,
             this.peek().span,
             "E0103",
           );
         } else {
           this.diagnostics.error(
-            `Expected 'function', 'struct', 'enum', 'class', or 'import', found '${this.peek().lexeme}'`,
+            `Expected 'function', 'struct', 'enum', 'class', 'interface', or 'import', found '${this.peek().lexeme}'`,
             this.peek().span,
             "E0103",
           );
@@ -456,6 +473,27 @@ export class Parser {
       superclass = superType;
     }
 
+    const implementsTypes: NamedType[] = [];
+    if (this.match(TokenKind.Implements)) {
+      do {
+        const ifaceType = this.parseType();
+        if (!ifaceType) {
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        if (ifaceType.kind !== "NamedType") {
+          this.diagnostics.error(
+            "Implemented type must be a named interface type",
+            ifaceType.span,
+            "E0103",
+          );
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        implementsTypes.push(ifaceType);
+      } while (this.match(TokenKind.Comma));
+    }
+
     if (!this.expect(TokenKind.LBrace, "Expected '{' after class header")) {
       this.synchronizeToTopLevel();
       return null;
@@ -483,8 +521,147 @@ export class Parser {
       isAbstract,
       name,
       superclass,
+      implementsTypes,
       members,
       span: { start, end: rbrace.span.end },
+    };
+  }
+
+  private parseInterfaceDeclaration(exported: boolean): InterfaceDeclaration | null {
+    const start = this.peek().span.start;
+
+    if (!this.expect(TokenKind.Interface, "Expected 'interface'")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const nameToken = this.expect(TokenKind.Identifier, "Expected interface name");
+    if (!nameToken) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    const bases: NamedType[] = [];
+    if (this.match(TokenKind.Extends)) {
+      do {
+        const baseType = this.parseType();
+        if (!baseType) {
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        if (baseType.kind !== "NamedType") {
+          this.diagnostics.error(
+            "Extended type must be a named interface type",
+            baseType.span,
+            "E0103",
+          );
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        bases.push(baseType);
+      } while (this.match(TokenKind.Comma));
+    }
+
+    if (!this.expect(TokenKind.LBrace, "Expected '{' after interface header")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const methods: InterfaceMethodSignature[] = [];
+    while (!this.check(TokenKind.RBrace) && !this.isAtEnd()) {
+      const method = this.parseInterfaceMethod();
+      if (method === "skipped") {
+        continue;
+      }
+      if (!method) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      methods.push(method);
+    }
+
+    const rbrace = this.expect(TokenKind.RBrace, "Expected '}' after interface body");
+    if (!rbrace) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    return {
+      kind: "InterfaceDeclaration",
+      exported,
+      name,
+      bases,
+      methods,
+      span: { start, end: rbrace.span.end },
+    };
+  }
+
+  /** Returns a signature, null on hard failure, or "skipped" after recovering from a field member. */
+  private parseInterfaceMethod(): InterfaceMethodSignature | null | "skipped" {
+    const start = this.peek().span.start;
+    const nameToken = this.expect(TokenKind.Identifier, "Expected method name");
+    if (!nameToken) {
+      return null;
+    }
+
+    // Field-shaped members are not allowed in interfaces.
+    if (this.check(TokenKind.Colon)) {
+      this.diagnostics.error(
+        "Interfaces may only declare methods, not fields",
+        nameToken.span,
+        "E0370",
+      );
+      this.advance(); // colon
+      while (
+        !this.check(TokenKind.Semicolon) &&
+        !this.check(TokenKind.RBrace) &&
+        !this.isAtEnd()
+      ) {
+        this.advance();
+      }
+      this.match(TokenKind.Semicolon);
+      return "skipped";
+    }
+
+    if (!this.expect(TokenKind.LParen, "Expected '(' after method name")) {
+      return null;
+    }
+
+    const params = this.parseParameterList();
+    if (params === null) {
+      return null;
+    }
+
+    if (!this.expect(TokenKind.RParen, "Expected ')' after parameters")) {
+      return null;
+    }
+
+    if (!this.expect(TokenKind.Colon, "Expected ':' before return type")) {
+      return null;
+    }
+
+    const returnType = this.parseType();
+    if (!returnType) {
+      return null;
+    }
+
+    const semi = this.expect(TokenKind.Semicolon, "Expected ';' after interface method");
+    if (!semi) {
+      return null;
+    }
+
+    return {
+      kind: "InterfaceMethodSignature",
+      name: { kind: "Identifier", name: nameToken.lexeme, span: nameToken.span },
+      params,
+      returnType,
+      span: { start, end: semi.span.end },
     };
   }
 
@@ -2282,6 +2459,7 @@ export class Parser {
         this.check(TokenKind.Struct) ||
         this.check(TokenKind.Enum) ||
         this.check(TokenKind.Class) ||
+        this.check(TokenKind.Interface) ||
         this.check(TokenKind.Abstract)
       ) {
         return;

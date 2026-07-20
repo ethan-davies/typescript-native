@@ -11,6 +11,7 @@ import type {
   ForStatement,
   FunctionDeclaration,
   IfStatement,
+  InterfaceDeclaration,
   MemberExpression,
   NewExpression,
   Parameter,
@@ -32,7 +33,9 @@ import {
   isArrayType,
   isClassType,
   isEnumType,
+  isInterfaceType,
   isStructType,
+  typesEqual,
   type EnumValueType,
   type StructValueType,
   type ValueType,
@@ -110,6 +113,8 @@ interface ClassInfo {
   readonly localName: string;
   readonly isAbstract: boolean;
   readonly superclass: string | null;
+  /** Mangled names of interfaces directly listed in `implements`. */
+  readonly implementedInterfaces: string[];
   readonly fields: ClassFieldInfo[];
   readonly staticFields: ClassFieldInfo[];
   readonly instanceMethods: ClassMethodInfo[];
@@ -121,11 +126,28 @@ interface ClassInfo {
   readonly decl: ClassDeclaration;
 }
 
+interface InterfaceMethodInfo {
+  readonly name: string;
+  readonly params: ValueType[];
+  readonly returnType: ValueType | "void";
+  readonly itableSlot: number;
+}
+
+interface InterfaceInfo {
+  readonly name: string;
+  readonly localName: string;
+  readonly bases: string[];
+  readonly methods: InterfaceMethodInfo[];
+  readonly baseItableOffsets: ReadonlyMap<string, number>;
+  readonly decl: InterfaceDeclaration;
+}
+
 interface NamespaceInfo {
   readonly functions: ReadonlyMap<string, FunctionSig>;
   readonly structs: ReadonlyMap<string, StructInfo>;
   readonly enums: ReadonlyMap<string, EnumInfo>;
   readonly classes: ReadonlyMap<string, ClassInfo>;
+  readonly interfaces: ReadonlyMap<string, InterfaceInfo>;
 }
 
 const COMPARISON_OPS = new Set(["==", "!=", "<", "<=", ">", ">="]);
@@ -153,6 +175,8 @@ export class LlvmCodegen {
   private localEnums = new Map<string, EnumInfo>();
   private classes = new Map<string, ClassInfo>();
   private localClasses = new Map<string, ClassInfo>();
+  private interfaces = new Map<string, InterfaceInfo>();
+  private localInterfaces = new Map<string, InterfaceInfo>();
   private namespaces = new Map<string, NamespaceInfo>();
   private needsPrintf = false;
   private needsStringRuntime = false;
@@ -166,6 +190,8 @@ export class LlvmCodegen {
   /** When emitting a method/constructor, the `this` pointer SSA value. */
   private thisPtr: string | null = null;
   private thisType: ValueType | null = null;
+  /** Return type of the function/method currently being emitted. */
+  private currentReturnType: ValueType | "void" | null = null;
 
   emit(program: Program): string {
     return this.emitModules([
@@ -194,6 +220,8 @@ export class LlvmCodegen {
     this.localEnums.clear();
     this.classes.clear();
     this.localClasses.clear();
+    this.interfaces.clear();
+    this.localInterfaces.clear();
     this.namespaces.clear();
     this.needsPrintf = false;
     this.needsStringRuntime = false;
@@ -214,6 +242,7 @@ export class LlvmCodegen {
         structs: Map<string, StructInfo>;
         enums: Map<string, EnumInfo>;
         classes: Map<string, ClassInfo>;
+        interfaces: Map<string, InterfaceInfo>;
       }
     >();
 
@@ -222,6 +251,7 @@ export class LlvmCodegen {
       const localEnums = new Map<string, EnumInfo>();
       const localStructs = new Map<string, StructInfo>();
       const localClasses = new Map<string, ClassInfo>();
+      const localInterfaces = new Map<string, InterfaceInfo>();
       const localFns = new Map<string, FunctionSig>();
 
       for (const decl of mod.ast.body) {
@@ -239,11 +269,36 @@ export class LlvmCodegen {
       }
 
       for (const decl of mod.ast.body) {
+        if (decl.kind === "InterfaceDeclaration") {
+          const info = this.registerInterfaceStub(decl, mod.moduleId);
+          localInterfaces.set(decl.name.name, info);
+          this.interfaces.set(info.name, info);
+        }
+      }
+
+      for (const decl of mod.ast.body) {
         if (decl.kind === "ClassDeclaration") {
           const info = this.registerClassStub(decl, mod.moduleId);
           localClasses.set(decl.name.name, info);
           this.classes.set(info.name, info);
         }
+      }
+
+      // Resolve interface methods / extends (within module).
+      for (const decl of mod.ast.body) {
+        if (decl.kind !== "InterfaceDeclaration") {
+          continue;
+        }
+        const info = this.buildInterfaceInfo(
+          decl,
+          mod.moduleId,
+          localStructs,
+          localEnums,
+          localClasses,
+          localInterfaces,
+        );
+        localInterfaces.set(decl.name.name, info);
+        this.interfaces.set(info.name, info);
       }
 
       // Resolve struct field/method types.
@@ -258,6 +313,7 @@ export class LlvmCodegen {
             localStructs,
             localEnums,
             localClasses,
+            localInterfaces,
             new Map(),
           );
           if (!type) {
@@ -272,6 +328,7 @@ export class LlvmCodegen {
               localStructs,
               localEnums,
               localClasses,
+              localInterfaces,
               new Map(),
             );
             if (!t) {
@@ -287,6 +344,7 @@ export class LlvmCodegen {
                   localStructs,
                   localEnums,
                   localClasses,
+                  localInterfaces,
                   new Map(),
                 );
           if (returnType === null) {
@@ -321,6 +379,7 @@ export class LlvmCodegen {
           localStructs,
           localEnums,
           localClasses,
+          localInterfaces,
         );
         localClasses.set(decl.name.name, info);
         this.classes.set(info.name, info);
@@ -337,6 +396,7 @@ export class LlvmCodegen {
             localStructs,
             localEnums,
             localClasses,
+            localInterfaces,
             new Map(),
           );
           if (!t) {
@@ -352,6 +412,7 @@ export class LlvmCodegen {
                 localStructs,
                 localEnums,
                 localClasses,
+                localInterfaces,
                 new Map(),
               );
         if (returnType === null) {
@@ -374,6 +435,7 @@ export class LlvmCodegen {
         structs: localStructs,
         enums: localEnums,
         classes: localClasses,
+        interfaces: localInterfaces,
       });
     }
 
@@ -384,6 +446,7 @@ export class LlvmCodegen {
       this.localStructs = symbols.structs;
       this.localEnums = symbols.enums;
       this.localClasses = symbols.classes;
+      this.localInterfaces = symbols.interfaces;
 
       const namespaces = new Map<string, NamespaceInfo>();
       for (const binding of mod.imports) {
@@ -431,11 +494,21 @@ export class LlvmCodegen {
             exportedClasses.set(name, info);
           }
         }
+        const exportedInterfaces = new Map<string, InterfaceInfo>();
+        for (const [name, info] of imported.interfaces) {
+          const iDecl = importedMod.ast.body.find(
+            (d) => d.kind === "InterfaceDeclaration" && d.name.name === name,
+          );
+          if (iDecl && iDecl.kind === "InterfaceDeclaration" && iDecl.exported) {
+            exportedInterfaces.set(name, info);
+          }
+        }
         namespaces.set(binding.alias, {
           functions: exportedFns,
           structs: exportedStructs,
           enums: exportedEnums,
           classes: exportedClasses,
+          interfaces: exportedInterfaces,
         });
       }
       this.namespaces = namespaces;
@@ -462,8 +535,9 @@ export class LlvmCodegen {
     this.emitClassGlobals();
 
     const structTypeLines = this.emitStructTypeDefs();
+    const interfaceTypeLines = this.emitInterfaceTypeDefs();
     const classTypeLines = this.emitClassTypeDefs();
-    const typeLines = [...structTypeLines, ...classTypeLines];
+    const typeLines = [...structTypeLines, ...interfaceTypeLines, ...classTypeLines];
     const globalLines = [...this.globalDefs, ...this.emitStringGlobals()];
     const declares: string[] = [];
     if (this.needsPrintf) {
@@ -536,6 +610,7 @@ export class LlvmCodegen {
       localName: decl.name.name,
       isAbstract: decl.isAbstract,
       superclass: null,
+      implementedInterfaces: [],
       fields: [],
       staticFields: [],
       instanceMethods: [],
@@ -548,12 +623,125 @@ export class LlvmCodegen {
     };
   }
 
+  private registerInterfaceStub(decl: InterfaceDeclaration, moduleId: string): InterfaceInfo {
+    const mangled = mangleSymbol(moduleId, decl.name.name);
+    return {
+      name: mangled,
+      localName: decl.name.name,
+      bases: [],
+      methods: [],
+      baseItableOffsets: new Map([[mangled, 0]]),
+      decl,
+    };
+  }
+
+  private buildInterfaceInfo(
+    decl: InterfaceDeclaration,
+    moduleId: string,
+    localStructs: Map<string, StructInfo>,
+    localEnums: Map<string, EnumInfo>,
+    localClasses: Map<string, ClassInfo>,
+    localInterfaces: Map<string, InterfaceInfo>,
+  ): InterfaceInfo {
+    const mangled = mangleSymbol(moduleId, decl.name.name);
+    const bases: string[] = [];
+    const baseDefs: InterfaceInfo[] = [];
+    for (const baseType of decl.bases) {
+      if (baseType.namespace) {
+        throw new Error("Codegen: cross-module interface extends not resolved yet");
+      }
+      const base = localInterfaces.get(baseType.name);
+      if (!base) {
+        throw new Error(`Codegen: unknown interface '${baseType.name}'`);
+      }
+      bases.push(base.name);
+      baseDefs.push(base);
+    }
+
+    const methods: InterfaceMethodInfo[] = [];
+    const baseItableOffsets = new Map<string, number>();
+    baseItableOffsets.set(mangled, 0);
+    const seenNames = new Set<string>();
+
+    for (const base of baseDefs) {
+      baseItableOffsets.set(base.name, methods.length);
+      for (const [baseName, offset] of base.baseItableOffsets) {
+        if (!baseItableOffsets.has(baseName)) {
+          baseItableOffsets.set(baseName, methods.length + offset);
+        }
+      }
+      for (const method of base.methods) {
+        if (seenNames.has(method.name)) {
+          continue;
+        }
+        seenNames.add(method.name);
+        methods.push({
+          name: method.name,
+          params: method.params,
+          returnType: method.returnType,
+          itableSlot: methods.length,
+        });
+      }
+    }
+
+    for (const method of decl.methods) {
+      if (seenNames.has(method.name.name)) {
+        continue;
+      }
+      seenNames.add(method.name.name);
+      const params = method.params.map((p) => {
+        const t = this.resolveAnnotationInModule(
+          p.typeAnnotation,
+          localStructs,
+          localEnums,
+          localClasses,
+          localInterfaces,
+          new Map(),
+        );
+        if (!t) {
+          throw new Error(`Codegen: invalid interface method param '${method.name.name}'`);
+        }
+        return t;
+      });
+      const returnType =
+        method.returnType.kind === "PrimitiveType" && method.returnType.name === "void"
+          ? ("void" as const)
+          : this.resolveAnnotationInModule(
+              method.returnType,
+              localStructs,
+              localEnums,
+              localClasses,
+              localInterfaces,
+              new Map(),
+            );
+      if (returnType === null) {
+        throw new Error(`Codegen: invalid interface method return '${method.name.name}'`);
+      }
+      methods.push({
+        name: method.name.name,
+        params,
+        returnType,
+        itableSlot: methods.length,
+      });
+    }
+
+    return {
+      name: mangled,
+      localName: decl.name.name,
+      bases,
+      methods,
+      baseItableOffsets,
+      decl,
+    };
+  }
+
   private buildClassInfo(
     decl: ClassDeclaration,
     moduleId: string,
     localStructs: Map<string, StructInfo>,
     localEnums: Map<string, EnumInfo>,
     localClasses: Map<string, ClassInfo>,
+    localInterfaces: Map<string, InterfaceInfo>,
   ): ClassInfo {
     const mangled = mangleSymbol(moduleId, decl.name.name);
     let superclass: ClassInfo | null = null;
@@ -565,6 +753,18 @@ export class LlvmCodegen {
       if (!superclass) {
         throw new Error(`Codegen: unknown superclass '${decl.superclass.name}'`);
       }
+    }
+
+    const implementedInterfaces: string[] = [];
+    for (const ifaceType of decl.implementsTypes) {
+      if (ifaceType.namespace) {
+        throw new Error("Codegen: cross-module implements not resolved yet");
+      }
+      const iface = localInterfaces.get(ifaceType.name);
+      if (!iface) {
+        throw new Error(`Codegen: unknown interface '${ifaceType.name}'`);
+      }
+      implementedInterfaces.push(iface.name);
     }
 
     const fields: ClassFieldInfo[] = superclass
@@ -585,6 +785,7 @@ export class LlvmCodegen {
           localStructs,
           localEnums,
           localClasses,
+          localInterfaces,
           new Map(),
         );
         if (!type) {
@@ -629,6 +830,7 @@ export class LlvmCodegen {
           localStructs,
           localEnums,
           localClasses,
+          localInterfaces,
           new Map(),
         );
         if (!t) {
@@ -644,6 +846,7 @@ export class LlvmCodegen {
               localStructs,
               localEnums,
               localClasses,
+              localInterfaces,
               new Map(),
             );
       if (returnType === null) {
@@ -699,6 +902,7 @@ export class LlvmCodegen {
           localStructs,
           localEnums,
           localClasses,
+          localInterfaces,
           new Map(),
         );
         if (!t) {
@@ -713,6 +917,7 @@ export class LlvmCodegen {
       localName: decl.name.name,
       isAbstract: decl.isAbstract,
       superclass: superclass?.name ?? null,
+      implementedInterfaces,
       fields,
       staticFields,
       instanceMethods,
@@ -725,8 +930,8 @@ export class LlvmCodegen {
     };
   }
 
-  private namedKinds(): Map<string, "struct" | "enum" | "class"> {
-    const named = new Map<string, "struct" | "enum" | "class">();
+  private namedKinds(): Map<string, "struct" | "enum" | "class" | "interface"> {
+    const named = new Map<string, "struct" | "enum" | "class" | "interface">();
     for (const info of this.localStructs.values()) {
       named.set(info.localName, "struct");
       named.set(info.name, "struct");
@@ -738,6 +943,10 @@ export class LlvmCodegen {
     for (const info of this.localClasses.values()) {
       named.set(info.localName, "class");
       named.set(info.name, "class");
+    }
+    for (const info of this.localInterfaces.values()) {
+      named.set(info.localName, "interface");
+      named.set(info.name, "interface");
     }
     for (const [alias, ns] of this.namespaces) {
       for (const [name, info] of ns.structs) {
@@ -752,6 +961,10 @@ export class LlvmCodegen {
         named.set(`${alias}.${name}`, "class");
         named.set(info.name, "class");
       }
+      for (const [name, info] of ns.interfaces) {
+        named.set(`${alias}.${name}`, "interface");
+        named.set(info.name, "interface");
+      }
     }
     return named;
   }
@@ -762,6 +975,7 @@ export class LlvmCodegen {
       this.localStructs,
       this.localEnums,
       this.localClasses,
+      this.localInterfaces,
       this.namespaces,
     );
   }
@@ -771,6 +985,7 @@ export class LlvmCodegen {
     localStructs: Map<string, StructInfo>,
     localEnums: Map<string, EnumInfo>,
     localClasses: Map<string, ClassInfo>,
+    localInterfaces: Map<string, InterfaceInfo>,
     namespaces: Map<string, NamespaceInfo>,
   ): ValueType | null {
     if (ann.kind === "PrimitiveType") {
@@ -797,6 +1012,10 @@ export class LlvmCodegen {
         if (classInfo) {
           return { kind: "class", name: classInfo.name };
         }
+        const ifaceInfo = ns.interfaces.get(ann.name);
+        if (ifaceInfo) {
+          return { kind: "interface", name: ifaceInfo.name };
+        }
         return null;
       }
       const enumInfo = localEnums.get(ann.name);
@@ -811,6 +1030,10 @@ export class LlvmCodegen {
       if (classInfo) {
         return { kind: "class", name: classInfo.name };
       }
+      const ifaceInfo = localInterfaces.get(ann.name);
+      if (ifaceInfo) {
+        return { kind: "interface", name: ifaceInfo.name };
+      }
       return null;
     }
     const element = this.resolveAnnotationInModule(
@@ -818,6 +1041,7 @@ export class LlvmCodegen {
       localStructs,
       localEnums,
       localClasses,
+      localInterfaces,
       namespaces,
     );
     if (element === null) {
@@ -831,6 +1055,20 @@ export class LlvmCodegen {
     for (const info of this.structs.values()) {
       const fieldTypes = info.fields.map((f) => toLlvmType(f.type)).join(", ");
       lines.push(`%${info.name} = type { ${fieldTypes} }`);
+    }
+    return lines;
+  }
+
+  private emitInterfaceTypeDefs(): string[] {
+    const lines: string[] = [];
+    for (const info of this.interfaces.values()) {
+      lines.push(`%${info.name} = type { ptr, ptr }`);
+      if (info.methods.length > 0) {
+        const slots = info.methods.map(() => "ptr").join(", ");
+        lines.push(`%${info.name}__itable_type = type { ${slots} }`);
+      } else {
+        lines.push(`%${info.name}__itable_type = type { }`);
+      }
     }
     return lines;
   }
@@ -874,7 +1112,118 @@ export class LlvmCodegen {
           `@${info.vtableGlobalName} = global %${info.name}__vtable_type { ${ptrs} }`,
         );
       }
+
+      // Emit itables for every interface this class (or a superclass) satisfies.
+      for (const ifaceName of this.interfacesSatisfiedByClass(info)) {
+        const iface = this.interfaces.get(ifaceName);
+        if (!iface) {
+          continue;
+        }
+        const itableGlobal = itableGlobalName(info.name, iface.name);
+        if (iface.methods.length === 0) {
+          this.globalDefs.push(
+            `@${itableGlobal} = global %${iface.name}__itable_type zeroinitializer`,
+          );
+          continue;
+        }
+        const ptrs = iface.methods
+          .map((req) => {
+            const method = info.instanceMethods.find((m) => m.name === req.name);
+            if (!method || method.isAbstract) {
+              return "ptr null";
+            }
+            return `ptr @${method.mangledName}`;
+          })
+          .join(", ");
+        this.globalDefs.push(
+          `@${itableGlobal} = global %${iface.name}__itable_type { ${ptrs} }`,
+        );
+      }
     }
+  }
+
+  /** Mangled interface names satisfied by this class via implements (incl. transitive bases + superclass). */
+  private interfacesSatisfiedByClass(info: ClassInfo): string[] {
+    const result = new Set<string>();
+    let current: ClassInfo | undefined = info;
+    while (current) {
+      for (const ifaceName of current.implementedInterfaces) {
+        const iface = this.interfaces.get(ifaceName);
+        if (!iface) {
+          continue;
+        }
+        for (const name of iface.baseItableOffsets.keys()) {
+          result.add(name);
+        }
+      }
+      current = current.superclass ? this.classes.get(current.superclass) : undefined;
+    }
+    return [...result];
+  }
+
+  /** Pack/adjust a value when assigning into an interface-typed slot. */
+  private coerceValue(
+    value: EmittedValue,
+    expected: ValueType,
+    lines: string[],
+  ): EmittedValue {
+    if (typesEqual(value.type, expected)) {
+      return value;
+    }
+
+    if (isClassType(value.type) && isInterfaceType(expected)) {
+      const classInfo = this.classes.get(value.type.name);
+      if (!classInfo) {
+        throw new Error(`Codegen: unknown class '${value.type.name}'`);
+      }
+      const iface = this.interfaces.get(expected.name);
+      if (!iface) {
+        throw new Error(`Codegen: unknown interface '${expected.name}'`);
+      }
+      const itable = itableGlobalName(classInfo.name, iface.name);
+      const undef = this.nextTemp();
+      lines.push(`  ${undef} = insertvalue %${iface.name} undef, ptr ${value.llvm}, 0`);
+      const fat = this.nextTemp();
+      lines.push(`  ${fat} = insertvalue %${iface.name} ${undef}, ptr @${itable}, 1`);
+      return { llvm: fat, type: expected };
+    }
+
+    if (isInterfaceType(value.type) && isInterfaceType(expected)) {
+      const fromIface = this.interfaces.get(value.type.name);
+      if (!fromIface) {
+        throw new Error(`Codegen: unknown interface '${value.type.name}'`);
+      }
+      const offset = fromIface.baseItableOffsets.get(expected.name);
+      if (offset === undefined) {
+        throw new Error(
+          `Codegen: cannot coerce interface '${value.type.name}' to '${expected.name}'`,
+        );
+      }
+      if (offset === 0 && value.type.name === expected.name) {
+        return value;
+      }
+      const data = this.nextTemp();
+      lines.push(`  ${data} = extractvalue %${fromIface.name} ${value.llvm}, 0`);
+      const itable = this.nextTemp();
+      lines.push(`  ${itable} = extractvalue %${fromIface.name} ${value.llvm}, 1`);
+      let adjustedItable = itable;
+      if (offset !== 0) {
+        const gep = this.nextTemp();
+        lines.push(
+          `  ${gep} = getelementptr inbounds %${fromIface.name}__itable_type, ptr ${itable}, i32 0, i32 ${offset}`,
+        );
+        adjustedItable = gep;
+      }
+      const undef = this.nextTemp();
+      lines.push(`  ${undef} = insertvalue %${expected.name} undef, ptr ${data}, 0`);
+      const fat = this.nextTemp();
+      lines.push(
+        `  ${fat} = insertvalue %${expected.name} ${undef}, ptr ${adjustedItable}, 1`,
+      );
+      return { llvm: fat, type: expected };
+    }
+
+    return value;
   }
 
   private emitStructMethod(struct: StructInfo, method: StructMethodInfo): void {
@@ -883,6 +1232,7 @@ export class LlvmCodegen {
     this.loopStack.length = 0;
     this.thisPtr = "%this";
     this.thisType = { kind: "struct", name: struct.name };
+    this.currentReturnType = method.returnType;
 
     const ret = method.returnType === "void" ? "void" : toLlvmType(method.returnType);
     const params = [
@@ -916,6 +1266,7 @@ export class LlvmCodegen {
     this.functionBodies.push(...lines);
     this.thisPtr = null;
     this.thisType = null;
+    this.currentReturnType = null;
   }
 
   private emitClassMembers(info: ClassInfo): void {
@@ -941,6 +1292,7 @@ export class LlvmCodegen {
     this.loopStack.length = 0;
     this.thisPtr = "%this";
     this.thisType = { kind: "class", name: info.name };
+    this.currentReturnType = "void";
 
     const params = [
       `ptr %this`,
@@ -979,6 +1331,7 @@ export class LlvmCodegen {
     this.functionBodies.push(...lines);
     this.thisPtr = null;
     this.thisType = null;
+    this.currentReturnType = null;
   }
 
   private emitClassMethod(info: ClassInfo, method: ClassMethodInfo): void {
@@ -990,6 +1343,7 @@ export class LlvmCodegen {
     this.loopStack.length = 0;
     this.thisPtr = method.isStatic ? null : "%this";
     this.thisType = method.isStatic ? null : { kind: "class", name: info.name };
+    this.currentReturnType = method.returnType;
 
     const ret = method.returnType === "void" ? "void" : toLlvmType(method.returnType);
     const paramParts = method.isStatic
@@ -1022,6 +1376,7 @@ export class LlvmCodegen {
     this.functionBodies.push(...lines);
     this.thisPtr = null;
     this.thisType = null;
+    this.currentReturnType = null;
   }
 
   private emitNewExpression(expr: NewExpression, lines: string[]): EmittedValue {
@@ -1057,6 +1412,8 @@ export class LlvmCodegen {
     this.locals = new Map();
     this.tempCounter = 0;
     this.loopStack.length = 0;
+    const sig = this.localFunctions.get(fn.name.name);
+    this.currentReturnType = sig?.returnType ?? "void";
     const lines: string[] = [];
 
     const isMain = fn.name.name === "main";
@@ -1092,6 +1449,7 @@ export class LlvmCodegen {
     lines.push("}");
     lines.push("");
     this.functionBodies.push(...lines);
+    this.currentReturnType = null;
   }
 
   private emitFunctionHeader(fn: FunctionDeclaration): string {
@@ -1487,7 +1845,11 @@ export class LlvmCodegen {
       lines.push("  ret void");
       return;
     }
-    const value = this.emitExpression(stmt.value, lines);
+    const expected =
+      this.currentReturnType && this.currentReturnType !== "void"
+        ? this.currentReturnType
+        : undefined;
+    const value = this.emitExpression(stmt.value, lines, expected);
     lines.push(`  ret ${toLlvmType(value.type)} ${value.llvm}`);
   }
 
@@ -1749,6 +2111,14 @@ export class LlvmCodegen {
   }
 
   private emitExpression(expr: Expression, lines: string[], expected?: ValueType): EmittedValue {
+    const value = this.emitExpressionRaw(expr, lines, expected);
+    if (expected) {
+      return this.coerceValue(value, expected, lines);
+    }
+    return value;
+  }
+
+  private emitExpressionRaw(expr: Expression, lines: string[], expected?: ValueType): EmittedValue {
     switch (expr.kind) {
       case "IntegerLiteral": {
         const type: ValueType = expected === "i64" ? "i64" : "i32";
@@ -2266,6 +2636,30 @@ export class LlvmCodegen {
       for (let i = 0; i < call.args.length; i += 1) {
         args.push(this.emitExpression(call.args[i]!, lines, method.params[i]));
       }
+      const argList = [
+        `ptr ${obj.llvm}`,
+        ...args.map((a) => `${toLlvmType(a.type)} ${a.llvm}`),
+      ].join(", ");
+
+      // Concrete class with no subclasses: direct call. Otherwise vtable (inheritance).
+      const mayHaveSubclasses = [...this.classes.values()].some(
+        (c) => c.superclass === def.name,
+      );
+      const useDirectCall = !def.isAbstract && !mayHaveSubclasses;
+      if (useDirectCall) {
+        if (method.returnType === "void") {
+          lines.push(`  call void @${method.mangledName}(${argList})`);
+          if (!asStatement) {
+            throw new Error("Codegen: void class method used as value");
+          }
+          return { llvm: "void", type: "i32" };
+        }
+        const tmp = this.nextTemp();
+        const retTy = toLlvmType(method.returnType);
+        lines.push(`  ${tmp} = call ${retTy} @${method.mangledName}(${argList})`);
+        return { llvm: tmp, type: method.returnType };
+      }
+
       // Virtual dispatch via vtable
       const vtField = this.nextTemp();
       lines.push(
@@ -2279,14 +2673,48 @@ export class LlvmCodegen {
       );
       const fnPtr = this.nextTemp();
       lines.push(`  ${fnPtr} = load ptr, ptr ${slotPtr}`);
+      if (method.returnType === "void") {
+        lines.push(`  call void ${fnPtr}(${argList})`);
+        if (!asStatement) {
+          throw new Error("Codegen: void class method used as value");
+        }
+        return { llvm: "void", type: "i32" };
+      }
+      const tmp = this.nextTemp();
+      const retTy = toLlvmType(method.returnType);
+      lines.push(`  ${tmp} = call ${retTy} ${fnPtr}(${argList})`);
+      return { llvm: tmp, type: method.returnType };
+    }
+
+    if (isInterfaceType(objectType)) {
+      const def = this.interfaces.get(objectType.name);
+      const method = def?.methods.find((m) => m.name === callee.property.name);
+      if (!def || !method) {
+        throw new Error(`Codegen: unknown interface method '${callee.property.name}'`);
+      }
+      const obj = this.emitExpression(callee.object, lines);
+      const args: EmittedValue[] = [];
+      for (let i = 0; i < call.args.length; i += 1) {
+        args.push(this.emitExpression(call.args[i]!, lines, method.params[i]));
+      }
+      const data = this.nextTemp();
+      lines.push(`  ${data} = extractvalue %${def.name} ${obj.llvm}, 0`);
+      const itable = this.nextTemp();
+      lines.push(`  ${itable} = extractvalue %${def.name} ${obj.llvm}, 1`);
+      const slotPtr = this.nextTemp();
+      lines.push(
+        `  ${slotPtr} = getelementptr inbounds %${def.name}__itable_type, ptr ${itable}, i32 0, i32 ${method.itableSlot}`,
+      );
+      const fnPtr = this.nextTemp();
+      lines.push(`  ${fnPtr} = load ptr, ptr ${slotPtr}`);
       const argList = [
-        `ptr ${obj.llvm}`,
+        `ptr ${data}`,
         ...args.map((a) => `${toLlvmType(a.type)} ${a.llvm}`),
       ].join(", ");
       if (method.returnType === "void") {
         lines.push(`  call void ${fnPtr}(${argList})`);
         if (!asStatement) {
-          throw new Error("Codegen: void class method used as value");
+          throw new Error("Codegen: void interface method used as value");
         }
         return { llvm: "void", type: "i32" };
       }
@@ -2986,7 +3414,7 @@ function toLlvmType(type: ValueType | "void"): string {
     return "void";
   }
   if (typeof type === "object") {
-    if (type.kind === "struct") {
+    if (type.kind === "struct" || type.kind === "interface") {
       return `%${type.name}`;
     }
     if (type.kind === "enum") {
@@ -3017,6 +3445,9 @@ function zeroInitializer(type: ValueType): string {
   if (typeof type === "object") {
     if (type.kind === "enum") {
       return "0";
+    }
+    if (type.kind === "struct" || type.kind === "interface") {
+      return "zeroinitializer";
     }
     return "null";
   }
@@ -3053,10 +3484,14 @@ function elementByteSize(type: ValueType, structs?: Map<string, StructInfo>): nu
     if (type.kind === "struct") {
       return structByteSize(type.name, structs);
     }
+    if (type.kind === "interface") {
+      return 16; // { ptr, ptr }
+    }
     if (type.kind === "enum") {
       return 4;
     }
-    return 8; // ptr
+    // class / array ptr
+    return 8;
   }
   switch (type) {
     case "i32":
@@ -3076,12 +3511,11 @@ function elementByteSize(type: ValueType, structs?: Map<string, StructInfo>): nu
   }
 }
 
-function alignUp(value: number, align: number): number {
-  return Math.ceil(value / align) * align;
-}
-
 function fieldAlign(type: ValueType): number {
   if (typeof type === "object") {
+    if (type.kind === "interface") {
+      return 8;
+    }
     if (type.kind === "struct") {
       return 8;
     }
@@ -3102,6 +3536,14 @@ function fieldAlign(type: ValueType): number {
     case "char":
       return 1;
   }
+}
+
+function itableGlobalName(classMangled: string, ifaceMangled: string): string {
+  return `${classMangled}__${ifaceMangled}__itable`;
+}
+
+function alignUp(value: number, align: number): number {
+  return Math.ceil(value / align) * align;
 }
 
 function structByteSize(name: string, structs?: Map<string, StructInfo>): number {

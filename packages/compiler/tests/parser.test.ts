@@ -605,4 +605,57 @@ describe("Parser", () => {
     expect(diagnostics.hasErrors).toBe(true);
     expect(diagnostics.diagnostics.some((d) => d.code === "E0105")).toBe(true);
   });
+
+  it("parses interface declarations with extends and class implements", () => {
+    const { ast, diagnostics } = parse(`
+      interface Drawable {
+        draw(): void;
+      }
+      interface ColorDrawable extends Drawable {
+        getColor(): string;
+      }
+      class Circle implements Drawable, ColorDrawable {
+        draw(): void { print("c"); }
+        getColor(): string { return "red"; }
+      }
+      function main(): void {}
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(ast.body[0]).toMatchObject({
+      kind: "InterfaceDeclaration",
+      name: { name: "Drawable" },
+      bases: [],
+    });
+    expect(ast.body[1]).toMatchObject({
+      kind: "InterfaceDeclaration",
+      name: { name: "ColorDrawable" },
+      bases: [{ kind: "NamedType", name: "Drawable" }],
+    });
+    expect(ast.body[2]).toMatchObject({
+      kind: "ClassDeclaration",
+      name: { name: "Circle" },
+      implementsTypes: [
+        { kind: "NamedType", name: "Drawable" },
+        { kind: "NamedType", name: "ColorDrawable" },
+      ],
+    });
+    if (ast.body[0]?.kind === "InterfaceDeclaration") {
+      expect(ast.body[0].methods).toHaveLength(1);
+      expect(ast.body[0].methods[0]).toMatchObject({
+        kind: "InterfaceMethodSignature",
+        name: { name: "draw" },
+      });
+    }
+  });
+
+  it("rejects interface field members", () => {
+    const { diagnostics } = parse(`
+      interface Person {
+        name: string;
+      }
+      function main(): void {}
+    `);
+    expect(diagnostics.hasErrors).toBe(true);
+    expect(diagnostics.diagnostics.some((d) => d.code === "E0370")).toBe(true);
+  });
 });

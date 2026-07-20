@@ -279,4 +279,13 @@ describe("Lexer", () => {
     ]);
     expect(tokens[1]?.value).toBe("math");
   });
+
+  it("tokenizes interface and implements keywords", () => {
+    const { tokens, diagnostics } = lex(
+      `interface Drawable { draw(): void; } class C implements Drawable {}`,
+    );
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens.map((t) => t.kind)).toContain(TokenKind.Interface);
+    expect(tokens.map((t) => t.kind)).toContain(TokenKind.Implements);
+  });
 });

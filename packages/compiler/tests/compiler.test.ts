@@ -313,7 +313,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("br label %for.exit.0");
     });
 
-    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, structs, enums, struct-methods, classes, and inheritance examples", () => {
+    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, structs, enums, struct-methods, classes, inheritance, and interfaces examples", () => {
       for (const name of [
         "hello.tsn",
         "variables.tsn",
@@ -326,6 +326,7 @@ describe("compile pipeline", () => {
         "struct-methods.tsn",
         "classes.tsn",
         "inheritance.tsn",
+        "interfaces.tsn",
       ]) {
         const source = readFileSync(join(examplesDir, name), "utf8");
         const result = compile(source);
@@ -442,6 +443,110 @@ describe("compile pipeline", () => {
       `);
       expect(result.success).toBe(false);
       expect(result.diagnostics.some((d) => d.code === "E0358")).toBe(true);
+    });
+
+    it("compiles interfaces with itable dispatch and direct concrete calls", () => {
+      const result = compile(`
+        interface Drawable {
+          draw(): void;
+        }
+        class Circle implements Drawable {
+          constructor() {}
+          draw(): void { print("circle"); }
+        }
+        function render(shape: Drawable): void {
+          shape.draw();
+        }
+        function main(): void {
+          let c = new Circle();
+          c.draw();
+          render(c);
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("%Drawable = type { ptr, ptr }");
+      expect(result.ir).toContain("__itable");
+      // Concrete call is direct
+      expect(result.ir).toMatch(/call void @Circle__draw\(ptr/);
+      // Interface call goes through loaded function pointer
+      expect(result.ir).toContain("extractvalue %Drawable");
+    });
+
+    it("compiles multiple interfaces and interface extends", () => {
+      const result = compile(`
+        interface Drawable { draw(): void; }
+        interface Named { getName(): string; }
+        interface ColorDrawable extends Drawable { getColor(): string; }
+        class Player implements Drawable, Named {
+          constructor() {}
+          draw(): void { print("player"); }
+          getName(): string { return "p"; }
+        }
+        class Square implements ColorDrawable {
+          constructor() {}
+          draw(): void { print("sq"); }
+          getColor(): string { return "red"; }
+        }
+        function main(): void {
+          let p = new Player();
+          let d: Drawable = p;
+          d.draw();
+          let s = new Square();
+          let c: ColorDrawable = s;
+          let base: Drawable = c;
+          base.draw();
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("%Drawable = type { ptr, ptr }");
+      expect(result.ir).toContain("%ColorDrawable = type { ptr, ptr }");
+    });
+
+    it("rejects class missing interface method", () => {
+      const result = compile(`
+        interface Drawable { draw(): void; }
+        class Circle implements Drawable {
+          constructor() {}
+        }
+        function main(): void {}
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0371")).toBe(true);
+    });
+
+    it("rejects incompatible interface method signature", () => {
+      const result = compile(`
+        interface Drawable { draw(): void; }
+        class Circle implements Drawable {
+          constructor() {}
+          draw(): i32 { return 1; }
+        }
+        function main(): void {}
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0372")).toBe(true);
+    });
+
+    it("rejects interface field members at parse time", () => {
+      const result = compile(`
+        interface Person {
+          name: string;
+        }
+        function main(): void {}
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0370")).toBe(true);
+    });
+
+    it("rejects constructing an interface", () => {
+      const result = compile(`
+        interface Drawable { draw(): void; }
+        function main(): void {
+          let d = new Drawable();
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0376")).toBe(true);
     });
 
     it("compiles struct declarations, literals, field access, assignment, and params", () => {

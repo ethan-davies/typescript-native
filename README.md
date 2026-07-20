@@ -74,9 +74,10 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 **Currently supported:**
 
 - A single top-level `function main(): void` with no parameters (return type required)
-- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, arrays `T[]`, `struct`, `enum`, and `class` types
+- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, arrays `T[]`, `struct`, `enum`, `class`, and `interface` types
 - Struct declarations, literals (`Person { name: "...", age: 16 }`), field access, field assignment, and instance methods
 - Classes: `new`, constructors, instance/static fields and methods, `public`/`private`, `readonly`, inheritance (`extends`), and `abstract` classes (heap reference types)
+- Interfaces: method-only contracts with `implements` / `extends`, compile-time compliance checks, and fat-pointer dynamic dispatch when typed as an interface
 - `let` / `const` variables with optional annotations and inference (`5` → `i32`, `3.14` → `f64`)
 - Reassignment for `let` only (`=`, `+=`, `-=`, `++`, `--` on numeric lets)
 - Arrays: literals `[1, 2, 3]`, indexing, element assignment, `.length`, `.push` / `.pop` / `.includes` / `.indexOf`
@@ -103,6 +104,7 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 | [`examples/struct-methods.tsn`](./examples/struct-methods.tsn) | Struct instance methods with `this` |
 | [`examples/classes.tsn`](./examples/classes.tsn) | Classes, `new`, constructors, static/readonly/private |
 | [`examples/inheritance.tsn`](./examples/inheritance.tsn) | Abstract classes, `extends`, virtual methods |
+| [`examples/interfaces.tsn`](./examples/interfaces.tsn) | Interfaces, `implements`, itable dispatch |
 
 ## Development
 

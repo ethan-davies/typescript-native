@@ -1,0 +1,65 @@
+interface Drawable {
+  draw(): void;
+}
+
+interface Named {
+  getName(): string;
+}
+
+interface ColorDrawable extends Drawable {
+  getColor(): string;
+}
+
+class Circle implements Drawable, Named {
+  radius: f32;
+  label: string;
+
+  constructor(radius: f32, label: string) {
+    this.radius = radius;
+    this.label = label;
+  }
+
+  draw(): void {
+    print("Drawing circle");
+  }
+
+  getName(): string {
+    return this.label;
+  }
+}
+
+class Square implements ColorDrawable {
+  side: f32;
+
+  constructor(side: f32) {
+    this.side = side;
+  }
+
+  draw(): void {
+    print("Drawing square");
+  }
+
+  getColor(): string {
+    return "blue";
+  }
+}
+
+function render(shape: Drawable): void {
+  shape.draw();
+}
+
+function main(): void {
+  let circle = new Circle(1.5, "dot");
+  circle.draw();
+  print(circle.getName());
+
+  render(circle);
+
+  let square = new Square(2.0);
+  let colored: ColorDrawable = square;
+  colored.draw();
+  print(colored.getColor());
+
+  let asDrawable: Drawable = colored;
+  asDrawable.draw();
+}

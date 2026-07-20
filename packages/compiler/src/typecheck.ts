@@ -5,6 +5,7 @@ import type {
   EnumDeclaration,
   Expression,
   FunctionDeclaration,
+  InterfaceDeclaration,
   PrimitiveTypeName,
   Program,
   Statement,
@@ -34,6 +35,11 @@ export interface ClassValueType {
   readonly name: string;
 }
 
+export interface InterfaceValueType {
+  readonly kind: "interface";
+  readonly name: string;
+}
+
 export interface EnumValueType {
   readonly kind: "enum";
   readonly name: string;
@@ -44,6 +50,7 @@ export type ValueType =
   | ArrayValueType
   | StructValueType
   | ClassValueType
+  | InterfaceValueType
   | EnumValueType;
 
 export type ReturnType = ValueType | "void";
@@ -97,11 +104,37 @@ export interface ClassMethodDef {
   readonly decl: ClassMethod | null;
 }
 
+export interface InterfaceMethodDef {
+  readonly name: string;
+  readonly params: ValueType[];
+  readonly returnType: ReturnType;
+  /** Slot index in this interface's itable. */
+  readonly itableSlot: number;
+}
+
+export interface InterfaceDef {
+  readonly name: string;
+  readonly localName: string;
+  /** Direct base interfaces. */
+  readonly bases: InterfaceDef[];
+  /**
+   * Flattened methods in itable order (base methods first, then own).
+   * Prefix-compatible with each base at `baseItableOffsets`.
+   */
+  readonly methods: InterfaceMethodDef[];
+  /** Mangled interface name → starting slot offset within this itable. */
+  readonly baseItableOffsets: ReadonlyMap<string, number>;
+  readonly decl: InterfaceDeclaration;
+  readonly exported: boolean;
+}
+
 export interface ClassDef {
   readonly name: string;
   readonly localName: string;
   readonly isAbstract: boolean;
   readonly superclass: ClassDef | null;
+  /** Interfaces directly listed in `implements` (not transitive). */
+  readonly implementedInterfaces: InterfaceDef[];
   /** Instance fields in layout order (after vtable slot). */
   readonly instanceFields: ClassFieldDef[];
   readonly staticFields: ClassFieldDef[];
@@ -143,6 +176,7 @@ export interface ModuleNamespace {
   readonly structs: ReadonlyMap<string, StructDef>;
   readonly enums: ReadonlyMap<string, EnumDef>;
   readonly classes: ReadonlyMap<string, ClassDef>;
+  readonly interfaces: ReadonlyMap<string, InterfaceDef>;
 }
 
 interface ModuleSymbols {
@@ -151,6 +185,7 @@ interface ModuleSymbols {
   readonly structs: Map<string, StructDef>;
   readonly enums: Map<string, EnumDef>;
   readonly classes: Map<string, ClassDef>;
+  readonly interfaces: Map<string, InterfaceDef>;
 }
 
 interface MemberContext {
@@ -168,8 +203,12 @@ const EQUALITY_PRIMITIVES = new Set<PrimitiveValueType>(["i32", "i64", "f32", "f
 let activeNamespaces: Map<string, ModuleNamespace> = new Map();
 /** Active class defs for the module under check (local name → def). */
 let activeClasses: Map<string, ClassDef> = new Map();
+/** Active interface defs for the module under check (local name → def). */
+let activeInterfaces: Map<string, InterfaceDef> = new Map();
 /** All class defs by mangled name (for inheritance lookups). */
 let classesByMangled: Map<string, ClassDef> = new Map();
+/** All interface defs by mangled name. */
+let interfacesByMangled: Map<string, InterfaceDef> = new Map();
 let memberContext: MemberContext | null = null;
 
 /**
@@ -217,9 +256,13 @@ export function typecheckModules(
   }
 
   classesByMangled = new Map();
+  interfacesByMangled = new Map();
   for (const symbols of byPath.values()) {
     for (const def of symbols.classes.values()) {
       classesByMangled.set(def.name, def);
+    }
+    for (const def of symbols.interfaces.values()) {
+      interfacesByMangled.set(def.name, def);
     }
   }
 
@@ -237,6 +280,7 @@ export function typecheckModules(
       ...local.structs.keys(),
       ...local.enums.keys(),
       ...local.classes.keys(),
+      ...local.interfaces.keys(),
     ]);
 
     for (const binding of mod.imports) {
@@ -258,6 +302,7 @@ export function typecheckModules(
         structs: exportedStructs(imported.structs),
         enums: exportedEnums(imported.enums),
         classes: exportedClasses(imported.classes),
+        interfaces: exportedInterfaces(imported.interfaces),
       });
     }
 
@@ -267,6 +312,7 @@ export function typecheckModules(
 
     activeNamespaces = namespaces;
     activeClasses = local.classes;
+    activeInterfaces = local.interfaces;
     for (const decl of mod.ast.body) {
       if (decl.kind === "FunctionDeclaration") {
         checkFunction(decl, local.functions, local.structs, local.enums, diagnostics);
@@ -286,7 +332,9 @@ export function typecheckModules(
 
   activeNamespaces = new Map();
   activeClasses = new Map();
+  activeInterfaces = new Map();
   classesByMangled = new Map();
+  interfacesByMangled = new Map();
   memberContext = null;
 }
 
@@ -330,14 +378,30 @@ function exportedClasses(classes: Map<string, ClassDef>): Map<string, ClassDef> 
   return out;
 }
 
+function exportedInterfaces(interfaces: Map<string, InterfaceDef>): Map<string, InterfaceDef> {
+  const out = new Map<string, InterfaceDef>();
+  for (const [name, def] of interfaces) {
+    if (def.exported) {
+      out.set(name, def);
+    }
+  }
+  return out;
+}
+
 function collectModuleSymbols(
   mod: ResolvedModule,
   diagnostics: DiagnosticCollector,
 ): ModuleSymbols {
   const enums = collectEnums(mod.ast, mod.moduleId, diagnostics);
   const structs = collectStructs(mod.ast, mod.moduleId, enums, diagnostics);
-  const classes = collectClasses(mod.ast, mod.moduleId, structs, enums, diagnostics);
+  const interfaces = collectInterfaces(mod.ast, mod.moduleId, structs, enums, diagnostics);
+  const classes = collectClasses(mod.ast, mod.moduleId, structs, enums, interfaces, diagnostics);
   const functions = new Map<string, FunctionSig>();
+
+  const prevClasses = activeClasses;
+  const prevInterfaces = activeInterfaces;
+  activeClasses = classes;
+  activeInterfaces = interfaces;
 
   for (const decl of mod.ast.body) {
     if (decl.kind !== "FunctionDeclaration") {
@@ -375,6 +439,15 @@ function collectModuleSymbols(
     if (classes.has(fn.name.name)) {
       diagnostics.error(
         `Name '${fn.name.name}' is already used as a class`,
+        fn.name.span,
+        "E0330",
+      );
+      continue;
+    }
+
+    if (interfaces.has(fn.name.name)) {
+      diagnostics.error(
+        `Name '${fn.name.name}' is already used as an interface`,
         fn.name.span,
         "E0330",
       );
@@ -420,12 +493,16 @@ function collectModuleSymbols(
     });
   }
 
+  activeClasses = prevClasses;
+  activeInterfaces = prevInterfaces;
+
   return {
     moduleId: mod.moduleId,
     functions,
     structs,
     enums,
     classes,
+    interfaces,
   };
 }
 
@@ -438,7 +515,11 @@ function collectEnums(
   const reservedNames = new Set<string>();
 
   for (const decl of program.body) {
-    if (decl.kind === "StructDeclaration" || decl.kind === "ClassDeclaration") {
+    if (
+      decl.kind === "StructDeclaration" ||
+      decl.kind === "ClassDeclaration" ||
+      decl.kind === "InterfaceDeclaration"
+    ) {
       reservedNames.add(decl.name.name);
     }
   }
@@ -459,7 +540,7 @@ function collectEnums(
 
     if (reservedNames.has(decl.name.name)) {
       diagnostics.error(
-        `Name '${decl.name.name}' is already used as a struct or class`,
+        `Name '${decl.name.name}' is already used as a struct, class, or interface`,
         decl.name.span,
         "E0330",
       );
@@ -512,10 +593,10 @@ function collectStructs(
 ): Map<string, StructDef> {
   const structs = new Map<string, StructDef>();
   const declarations: StructDeclaration[] = [];
-  const classNames = new Set<string>();
+  const reservedNames = new Set<string>();
   for (const decl of program.body) {
-    if (decl.kind === "ClassDeclaration") {
-      classNames.add(decl.name.name);
+    if (decl.kind === "ClassDeclaration" || decl.kind === "InterfaceDeclaration") {
+      reservedNames.add(decl.name.name);
     }
   }
 
@@ -542,9 +623,9 @@ function collectStructs(
       continue;
     }
 
-    if (classNames.has(decl.name.name)) {
+    if (reservedNames.has(decl.name.name)) {
       diagnostics.error(
-        `Name '${decl.name.name}' is already used as a class`,
+        `Name '${decl.name.name}' is already used as a class or interface`,
         decl.name.span,
         "E0330",
       );
@@ -640,11 +721,241 @@ function collectStructs(
   return structs;
 }
 
+function collectInterfaces(
+  program: Program,
+  moduleId: string,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): Map<string, InterfaceDef> {
+  const declarations: InterfaceDeclaration[] = [];
+  const byLocal = new Map<string, InterfaceDeclaration>();
+  const classNames = new Set<string>();
+  for (const decl of program.body) {
+    if (decl.kind === "ClassDeclaration") {
+      classNames.add(decl.name.name);
+    }
+  }
+
+  for (const decl of program.body) {
+    if (decl.kind !== "InterfaceDeclaration") {
+      continue;
+    }
+    if (byLocal.has(decl.name.name)) {
+      diagnostics.error(`Duplicate interface '${decl.name.name}'`, decl.name.span, "E0328");
+      continue;
+    }
+    if (structs.has(decl.name.name)) {
+      diagnostics.error(
+        `Name '${decl.name.name}' is already used as a struct`,
+        decl.name.span,
+        "E0330",
+      );
+      continue;
+    }
+    if (enums.has(decl.name.name)) {
+      diagnostics.error(
+        `Name '${decl.name.name}' is already used as an enum`,
+        decl.name.span,
+        "E0330",
+      );
+      continue;
+    }
+    if (classNames.has(decl.name.name)) {
+      diagnostics.error(
+        `Name '${decl.name.name}' is already used as a class`,
+        decl.name.span,
+        "E0330",
+      );
+      continue;
+    }
+    byLocal.set(decl.name.name, decl);
+    declarations.push(decl);
+  }
+
+  const interfaces = new Map<string, InterfaceDef>();
+  for (const decl of declarations) {
+    const mangled = mangleSymbol(moduleId, decl.name.name);
+    interfaces.set(decl.name.name, {
+      name: mangled,
+      localName: decl.name.name,
+      bases: [],
+      methods: [],
+      baseItableOffsets: new Map([[mangled, 0]]),
+      decl,
+      exported: decl.exported,
+    });
+  }
+
+  const prevActive = activeInterfaces;
+  activeInterfaces = interfaces;
+
+  const visiting = new Set<string>();
+  const done = new Set<string>();
+
+  const finishInterface = (localName: string): InterfaceDef | null => {
+    if (done.has(localName)) {
+      return interfaces.get(localName) ?? null;
+    }
+    if (visiting.has(localName)) {
+      const decl = byLocal.get(localName)!;
+      diagnostics.error(
+        `Inheritance cycle involving interface '${localName}'`,
+        decl.name.span,
+        "E0373",
+      );
+      return null;
+    }
+    visiting.add(localName);
+    const decl = byLocal.get(localName)!;
+    const mangled = mangleSymbol(moduleId, localName);
+
+    const bases: InterfaceDef[] = [];
+    for (const baseType of decl.bases) {
+      let base: InterfaceDef | null = null;
+      if (baseType.namespace) {
+        const ns = activeNamespaces.get(baseType.namespace);
+        if (!ns || !ns.interfaces.has(baseType.name)) {
+          diagnostics.error(
+            `Unknown interface '${baseType.namespace}.${baseType.name}'`,
+            baseType.span,
+            "E0104",
+          );
+          visiting.delete(localName);
+          return null;
+        }
+        base = ns.interfaces.get(baseType.name)!;
+      } else if (byLocal.has(baseType.name)) {
+        base = finishInterface(baseType.name);
+        if (!base) {
+          visiting.delete(localName);
+          return null;
+        }
+      } else if (interfaces.has(baseType.name)) {
+        base = interfaces.get(baseType.name)!;
+      } else {
+        diagnostics.error(`Unknown interface '${baseType.name}'`, baseType.span, "E0104");
+        visiting.delete(localName);
+        return null;
+      }
+      bases.push(base);
+    }
+
+    const methods: InterfaceMethodDef[] = [];
+    const baseItableOffsets = new Map<string, number>();
+    baseItableOffsets.set(mangled, 0);
+    const seenNames = new Set<string>();
+    let ok = true;
+
+    for (const base of bases) {
+      baseItableOffsets.set(base.name, methods.length);
+      for (const [baseName, offset] of base.baseItableOffsets) {
+        if (!baseItableOffsets.has(baseName)) {
+          baseItableOffsets.set(baseName, methods.length + offset);
+        }
+      }
+      for (const method of base.methods) {
+        if (seenNames.has(method.name)) {
+          // Diamond / overlapping base methods: require identical signature; skip duplicate slot.
+          const existing = methods.find((m) => m.name === method.name)!;
+          if (
+            existing.params.length !== method.params.length ||
+            !existing.params.every((p, i) => typesEqual(p, method.params[i]!)) ||
+            (existing.returnType === "void") !== (method.returnType === "void") ||
+            (existing.returnType !== "void" &&
+              method.returnType !== "void" &&
+              !typesEqual(existing.returnType, method.returnType))
+          ) {
+            diagnostics.error(
+              `Interface '${localName}' inherits incompatible definitions of method '${method.name}'`,
+              decl.name.span,
+              "E0374",
+            );
+            ok = false;
+          }
+          continue;
+        }
+        seenNames.add(method.name);
+        methods.push({
+          name: method.name,
+          params: method.params,
+          returnType: method.returnType,
+          itableSlot: methods.length,
+        });
+      }
+    }
+
+    for (const method of decl.methods) {
+      if (seenNames.has(method.name.name)) {
+        diagnostics.error(
+          `Duplicate method '${method.name.name}' in interface '${localName}'`,
+          method.name.span,
+          "E0329",
+        );
+        ok = false;
+        continue;
+      }
+      seenNames.add(method.name.name);
+
+      const params: ValueType[] = [];
+      let paramsOk = true;
+      for (const param of method.params) {
+        const paramType = resolveAnnotation(param.typeAnnotation, structs, enums, diagnostics);
+        if (paramType === null) {
+          paramsOk = false;
+          continue;
+        }
+        params.push(paramType);
+      }
+      const returnType = resolveReturnType(method.returnType, structs, enums, diagnostics);
+      if (returnType === undefined || !paramsOk) {
+        ok = false;
+        continue;
+      }
+      methods.push({
+        name: method.name.name,
+        params,
+        returnType,
+        itableSlot: methods.length,
+      });
+    }
+
+    visiting.delete(localName);
+    done.add(localName);
+
+    if (!ok) {
+      interfaces.delete(localName);
+      return null;
+    }
+
+    const def: InterfaceDef = {
+      name: mangled,
+      localName,
+      bases,
+      methods,
+      baseItableOffsets,
+      decl,
+      exported: decl.exported,
+    };
+    interfaces.set(localName, def);
+    interfacesByMangled.set(mangled, def);
+    return def;
+  };
+
+  for (const decl of declarations) {
+    finishInterface(decl.name.name);
+  }
+
+  activeInterfaces = prevActive;
+  return interfaces;
+}
+
 function collectClasses(
   program: Program,
   moduleId: string,
   structs: Map<string, StructDef>,
   enums: Map<string, EnumDef>,
+  interfaces: Map<string, InterfaceDef>,
   diagnostics: DiagnosticCollector,
 ): Map<string, ClassDef> {
   const declarations: ClassDeclaration[] = [];
@@ -674,6 +985,14 @@ function collectClasses(
       );
       continue;
     }
+    if (interfaces.has(decl.name.name)) {
+      diagnostics.error(
+        `Name '${decl.name.name}' is already used as an interface`,
+        decl.name.span,
+        "E0330",
+      );
+      continue;
+    }
     byLocal.set(decl.name.name, decl);
     declarations.push(decl);
   }
@@ -687,6 +1006,7 @@ function collectClasses(
       localName: decl.name.name,
       isAbstract: decl.isAbstract,
       superclass: null,
+      implementedInterfaces: [],
       instanceFields: [],
       staticFields: [],
       instanceMethods: [],
@@ -702,7 +1022,9 @@ function collectClasses(
 
   // Temporarily expose for resolveAnnotation / superclass resolution within module.
   const prevActive = activeClasses;
+  const prevInterfaces = activeInterfaces;
   activeClasses = classes;
+  activeInterfaces = interfaces;
 
   const visiting = new Set<string>();
   const done = new Set<string>();
@@ -755,6 +1077,42 @@ function collectClasses(
         visiting.delete(localName);
         return null;
       }
+    }
+
+    const implementedInterfaces: InterfaceDef[] = [];
+    const seenIfaces = new Set<string>();
+    for (const ifaceType of decl.implementsTypes) {
+      let iface: InterfaceDef | undefined;
+      if (ifaceType.namespace) {
+        const ns = activeNamespaces.get(ifaceType.namespace);
+        iface = ns?.interfaces.get(ifaceType.name);
+        if (!iface) {
+          diagnostics.error(
+            `Unknown interface '${ifaceType.namespace}.${ifaceType.name}'`,
+            ifaceType.span,
+            "E0104",
+          );
+          visiting.delete(localName);
+          return null;
+        }
+      } else {
+        iface = interfaces.get(ifaceType.name);
+        if (!iface) {
+          diagnostics.error(`Unknown interface '${ifaceType.name}'`, ifaceType.span, "E0104");
+          visiting.delete(localName);
+          return null;
+        }
+      }
+      if (seenIfaces.has(iface.name)) {
+        diagnostics.error(
+          `Duplicate interface '${iface.localName}' in implements list`,
+          ifaceType.span,
+          "E0329",
+        );
+        continue;
+      }
+      seenIfaces.add(iface.name);
+      implementedInterfaces.push(iface);
     }
 
     const instanceFields: ClassFieldDef[] = superclass ? [...superclass.instanceFields] : [];
@@ -984,6 +1342,45 @@ function collectClasses(
       }
     }
 
+    // Check interface compliance.
+    for (const iface of implementedInterfaces) {
+      for (const req of iface.methods) {
+        const provided = instanceMethods.find((m) => m.name === req.name);
+        if (!provided) {
+          diagnostics.error(
+            `Class '${localName}' does not implement method '${req.name}' required by interface '${iface.localName}'`,
+            decl.name.span,
+            "E0371",
+          );
+          ok = false;
+          continue;
+        }
+        if (provided.visibility !== "public") {
+          diagnostics.error(
+            `Method '${req.name}' implementing interface '${iface.localName}' must be public`,
+            provided.decl?.name.span ?? decl.name.span,
+            "E0372",
+          );
+          ok = false;
+        }
+        if (
+          provided.params.length !== req.params.length ||
+          !provided.params.every((p, i) => typesEqual(p, req.params[i]!)) ||
+          (provided.returnType === "void") !== (req.returnType === "void") ||
+          (provided.returnType !== "void" &&
+            req.returnType !== "void" &&
+            !typesEqual(provided.returnType, req.returnType))
+        ) {
+          diagnostics.error(
+            `Method '${req.name}' has incompatible signature for interface '${iface.localName}'`,
+            provided.decl?.name.span ?? decl.name.span,
+            "E0372",
+          );
+          ok = false;
+        }
+      }
+    }
+
     const constructorParams: ValueType[] = [];
     if (constructorDecl) {
       for (const param of constructorDecl.params) {
@@ -1016,6 +1413,7 @@ function collectClasses(
       localName,
       isAbstract: decl.isAbstract,
       superclass,
+      implementedInterfaces,
       instanceFields,
       staticFields,
       instanceMethods,
@@ -1037,6 +1435,7 @@ function collectClasses(
   }
 
   activeClasses = prevActive;
+  activeInterfaces = prevInterfaces;
   return classes;
 }
 
@@ -1047,7 +1446,12 @@ export function typeToString(type: ValueType | "void"): string {
   if (typeof type === "string") {
     return type;
   }
-  if (type.kind === "struct" || type.kind === "enum" || type.kind === "class") {
+  if (
+    type.kind === "struct" ||
+    type.kind === "enum" ||
+    type.kind === "class" ||
+    type.kind === "interface"
+  ) {
     return type.name;
   }
   return `${typeToString(type.element)}[]`;
@@ -1067,6 +1471,9 @@ export function typesEqual(a: ValueType, b: ValueType): boolean {
     if (a.kind === "class" && b.kind === "class") {
       return a.name === b.name;
     }
+    if (a.kind === "interface" && b.kind === "interface") {
+      return a.name === b.name;
+    }
     if (a.kind === "enum" && b.kind === "enum") {
       return a.name === b.name;
     }
@@ -1074,7 +1481,7 @@ export function typesEqual(a: ValueType, b: ValueType): boolean {
   return false;
 }
 
-/** True if `from` can be assigned to a binding of type `to` (includes class upcasts). */
+/** True if `from` can be assigned to a binding of type `to` (includes class/interface upcasts). */
 export function isAssignable(from: ValueType, to: ValueType): boolean {
   if (typesEqual(from, to)) {
     return true;
@@ -1086,6 +1493,19 @@ export function isAssignable(from: ValueType, to: ValueType): boolean {
         return true;
       }
       current = current.superclass ?? undefined;
+    }
+  }
+  if (isClassType(from) && isInterfaceType(to)) {
+    const cls = classesByMangled.get(from.name) ?? findClassByMangled(from.name);
+    const iface = interfacesByMangled.get(to.name) ?? findInterfaceByMangled(to.name);
+    if (cls && iface && classSatisfiesInterface(cls, iface)) {
+      return true;
+    }
+  }
+  if (isInterfaceType(from) && isInterfaceType(to)) {
+    const fromIface = interfacesByMangled.get(from.name) ?? findInterfaceByMangled(from.name);
+    if (fromIface && fromIface.baseItableOffsets.has(to.name)) {
+      return true;
     }
   }
   return false;
@@ -1103,6 +1523,10 @@ export function isClassType(type: ValueType): type is ClassValueType {
   return typeof type === "object" && type.kind === "class";
 }
 
+export function isInterfaceType(type: ValueType): type is InterfaceValueType {
+  return typeof type === "object" && type.kind === "interface";
+}
+
 export function isEnumType(type: ValueType): type is EnumValueType {
   return typeof type === "object" && type.kind === "enum";
 }
@@ -1115,6 +1539,19 @@ export function isIntegerType(type: ValueType): boolean {
   return type === "i32" || type === "i64";
 }
 
+function classSatisfiesInterface(cls: ClassDef, iface: InterfaceDef): boolean {
+  let current: ClassDef | null = cls;
+  while (current) {
+    for (const impl of current.implementedInterfaces) {
+      if (impl.name === iface.name || impl.baseItableOffsets.has(iface.name)) {
+        return true;
+      }
+    }
+    current = current.superclass;
+  }
+  return false;
+}
+
 /**
  * Convert a type annotation to a value type.
  * Named types become struct or enum types when `namedKinds` is provided.
@@ -1122,7 +1559,7 @@ export function isIntegerType(type: ValueType): boolean {
  */
 export function annotationToValueType(
   ann: TypeAnnotation,
-  namedKinds?: ReadonlyMap<string, "struct" | "enum" | "class">,
+  namedKinds?: ReadonlyMap<string, "struct" | "enum" | "class" | "interface">,
 ): ValueType | null {
   if (ann.kind === "PrimitiveType") {
     if (ann.name === "void") {
@@ -1175,6 +1612,9 @@ function resolveAnnotation(
       if (ns.classes.has(ann.name)) {
         return { kind: "class", name: ns.classes.get(ann.name)!.name };
       }
+      if (ns.interfaces.has(ann.name)) {
+        return { kind: "interface", name: ns.interfaces.get(ann.name)!.name };
+      }
       diagnostics.error(
         `Unknown type '${ann.namespace}.${ann.name}'`,
         ann.span,
@@ -1190,6 +1630,9 @@ function resolveAnnotation(
     }
     if (activeClasses.has(ann.name)) {
       return { kind: "class", name: activeClasses.get(ann.name)!.name };
+    }
+    if (activeInterfaces.has(ann.name)) {
+      return { kind: "interface", name: activeInterfaces.get(ann.name)!.name };
     }
     diagnostics.error(`Unknown type '${ann.name}'`, ann.span, "E0104");
     return null;
@@ -1452,6 +1895,26 @@ function findClassByMangled(typeName: string): ClassDef | undefined {
   }
   for (const ns of activeNamespaces.values()) {
     for (const def of ns.classes.values()) {
+      if (def.name === typeName) {
+        return def;
+      }
+    }
+  }
+  return undefined;
+}
+
+function findInterfaceByMangled(typeName: string): InterfaceDef | undefined {
+  const fromMap = interfacesByMangled.get(typeName);
+  if (fromMap) {
+    return fromMap;
+  }
+  for (const def of activeInterfaces.values()) {
+    if (def.name === typeName) {
+      return def;
+    }
+  }
+  for (const ns of activeNamespaces.values()) {
+    for (const def of ns.interfaces.values()) {
       if (def.name === typeName) {
         return def;
       }
@@ -1932,6 +2395,15 @@ function checkMemberLvalue(
     return field.type;
   }
 
+  if (isInterfaceType(objectType)) {
+    diagnostics.error(
+      `Interfaces have no fields; use a method call`,
+      expr.property.span,
+      "E0375",
+    );
+    return null;
+  }
+
   diagnostics.error(
     `Cannot assign to field of type '${typeToString(objectType)}'`,
     expr.object.span,
@@ -2377,6 +2849,14 @@ function checkExpression(
         }
         return field.type;
       }
+      if (isInterfaceType(objectType)) {
+        diagnostics.error(
+          `Interfaces have no fields; use a method call`,
+          expr.property.span,
+          "E0375",
+        );
+        return null;
+      }
       if (expr.property.name === "length") {
         if (!isArrayType(objectType)) {
           diagnostics.error(
@@ -2423,6 +2903,18 @@ function checkExpression(
         const label = expr.namespace
           ? `${expr.namespace.name}.${expr.className.name}`
           : expr.className.name;
+        const iface =
+          expr.namespace == null
+            ? activeInterfaces.get(expr.className.name)
+            : activeNamespaces.get(expr.namespace.name)?.interfaces.get(expr.className.name);
+        if (iface) {
+          diagnostics.error(
+            `Cannot construct interface '${iface.localName}'`,
+            expr.className.span,
+            "E0376",
+          );
+          return null;
+        }
         diagnostics.error(`Unknown class '${label}'`, expr.className.span, "E0104");
         return null;
       }
@@ -2783,6 +3275,35 @@ function checkMethodCall(
     if (
       !canAccessMember(method.visibility, method.implementingClass, diagnostics, callee.property.span)
     ) {
+      return null;
+    }
+    return checkMethodArgs(
+      method.name,
+      method.params,
+      method.returnType,
+      expr,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      allowVoidCall,
+    );
+  }
+
+  if (isInterfaceType(objectType)) {
+    const def = findInterfaceByMangled(objectType.name);
+    if (!def) {
+      diagnostics.error(`Unknown interface '${objectType.name}'`, callee.object.span, "E0104");
+      return null;
+    }
+    const method = def.methods.find((m) => m.name === callee.property.name);
+    if (!method) {
+      diagnostics.error(
+        `Unknown method '${callee.property.name}' on interface '${def.localName}'`,
+        callee.property.span,
+        "E0324",
+      );
       return null;
     }
     return checkMethodArgs(
