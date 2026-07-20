@@ -1,0 +1,82 @@
+struct Box<T> {
+  value: T;
+}
+
+struct Pair<K, V> {
+  key: K;
+  value: V;
+}
+
+struct Nested<T> {
+  items: T[];
+}
+
+function identity<T>(value: T): T {
+  return value;
+}
+
+function swap_first<T>(a: T, b: T): T {
+  return a;
+}
+
+interface Comparable {
+  compare(other: i32): i32;
+}
+
+class Num implements Comparable {
+  n: i32;
+
+  constructor(n: i32) {
+    this.n = n;
+  }
+
+  compare(other: i32): i32 {
+    return this.n;
+  }
+}
+
+function rank<T extends Comparable>(item: T): void {
+  print(item.compare(0));
+}
+
+class Cache {
+  get<T>(key: string, value: T): T {
+    return value;
+  }
+}
+
+class BoxClass<T> {
+  value: T;
+
+  constructor(value: T) {
+    this.value = value;
+  }
+
+  get(): T {
+    return this.value;
+  }
+}
+
+function main(): void {
+  let boxed: Box<i32> = Box<i32> { value: 42 };
+  print(boxed.value);
+
+  let pair = Pair<i32, string> { key: 1, value: "one" };
+  print(pair.key);
+  print(pair.value);
+
+  print(identity(7));
+  print(identity("hello"));
+  print(swap_first<i32>(10, 20));
+
+  let nested: Nested<i32> = Nested<i32> { items: [1, 2, 3] };
+  print(nested.items.length);
+
+  rank(new Num(5));
+
+  let cache = new Cache();
+  print(cache.get<string>("k", "v"));
+
+  let inferred = new BoxClass("hi");
+  print(inferred.get());
+}

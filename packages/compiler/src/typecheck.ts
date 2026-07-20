@@ -12,9 +12,24 @@ import type {
   StructDeclaration,
   StructMethod,
   TypeAnnotation,
+  TypeParameter,
   Visibility,
 } from "./ast/nodes.js";
 import type { DiagnosticCollector, SourceSpan } from "./diagnostics/diagnostic.js";
+import {
+  InstantiationCollector,
+  checkTypeArgArity,
+  mangleFunctionInstance,
+  mangleInstance,
+  validateTypeParamList,
+  valueTypeToAnnotation,
+  type GenericClassTemplate,
+  type GenericFunctionTemplate,
+  type GenericInterfaceTemplate,
+  type GenericStructTemplate,
+} from "./generics/registry.js";
+import { buildSubst, specializeStructDecl, substituteAnnotation } from "./generics/substitute.js";
+import type { TypecheckInstantiations } from "./generics/monomorphize.js";
 import { mangleSymbol } from "./modules/mangle.js";
 import type { ResolvedModule } from "./modules/resolve.js";
 
@@ -45,13 +60,23 @@ export interface EnumValueType {
   readonly name: string;
 }
 
+/** Unbound type parameter while checking a generic template body. */
+export interface TypeParamValueType {
+  readonly kind: "typeParam";
+  readonly name: string;
+  /** Constraint interface/class mangled name when `extends` is present. */
+  readonly constraintName: string | null;
+  readonly constraintKind: "interface" | "class" | null;
+}
+
 export type ValueType =
   | PrimitiveValueType
   | ArrayValueType
   | StructValueType
   | ClassValueType
   | InterfaceValueType
-  | EnumValueType;
+  | EnumValueType
+  | TypeParamValueType;
 
 export type ReturnType = ValueType | "void";
 
@@ -181,11 +206,16 @@ export interface ModuleNamespace {
 
 interface ModuleSymbols {
   readonly moduleId: string;
+  readonly modulePath: string;
   readonly functions: Map<string, FunctionSig>;
   readonly structs: Map<string, StructDef>;
   readonly enums: Map<string, EnumDef>;
   readonly classes: Map<string, ClassDef>;
   readonly interfaces: Map<string, InterfaceDef>;
+  readonly genericStructs: Map<string, GenericStructTemplate>;
+  readonly genericClasses: Map<string, GenericClassTemplate>;
+  readonly genericInterfaces: Map<string, GenericInterfaceTemplate>;
+  readonly genericFunctions: Map<string, GenericFunctionTemplate>;
 }
 
 interface MemberContext {
@@ -210,11 +240,33 @@ let classesByMangled: Map<string, ClassDef> = new Map();
 /** All interface defs by mangled name. */
 let interfacesByMangled: Map<string, InterfaceDef> = new Map();
 let memberContext: MemberContext | null = null;
+/** Type parameters in scope while checking a generic template. */
+let activeTypeParams: Map<string, TypeParamValueType> = new Map();
+/** Instantiation collector for the current typecheck run. */
+let instantiationCollector: InstantiationCollector = new InstantiationCollector();
+/** Module currently being checked (for instantiation records). */
+let activeModulePath = "";
+let activeModuleId = "";
+/** Templates for the active module. */
+let activeGenericStructs: Map<string, GenericStructTemplate> = new Map();
+let activeGenericClasses: Map<string, GenericClassTemplate> = new Map();
+let activeGenericInterfaces: Map<string, GenericInterfaceTemplate> = new Map();
+let activeGenericFunctions: Map<string, GenericFunctionTemplate> = new Map();
+/** All module symbols by path (for cross-module template lookup). */
+let allModuleSymbols: Map<string, ModuleSymbols> = new Map();
+/** Concrete specialized defs created during this run (local name → def), per module context. */
+let specializedStructs: Map<string, StructDef> = new Map();
+let specializedClasses: Map<string, ClassDef> = new Map();
+let specializedInterfaces: Map<string, InterfaceDef> = new Map();
+let specializedFunctions: Map<string, FunctionSig> = new Map();
 
 /**
  * Type-check a validated single-file program.
  */
-export function typecheck(program: Program, diagnostics: DiagnosticCollector): void {
+export function typecheck(
+  program: Program,
+  diagnostics: DiagnosticCollector,
+): TypecheckInstantiations {
   for (const decl of program.body) {
     if (decl.kind === "ImportDeclaration") {
       diagnostics.error(
@@ -222,11 +274,11 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
         decl.span,
         "E0400",
       );
-      return;
+      return new InstantiationCollector().snapshot();
     }
   }
 
-  typecheckModules(
+  return typecheckModules(
     [
       {
         path: "<source>",
@@ -247,12 +299,15 @@ export function typecheck(program: Program, diagnostics: DiagnosticCollector): v
 export function typecheckModules(
   modules: readonly ResolvedModule[],
   diagnostics: DiagnosticCollector,
-): void {
+): TypecheckInstantiations {
+  instantiationCollector = new InstantiationCollector();
+  allModuleSymbols = new Map();
   const byPath = new Map<string, ModuleSymbols>();
 
   for (const mod of modules) {
     const symbols = collectModuleSymbols(mod, diagnostics);
     byPath.set(mod.path, symbols);
+    allModuleSymbols.set(mod.path, symbols);
   }
 
   classesByMangled = new Map();
@@ -267,20 +322,23 @@ export function typecheckModules(
   }
 
   if (diagnostics.hasErrors) {
-    return;
+    return instantiationCollector.snapshot();
   }
 
   for (const mod of modules) {
     const local = byPath.get(mod.path)!;
     const namespaces = new Map<string, ModuleNamespace>();
 
-    // Clash: import alias vs local top-level names
     const localNames = new Set<string>([
       ...local.functions.keys(),
       ...local.structs.keys(),
       ...local.enums.keys(),
       ...local.classes.keys(),
       ...local.interfaces.keys(),
+      ...local.genericStructs.keys(),
+      ...local.genericClasses.keys(),
+      ...local.genericInterfaces.keys(),
+      ...local.genericFunctions.keys(),
     ]);
 
     for (const binding of mod.imports) {
@@ -313,18 +371,41 @@ export function typecheckModules(
     activeNamespaces = namespaces;
     activeClasses = local.classes;
     activeInterfaces = local.interfaces;
+    activeGenericStructs = local.genericStructs;
+    activeGenericClasses = local.genericClasses;
+    activeGenericInterfaces = local.genericInterfaces;
+    activeGenericFunctions = local.genericFunctions;
+    activeModulePath = mod.path;
+    activeModuleId = mod.moduleId;
+    specializedStructs = new Map();
+    specializedClasses = new Map();
+    specializedInterfaces = new Map();
+    specializedFunctions = new Map();
+
     for (const decl of mod.ast.body) {
       if (decl.kind === "FunctionDeclaration") {
-        checkFunction(decl, local.functions, local.structs, local.enums, diagnostics);
+        if (decl.typeParams.length > 0) {
+          checkGenericFunctionTemplate(decl, local.functions, local.structs, local.enums, diagnostics);
+        } else {
+          checkFunction(decl, local.functions, local.structs, local.enums, diagnostics);
+        }
       } else if (decl.kind === "StructDeclaration") {
-        const def = local.structs.get(decl.name.name);
-        if (def) {
-          checkStructMethods(def, local.functions, local.structs, local.enums, diagnostics);
+        if (decl.typeParams.length > 0) {
+          checkGenericStructTemplate(decl, local.functions, local.structs, local.enums, diagnostics);
+        } else {
+          const def = local.structs.get(decl.name.name);
+          if (def) {
+            checkStructMethods(def, local.functions, local.structs, local.enums, diagnostics);
+          }
         }
       } else if (decl.kind === "ClassDeclaration") {
-        const def = local.classes.get(decl.name.name);
-        if (def) {
-          checkClassMembers(def, local.functions, local.structs, local.enums, diagnostics);
+        if (decl.typeParams.length > 0) {
+          checkGenericClassTemplate(decl, local.functions, local.structs, local.enums, diagnostics);
+        } else {
+          const def = local.classes.get(decl.name.name);
+          if (def) {
+            checkClassMembers(def, local.functions, local.structs, local.enums, diagnostics);
+          }
         }
       }
     }
@@ -336,6 +417,14 @@ export function typecheckModules(
   classesByMangled = new Map();
   interfacesByMangled = new Map();
   memberContext = null;
+  activeTypeParams = new Map();
+  activeGenericStructs = new Map();
+  activeGenericClasses = new Map();
+  activeGenericInterfaces = new Map();
+  activeGenericFunctions = new Map();
+  allModuleSymbols = new Map();
+
+  return instantiationCollector.snapshot();
 }
 
 function exportedFunctions(fns: Map<string, FunctionSig>): Map<string, FunctionSig> {
@@ -393,9 +482,65 @@ function collectModuleSymbols(
   diagnostics: DiagnosticCollector,
 ): ModuleSymbols {
   const enums = collectEnums(mod.ast, mod.moduleId, diagnostics);
-  const structs = collectStructs(mod.ast, mod.moduleId, enums, diagnostics);
-  const interfaces = collectInterfaces(mod.ast, mod.moduleId, structs, enums, diagnostics);
-  const classes = collectClasses(mod.ast, mod.moduleId, structs, enums, interfaces, diagnostics);
+  const genericStructs = new Map<string, GenericStructTemplate>();
+  const genericClasses = new Map<string, GenericClassTemplate>();
+  const genericInterfaces = new Map<string, GenericInterfaceTemplate>();
+  const genericFunctions = new Map<string, GenericFunctionTemplate>();
+
+  for (const decl of mod.ast.body) {
+    if (decl.kind === "StructDeclaration" && decl.typeParams.length > 0) {
+      if (validateTypeParamList(decl.typeParams, diagnostics)) {
+        genericStructs.set(decl.name.name, {
+          decl,
+          moduleId: mod.moduleId,
+          modulePath: mod.path,
+        });
+      }
+    } else if (decl.kind === "ClassDeclaration" && decl.typeParams.length > 0) {
+      if (validateTypeParamList(decl.typeParams, diagnostics)) {
+        genericClasses.set(decl.name.name, {
+          decl,
+          moduleId: mod.moduleId,
+          modulePath: mod.path,
+        });
+      }
+    } else if (decl.kind === "InterfaceDeclaration" && decl.typeParams.length > 0) {
+      if (validateTypeParamList(decl.typeParams, diagnostics)) {
+        genericInterfaces.set(decl.name.name, {
+          decl,
+          moduleId: mod.moduleId,
+          modulePath: mod.path,
+        });
+      }
+    } else if (decl.kind === "FunctionDeclaration" && decl.typeParams.length > 0) {
+      if (validateTypeParamList(decl.typeParams, diagnostics)) {
+        genericFunctions.set(decl.name.name, {
+          decl,
+          moduleId: mod.moduleId,
+          modulePath: mod.path,
+        });
+      }
+    }
+  }
+
+  const structs = collectStructs(mod.ast, mod.moduleId, enums, diagnostics, genericStructs);
+  const interfaces = collectInterfaces(
+    mod.ast,
+    mod.moduleId,
+    structs,
+    enums,
+    diagnostics,
+    genericInterfaces,
+  );
+  const classes = collectClasses(
+    mod.ast,
+    mod.moduleId,
+    structs,
+    enums,
+    interfaces,
+    diagnostics,
+    genericClasses,
+  );
   const functions = new Map<string, FunctionSig>();
 
   const prevClasses = activeClasses;
@@ -404,7 +549,7 @@ function collectModuleSymbols(
   activeInterfaces = interfaces;
 
   for (const decl of mod.ast.body) {
-    if (decl.kind !== "FunctionDeclaration") {
+    if (decl.kind !== "FunctionDeclaration" || decl.typeParams.length > 0) {
       continue;
     }
     const fn = decl;
@@ -418,7 +563,7 @@ function collectModuleSymbols(
       continue;
     }
 
-    if (structs.has(fn.name.name)) {
+    if (structs.has(fn.name.name) || genericStructs.has(fn.name.name)) {
       diagnostics.error(
         `Name '${fn.name.name}' is already used as a struct`,
         fn.name.span,
@@ -436,7 +581,7 @@ function collectModuleSymbols(
       continue;
     }
 
-    if (classes.has(fn.name.name)) {
+    if (classes.has(fn.name.name) || genericClasses.has(fn.name.name)) {
       diagnostics.error(
         `Name '${fn.name.name}' is already used as a class`,
         fn.name.span,
@@ -445,7 +590,7 @@ function collectModuleSymbols(
       continue;
     }
 
-    if (interfaces.has(fn.name.name)) {
+    if (interfaces.has(fn.name.name) || genericInterfaces.has(fn.name.name)) {
       diagnostics.error(
         `Name '${fn.name.name}' is already used as an interface`,
         fn.name.span,
@@ -454,7 +599,7 @@ function collectModuleSymbols(
       continue;
     }
 
-    if (functions.has(fn.name.name)) {
+    if (functions.has(fn.name.name) || genericFunctions.has(fn.name.name)) {
       diagnostics.error(
         `Duplicate function '${fn.name.name}'`,
         fn.name.span,
@@ -498,11 +643,16 @@ function collectModuleSymbols(
 
   return {
     moduleId: mod.moduleId,
+    modulePath: mod.path,
     functions,
     structs,
     enums,
     classes,
     interfaces,
+    genericStructs,
+    genericClasses,
+    genericInterfaces,
+    genericFunctions,
   };
 }
 
@@ -590,6 +740,7 @@ function collectStructs(
   moduleId: string,
   enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
+  genericStructs: Map<string, GenericStructTemplate>,
 ): Map<string, StructDef> {
   const structs = new Map<string, StructDef>();
   const declarations: StructDeclaration[] = [];
@@ -605,7 +756,21 @@ function collectStructs(
       continue;
     }
 
+    if (decl.typeParams.length > 0) {
+      // Template only — already registered in genericStructs.
+      continue;
+    }
+
     if (structs.has(decl.name.name) || declarations.some((d) => d.name.name === decl.name.name)) {
+      diagnostics.error(
+        `Duplicate struct '${decl.name.name}'`,
+        decl.name.span,
+        "E0328",
+      );
+      continue;
+    }
+
+    if (genericStructs.has(decl.name.name)) {
       diagnostics.error(
         `Duplicate struct '${decl.name.name}'`,
         decl.name.span,
@@ -669,6 +834,23 @@ function collectStructs(
     }
 
     for (const method of decl.methods) {
+      if (method.typeParams.length > 0) {
+        // Generic methods are specialized at call sites.
+        if (seen.has(method.name.name)) {
+          diagnostics.error(
+            `Duplicate member '${method.name.name}' in struct '${decl.name.name}'`,
+            method.name.span,
+            "E0329",
+          );
+          ok = false;
+          continue;
+        }
+        seen.add(method.name.name);
+        if (!validateTypeParamList(method.typeParams, diagnostics)) {
+          ok = false;
+        }
+        continue;
+      }
       if (seen.has(method.name.name)) {
         diagnostics.error(
           `Duplicate member '${method.name.name}' in struct '${decl.name.name}'`,
@@ -727,6 +909,7 @@ function collectInterfaces(
   structs: Map<string, StructDef>,
   enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
+  genericInterfaces: Map<string, GenericInterfaceTemplate>,
 ): Map<string, InterfaceDef> {
   const declarations: InterfaceDeclaration[] = [];
   const byLocal = new Map<string, InterfaceDeclaration>();
@@ -741,7 +924,10 @@ function collectInterfaces(
     if (decl.kind !== "InterfaceDeclaration") {
       continue;
     }
-    if (byLocal.has(decl.name.name)) {
+    if (decl.typeParams.length > 0) {
+      continue;
+    }
+    if (byLocal.has(decl.name.name) || genericInterfaces.has(decl.name.name)) {
       diagnostics.error(`Duplicate interface '${decl.name.name}'`, decl.name.span, "E0328");
       continue;
     }
@@ -957,6 +1143,7 @@ function collectClasses(
   enums: Map<string, EnumDef>,
   interfaces: Map<string, InterfaceDef>,
   diagnostics: DiagnosticCollector,
+  genericClasses: Map<string, GenericClassTemplate>,
 ): Map<string, ClassDef> {
   const declarations: ClassDeclaration[] = [];
   const byLocal = new Map<string, ClassDeclaration>();
@@ -965,7 +1152,10 @@ function collectClasses(
     if (decl.kind !== "ClassDeclaration") {
       continue;
     }
-    if (byLocal.has(decl.name.name)) {
+    if (decl.typeParams.length > 0) {
+      continue;
+    }
+    if (byLocal.has(decl.name.name) || genericClasses.has(decl.name.name)) {
       diagnostics.error(`Duplicate class '${decl.name.name}'`, decl.name.span, "E0328");
       continue;
     }
@@ -1215,6 +1405,13 @@ function collectClasses(
         continue;
       }
       methodNames.add(member.name.name);
+      if (member.typeParams.length > 0) {
+        if (!validateTypeParamList(member.typeParams, diagnostics)) {
+          ok = false;
+        }
+        // Generic methods are specialized at call sites; skip concrete signature collection.
+        continue;
+      }
       if (member.isAbstract && !decl.isAbstract) {
         diagnostics.error(
           `Abstract method '${member.name.name}' is only allowed in abstract classes`,
@@ -1446,15 +1643,15 @@ export function typeToString(type: ValueType | "void"): string {
   if (typeof type === "string") {
     return type;
   }
-  if (
-    type.kind === "struct" ||
-    type.kind === "enum" ||
-    type.kind === "class" ||
-    type.kind === "interface"
-  ) {
-    return type.name;
+  if (type.kind === "array") {
+    return `${typeToString(type.element)}[]`;
   }
-  return `${typeToString(type.element)}[]`;
+  if (type.kind === "typeParam") {
+    return type.constraintName
+      ? `${type.name} extends ${type.constraintName}`
+      : type.name;
+  }
+  return type.name;
 }
 
 export function typesEqual(a: ValueType, b: ValueType): boolean {
@@ -1464,6 +1661,9 @@ export function typesEqual(a: ValueType, b: ValueType): boolean {
   if (typeof a === "object" && typeof b === "object") {
     if (a.kind === "array" && b.kind === "array") {
       return typesEqual(a.element, b.element);
+    }
+    if (a.kind === "typeParam" && b.kind === "typeParam") {
+      return a.name === b.name;
     }
     if (a.kind === "struct" && b.kind === "struct") {
       return a.name === b.name;
@@ -1597,6 +1797,16 @@ function resolveAnnotation(
     return ann.name;
   }
   if (ann.kind === "NamedType") {
+    // Type parameter in scope (template body).
+    if (ann.namespace === null && ann.typeArgs.length === 0 && activeTypeParams.has(ann.name)) {
+      return activeTypeParams.get(ann.name)!;
+    }
+
+    // Generic instantiation: Foo<T, U>
+    if (ann.typeArgs.length > 0) {
+      return resolveGenericNamedType(ann, structs, enums, diagnostics);
+    }
+
     if (ann.namespace) {
       const ns = activeNamespaces.get(ann.namespace);
       if (!ns) {
@@ -1628,11 +1838,28 @@ function resolveAnnotation(
     if (structs.has(ann.name)) {
       return { kind: "struct", name: structs.get(ann.name)!.name };
     }
+    if (specializedStructs.has(ann.name)) {
+      return { kind: "struct", name: specializedStructs.get(ann.name)!.name };
+    }
     if (activeClasses.has(ann.name)) {
       return { kind: "class", name: activeClasses.get(ann.name)!.name };
     }
+    if (specializedClasses.has(ann.name)) {
+      return { kind: "class", name: specializedClasses.get(ann.name)!.name };
+    }
     if (activeInterfaces.has(ann.name)) {
       return { kind: "interface", name: activeInterfaces.get(ann.name)!.name };
+    }
+    if (specializedInterfaces.has(ann.name)) {
+      return { kind: "interface", name: specializedInterfaces.get(ann.name)!.name };
+    }
+    if (activeGenericStructs.has(ann.name) || activeGenericClasses.has(ann.name) || activeGenericInterfaces.has(ann.name)) {
+      diagnostics.error(
+        `Generic type '${ann.name}' requires type arguments`,
+        ann.span,
+        "E0382",
+      );
+      return null;
     }
     diagnostics.error(`Unknown type '${ann.name}'`, ann.span, "E0104");
     return null;
@@ -1642,6 +1869,43 @@ function resolveAnnotation(
     return null;
   }
   return { kind: "array", element };
+}
+
+function resolveGenericNamedType(
+  ann: Extract<TypeAnnotation, { kind: "NamedType" }>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): ValueType | null {
+  const resolvedArgs: TypeAnnotation[] = [];
+  for (const arg of ann.typeArgs) {
+    const vt = resolveAnnotation(arg, structs, enums, diagnostics);
+    if (vt === null) {
+      return null;
+    }
+    // Re-encode for mangling (prefer original annotation when not a type param).
+    resolvedArgs.push(
+      arg.kind === "NamedType" && activeTypeParams.has(arg.name)
+        ? valueTypeToLocalAnnotation(vt)
+        : arg,
+    );
+  }
+
+  const structTpl = activeGenericStructs.get(ann.name);
+  if (structTpl) {
+    return instantiateGenericStruct(structTpl, resolvedArgs, ann.span, structs, enums, diagnostics);
+  }
+  const classTpl = activeGenericClasses.get(ann.name);
+  if (classTpl) {
+    return instantiateGenericClass(classTpl, resolvedArgs, ann.span, structs, enums, diagnostics);
+  }
+  const ifaceTpl = activeGenericInterfaces.get(ann.name);
+  if (ifaceTpl) {
+    return instantiateGenericInterface(ifaceTpl, resolvedArgs, ann.span, structs, enums, diagnostics);
+  }
+
+  diagnostics.error(`Unknown generic type '${ann.name}'`, ann.span, "E0104");
+  return null;
 }
 
 function resolveReturnType(
@@ -1658,6 +1922,807 @@ function resolveReturnType(
     return undefined;
   }
   return value;
+}
+
+function bindTypeParams(
+  typeParams: readonly TypeParameter[],
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): Map<string, TypeParamValueType> | null {
+  const map = new Map<string, TypeParamValueType>();
+  for (const tp of typeParams) {
+    let constraintName: string | null = null;
+    let constraintKind: "interface" | "class" | null = null;
+    if (tp.constraint) {
+      const c = resolveAnnotation(tp.constraint, structs, enums, diagnostics);
+      if (c === null) {
+        return null;
+      }
+      if (isInterfaceType(c)) {
+        constraintName = c.name;
+        constraintKind = "interface";
+      } else if (isClassType(c)) {
+        constraintName = c.name;
+        constraintKind = "class";
+      } else {
+        diagnostics.error(
+          `Type parameter constraint must be a class or interface`,
+          tp.constraint.span,
+          "E0383",
+        );
+        return null;
+      }
+    }
+    map.set(tp.name.name, {
+      kind: "typeParam",
+      name: tp.name.name,
+      constraintName,
+      constraintKind,
+    });
+  }
+  return map;
+}
+
+function checkConstraints(
+  typeParams: readonly TypeParameter[],
+  typeArgs: readonly TypeAnnotation[],
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  span: SourceSpan,
+): boolean {
+  for (let i = 0; i < typeParams.length; i += 1) {
+    const tp = typeParams[i]!;
+    if (!tp.constraint) {
+      continue;
+    }
+    const argType = resolveAnnotation(typeArgs[i]!, structs, enums, diagnostics);
+    const constraintType = resolveAnnotation(tp.constraint, structs, enums, diagnostics);
+    if (argType === null || constraintType === null) {
+      return false;
+    }
+    if (!isAssignable(argType, constraintType)) {
+      diagnostics.error(
+        `Type '${typeToString(argType)}' does not satisfy constraint '${typeToString(constraintType)}'`,
+        span,
+        "E0384",
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
+function instantiateGenericStruct(
+  tpl: GenericStructTemplate,
+  typeArgs: TypeAnnotation[],
+  span: SourceSpan,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): ValueType | null {
+  if (!checkTypeArgArity(tpl.decl.name.name, tpl.decl.typeParams, typeArgs, span, diagnostics)) {
+    return null;
+  }
+  if (!checkConstraints(tpl.decl.typeParams, typeArgs, structs, enums, diagnostics, span)) {
+    return null;
+  }
+  const instanceLocal = mangleInstance(tpl.decl.name.name, typeArgs);
+  instantiationCollector.typeRewrites.set(span.start.offset, instanceLocal);
+  instantiationCollector.add({
+    kind: "struct",
+    instanceLocalName: instanceLocal,
+    moduleId: tpl.moduleId,
+    modulePath: tpl.modulePath,
+    templateLocalName: tpl.decl.name.name,
+    typeArgs,
+  });
+
+  if (specializedStructs.has(instanceLocal)) {
+    return { kind: "struct", name: specializedStructs.get(instanceLocal)!.name };
+  }
+
+  const prev = activeTypeParams;
+  activeTypeParams = new Map();
+  const fields: StructFieldDef[] = [];
+  const methods: StructMethodDef[] = [];
+  const subst = buildSubst(tpl.decl.typeParams, typeArgs);
+  const specializedDecl = specializeStructDecl(tpl.decl, instanceLocal, subst);
+
+  for (const field of specializedDecl.fields) {
+    const fieldType = resolveAnnotation(field.typeAnnotation, structs, enums, diagnostics);
+    if (fieldType === null) {
+      activeTypeParams = prev;
+      return null;
+    }
+    fields.push({ name: field.name.name, type: fieldType });
+  }
+  for (const method of specializedDecl.methods) {
+    if (method.typeParams.length > 0) {
+      continue;
+    }
+    const params: ValueType[] = [];
+    for (const param of method.params) {
+      const pt = resolveAnnotation(param.typeAnnotation, structs, enums, diagnostics);
+      if (pt === null) {
+        activeTypeParams = prev;
+        return null;
+      }
+      params.push(pt);
+    }
+    const returnType = resolveReturnType(method.returnType, structs, enums, diagnostics);
+    if (returnType === undefined) {
+      activeTypeParams = prev;
+      return null;
+    }
+    methods.push({
+      name: method.name.name,
+      mangledName: mangleSymbol(tpl.moduleId, `${instanceLocal}__${method.name.name}`),
+      params,
+      returnType,
+      decl: method,
+    });
+  }
+  activeTypeParams = prev;
+
+  const def: StructDef = {
+    name: mangleSymbol(tpl.moduleId, instanceLocal),
+    fields,
+    methods,
+    decl: specializedDecl,
+    exported: tpl.decl.exported,
+  };
+  specializedStructs.set(instanceLocal, def);
+  structs.set(instanceLocal, def);
+  return { kind: "struct", name: def.name };
+}
+
+function instantiateGenericClass(
+  tpl: GenericClassTemplate,
+  typeArgs: TypeAnnotation[],
+  span: SourceSpan,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): ValueType | null {
+  if (!checkTypeArgArity(tpl.decl.name.name, tpl.decl.typeParams, typeArgs, span, diagnostics)) {
+    return null;
+  }
+  if (!checkConstraints(tpl.decl.typeParams, typeArgs, structs, enums, diagnostics, span)) {
+    return null;
+  }
+  const instanceLocal = mangleInstance(tpl.decl.name.name, typeArgs);
+  instantiationCollector.typeRewrites.set(span.start.offset, instanceLocal);
+  instantiationCollector.add({
+    kind: "class",
+    instanceLocalName: instanceLocal,
+    moduleId: tpl.moduleId,
+    modulePath: tpl.modulePath,
+    templateLocalName: tpl.decl.name.name,
+    typeArgs,
+  });
+
+  if (specializedClasses.has(instanceLocal)) {
+    return { kind: "class", name: specializedClasses.get(instanceLocal)!.name };
+  }
+
+  // Build a minimal ClassDef for typechecking (fields/methods with substituted types).
+  const subst = new Map<string, TypeAnnotation>();
+  for (let i = 0; i < tpl.decl.typeParams.length; i += 1) {
+    subst.set(tpl.decl.typeParams[i]!.name.name, typeArgs[i]!);
+  }
+  const sub = (ann: TypeAnnotation): TypeAnnotation => {
+    if (ann.kind === "PrimitiveType") {
+      return ann;
+    }
+    if (ann.kind === "ArrayType") {
+      return { kind: "ArrayType", element: sub(ann.element), span: ann.span };
+    }
+    if (ann.namespace === null && ann.typeArgs.length === 0 && subst.has(ann.name)) {
+      return subst.get(ann.name)!;
+    }
+    if (ann.typeArgs.length === 0) {
+      return ann;
+    }
+    return {
+      kind: "NamedType",
+      namespace: ann.namespace,
+      name: ann.name,
+      typeArgs: ann.typeArgs.map(sub),
+      span: ann.span,
+    };
+  };
+
+  const instanceFields: ClassFieldDef[] = [];
+  const staticFields: ClassFieldDef[] = [];
+  const instanceMethods: ClassMethodDef[] = [];
+  const staticMethods: ClassMethodDef[] = [];
+  let fieldIndex = 1;
+  let constructorParams: ValueType[] = [];
+  let constructorDecl: ConstructorDeclaration | null = null;
+
+  for (const member of tpl.decl.members) {
+    if (member.kind === "ClassField") {
+      const fieldType = resolveAnnotation(sub(member.typeAnnotation), structs, enums, diagnostics);
+      if (fieldType === null) {
+        return null;
+      }
+      const fieldDef: ClassFieldDef = {
+        name: member.name.name,
+        type: fieldType,
+        visibility: member.visibility,
+        isReadonly: member.isReadonly,
+        isStatic: member.isStatic,
+        declaringClass: mangleSymbol(tpl.moduleId, instanceLocal),
+        fieldIndex: member.isStatic ? -1 : fieldIndex++,
+        initializer: member.initializer,
+      };
+      if (member.isStatic) {
+        staticFields.push(fieldDef);
+      } else {
+        instanceFields.push(fieldDef);
+      }
+    } else if (member.kind === "ConstructorDeclaration") {
+      constructorDecl = member;
+      constructorParams = [];
+      for (const p of member.params) {
+        const pt = resolveAnnotation(sub(p.typeAnnotation), structs, enums, diagnostics);
+        if (pt === null) {
+          return null;
+        }
+        constructorParams.push(pt);
+      }
+    } else if (member.kind === "ClassMethod" && member.typeParams.length === 0) {
+      const params: ValueType[] = [];
+      for (const p of member.params) {
+        const pt = resolveAnnotation(sub(p.typeAnnotation), structs, enums, diagnostics);
+        if (pt === null) {
+          return null;
+        }
+        params.push(pt);
+      }
+      const returnType = resolveReturnType(sub(member.returnType), structs, enums, diagnostics);
+      if (returnType === undefined) {
+        return null;
+      }
+      const methodDef: ClassMethodDef = {
+        name: member.name.name,
+        mangledName: mangleSymbol(tpl.moduleId, `${instanceLocal}__${member.name.name}`),
+        params,
+        returnType,
+        visibility: member.visibility,
+        isStatic: member.isStatic,
+        isAbstract: member.isAbstract,
+        vtableSlot: member.isStatic ? -1 : instanceMethods.length,
+        implementingClass: mangleSymbol(tpl.moduleId, instanceLocal),
+        decl: member,
+      };
+      if (member.isStatic) {
+        staticMethods.push(methodDef);
+      } else {
+        instanceMethods.push(methodDef);
+      }
+    }
+  }
+
+  const def: ClassDef = {
+    name: mangleSymbol(tpl.moduleId, instanceLocal),
+    localName: instanceLocal,
+    isAbstract: tpl.decl.isAbstract,
+    superclass: null,
+    implementedInterfaces: [],
+    instanceFields,
+    staticFields,
+    instanceMethods,
+    staticMethods,
+    constructorParams,
+    constructorDecl,
+    constructorMangledName: mangleSymbol(tpl.moduleId, `${instanceLocal}__constructor`),
+    vtableGlobalName: `${mangleSymbol(tpl.moduleId, instanceLocal)}__vtable`,
+    decl: tpl.decl,
+    exported: tpl.decl.exported,
+  };
+  specializedClasses.set(instanceLocal, def);
+  activeClasses.set(instanceLocal, def);
+  classesByMangled.set(def.name, def);
+  return { kind: "class", name: def.name };
+}
+
+function instantiateGenericInterface(
+  tpl: GenericInterfaceTemplate,
+  typeArgs: TypeAnnotation[],
+  span: SourceSpan,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): ValueType | null {
+  if (!checkTypeArgArity(tpl.decl.name.name, tpl.decl.typeParams, typeArgs, span, diagnostics)) {
+    return null;
+  }
+  if (!checkConstraints(tpl.decl.typeParams, typeArgs, structs, enums, diagnostics, span)) {
+    return null;
+  }
+  const instanceLocal = mangleInstance(tpl.decl.name.name, typeArgs);
+  instantiationCollector.typeRewrites.set(span.start.offset, instanceLocal);
+  instantiationCollector.add({
+    kind: "interface",
+    instanceLocalName: instanceLocal,
+    moduleId: tpl.moduleId,
+    modulePath: tpl.modulePath,
+    templateLocalName: tpl.decl.name.name,
+    typeArgs,
+  });
+
+  if (specializedInterfaces.has(instanceLocal)) {
+    return { kind: "interface", name: specializedInterfaces.get(instanceLocal)!.name };
+  }
+
+  const subst = new Map<string, TypeAnnotation>();
+  for (let i = 0; i < tpl.decl.typeParams.length; i += 1) {
+    subst.set(tpl.decl.typeParams[i]!.name.name, typeArgs[i]!);
+  }
+  const sub = (ann: TypeAnnotation): TypeAnnotation => {
+    if (ann.kind === "PrimitiveType") {
+      return ann;
+    }
+    if (ann.kind === "ArrayType") {
+      return { kind: "ArrayType", element: sub(ann.element), span: ann.span };
+    }
+    if (ann.namespace === null && ann.typeArgs.length === 0 && subst.has(ann.name)) {
+      return subst.get(ann.name)!;
+    }
+    if (ann.typeArgs.length === 0) {
+      return ann;
+    }
+    return {
+      kind: "NamedType",
+      namespace: ann.namespace,
+      name: ann.name,
+      typeArgs: ann.typeArgs.map(sub),
+      span: ann.span,
+    };
+  };
+
+  const methods: InterfaceMethodDef[] = [];
+  for (const method of tpl.decl.methods) {
+    const params: ValueType[] = [];
+    for (const p of method.params) {
+      const pt = resolveAnnotation(sub(p.typeAnnotation), structs, enums, diagnostics);
+      if (pt === null) {
+        return null;
+      }
+      params.push(pt);
+    }
+    const returnType = resolveReturnType(sub(method.returnType), structs, enums, diagnostics);
+    if (returnType === undefined) {
+      return null;
+    }
+    methods.push({
+      name: method.name.name,
+      params,
+      returnType,
+      itableSlot: methods.length,
+    });
+  }
+
+  const mangled = mangleSymbol(tpl.moduleId, instanceLocal);
+  const def: InterfaceDef = {
+    name: mangled,
+    localName: instanceLocal,
+    bases: [],
+    methods,
+    baseItableOffsets: new Map([[mangled, 0]]),
+    decl: {
+      ...tpl.decl,
+      name: { kind: "Identifier", name: instanceLocal, span: tpl.decl.name.span },
+      typeParams: [],
+    },
+    exported: tpl.decl.exported,
+  };
+  specializedInterfaces.set(instanceLocal, def);
+  activeInterfaces.set(instanceLocal, def);
+  interfacesByMangled.set(mangled, def);
+  return { kind: "interface", name: def.name };
+}
+
+function checkGenericFunctionTemplate(
+  fn: FunctionDeclaration,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): void {
+  const bound = bindTypeParams(fn.typeParams, structs, enums, diagnostics);
+  if (!bound) {
+    return;
+  }
+  const prev = activeTypeParams;
+  activeTypeParams = bound;
+  checkFunction(fn, functions, structs, enums, diagnostics);
+  activeTypeParams = prev;
+}
+
+function checkGenericStructTemplate(
+  decl: StructDeclaration,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): void {
+  const bound = bindTypeParams(decl.typeParams, structs, enums, diagnostics);
+  if (!bound) {
+    return;
+  }
+  const prev = activeTypeParams;
+  activeTypeParams = bound;
+  // Resolve field types under type params to validate.
+  for (const field of decl.fields) {
+    resolveAnnotation(field.typeAnnotation, structs, enums, diagnostics);
+  }
+  for (const method of decl.methods) {
+    if (method.typeParams.length > 0) {
+      const methodBound = bindTypeParams(method.typeParams, structs, enums, diagnostics);
+      if (!methodBound) {
+        continue;
+      }
+      activeTypeParams = new Map([...bound, ...methodBound]);
+    }
+    for (const p of method.params) {
+      resolveAnnotation(p.typeAnnotation, structs, enums, diagnostics);
+    }
+    resolveReturnType(method.returnType, structs, enums, diagnostics);
+    const scope = new Map<string, Binding>();
+    for (const p of method.params) {
+      const pt = resolveAnnotation(p.typeAnnotation, structs, enums, diagnostics);
+      if (pt) {
+        scope.set(p.name.name, { type: pt, mutable: false });
+      }
+    }
+    const returnType = resolveReturnType(method.returnType, structs, enums, diagnostics);
+    if (returnType !== undefined) {
+      memberContext = {
+        thisType: { kind: "typeParam", name: "Self", constraintName: null, constraintKind: null },
+        enclosingClass: null,
+        enclosingStruct: null,
+        isConstructor: false,
+        isStatic: false,
+      };
+      // Use a synthetic struct this-type via type param — for template check, bind this as opaque.
+      // Better: treat this as having the template's fields. Skip full this checking for MVP of methods.
+      for (const stmt of method.body) {
+        checkStatement(stmt, scope, functions, structs, enums, returnType, diagnostics, 0);
+      }
+    }
+    activeTypeParams = bound;
+  }
+  memberContext = null;
+  activeTypeParams = prev;
+}
+
+function checkGenericClassTemplate(
+  decl: ClassDeclaration,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): void {
+  const bound = bindTypeParams(decl.typeParams, structs, enums, diagnostics);
+  if (!bound) {
+    return;
+  }
+  const prev = activeTypeParams;
+  activeTypeParams = bound;
+  for (const member of decl.members) {
+    if (member.kind === "ClassField") {
+      resolveAnnotation(member.typeAnnotation, structs, enums, diagnostics);
+    } else if (member.kind === "ConstructorDeclaration") {
+      for (const p of member.params) {
+        resolveAnnotation(p.typeAnnotation, structs, enums, diagnostics);
+      }
+    } else if (member.kind === "ClassMethod") {
+      let methodParams = bound;
+      if (member.typeParams.length > 0) {
+        const mb = bindTypeParams(member.typeParams, structs, enums, diagnostics);
+        if (mb) {
+          methodParams = new Map([...bound, ...mb]);
+        }
+      }
+      activeTypeParams = methodParams;
+      for (const p of member.params) {
+        resolveAnnotation(p.typeAnnotation, structs, enums, diagnostics);
+      }
+      resolveReturnType(member.returnType, structs, enums, diagnostics);
+      activeTypeParams = bound;
+    }
+  }
+  activeTypeParams = prev;
+}
+
+function localNameFromMangled(mangled: string): string {
+  if (activeModuleId !== "" && mangled.startsWith(`${activeModuleId}__`)) {
+    return mangled.slice(activeModuleId.length + 2);
+  }
+  return mangled;
+}
+
+/**
+ * Convert a value type to a type annotation using local (un-module-mangled) names
+ * so resolveAnnotation / monomorphize mangling work under compileFile.
+ */
+function valueTypeToLocalAnnotation(type: ValueType): TypeAnnotation {
+  if (typeof type === "string") {
+    return valueTypeToAnnotation(type);
+  }
+  if (type.kind === "array") {
+    return {
+      kind: "ArrayType",
+      element: valueTypeToLocalAnnotation(type.element),
+      span: {
+        start: { line: 1, column: 1, offset: 0 },
+        end: { line: 1, column: 1, offset: 0 },
+      },
+    };
+  }
+  if (type.kind === "typeParam") {
+    return valueTypeToAnnotation(type);
+  }
+  if (type.kind === "class") {
+    const cls =
+      classesByMangled.get(type.name) ??
+      findClassByMangled(type.name) ??
+      specializedClasses.get(localNameFromMangled(type.name));
+    const local = cls?.localName ?? localNameFromMangled(type.name);
+    return {
+      kind: "NamedType",
+      namespace: null,
+      name: local,
+      typeArgs: [],
+      span: {
+        start: { line: 1, column: 1, offset: 0 },
+        end: { line: 1, column: 1, offset: 0 },
+      },
+    };
+  }
+  if (type.kind === "interface") {
+    const iface =
+      interfacesByMangled.get(type.name) ??
+      findInterfaceByMangled(type.name) ??
+      specializedInterfaces.get(localNameFromMangled(type.name));
+    const local = iface?.localName ?? localNameFromMangled(type.name);
+    return {
+      kind: "NamedType",
+      namespace: null,
+      name: local,
+      typeArgs: [],
+      span: {
+        start: { line: 1, column: 1, offset: 0 },
+        end: { line: 1, column: 1, offset: 0 },
+      },
+    };
+  }
+  if (type.kind === "struct") {
+    const local = localNameFromMangled(type.name);
+    const def =
+      specializedStructs.get(local) ??
+      [...specializedStructs.values()].find((d) => d.name === type.name);
+    const name = def?.decl.name.name ?? local;
+    return {
+      kind: "NamedType",
+      namespace: null,
+      name,
+      typeArgs: [],
+      span: {
+        start: { line: 1, column: 1, offset: 0 },
+        end: { line: 1, column: 1, offset: 0 },
+      },
+    };
+  }
+  // enum
+  return {
+    kind: "NamedType",
+    namespace: null,
+    name: localNameFromMangled(type.name),
+    typeArgs: [],
+    span: {
+      start: { line: 1, column: 1, offset: 0 },
+      end: { line: 1, column: 1, offset: 0 },
+    },
+  };
+}
+
+function inferTypeArgs(
+  typeParams: readonly TypeParameter[],
+  paramAnns: readonly TypeAnnotation[],
+  argTypes: readonly ValueType[],
+): TypeAnnotation[] | null {
+  const solutions = new Map<string, ValueType>();
+  const unify = (ann: TypeAnnotation, concrete: ValueType): boolean => {
+    if (ann.kind === "PrimitiveType") {
+      return typeof concrete === "string" && concrete === ann.name;
+    }
+    if (ann.kind === "ArrayType") {
+      if (typeof concrete !== "object" || concrete.kind !== "array") {
+        return false;
+      }
+      return unify(ann.element, concrete.element);
+    }
+    if (ann.namespace === null && ann.typeArgs.length === 0) {
+      const isParam = typeParams.some((tp) => tp.name.name === ann.name);
+      if (isParam) {
+        const existing = solutions.get(ann.name);
+        if (existing && !typesEqual(existing, concrete)) {
+          return false;
+        }
+        solutions.set(ann.name, concrete);
+        return true;
+      }
+    }
+    // Named concrete types — accept if names match after resolving would be complex; skip deep unify.
+    return true;
+  };
+
+  for (let i = 0; i < paramAnns.length; i += 1) {
+    if (!unify(paramAnns[i]!, argTypes[i]!)) {
+      return null;
+    }
+  }
+  const args: TypeAnnotation[] = [];
+  for (const tp of typeParams) {
+    const sol = solutions.get(tp.name.name);
+    if (!sol) {
+      return null;
+    }
+    args.push(valueTypeToLocalAnnotation(sol));
+  }
+  return args;
+}
+
+function checkGenericFunctionCall(
+  expr: Extract<Expression, { kind: "CallExpression" }>,
+  tpl: GenericFunctionTemplate,
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  allowVoidCall: boolean,
+  expectedType: ValueType | null,
+): ValueType | null {
+  const argTypes: ValueType[] = [];
+  for (const arg of expr.args) {
+    const t = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+    if (!t) {
+      return null;
+    }
+    argTypes.push(t);
+  }
+
+  let typeArgs = expr.typeArgs;
+  if (typeArgs.length === 0) {
+    const inferred = inferTypeArgs(
+      tpl.decl.typeParams,
+      tpl.decl.params.map((p) => p.typeAnnotation),
+      argTypes,
+    );
+    if (!inferred && expectedType && tpl.decl.returnType.kind === "NamedType") {
+      const fromReturn = inferTypeArgs(
+        tpl.decl.typeParams,
+        [tpl.decl.returnType],
+        [expectedType],
+      );
+      if (fromReturn) {
+        typeArgs = fromReturn;
+      }
+    } else if (inferred) {
+      typeArgs = inferred;
+    }
+  }
+
+  if (typeArgs.length === 0) {
+    diagnostics.error(
+      `Cannot infer type arguments for '${tpl.decl.name.name}'`,
+      expr.span,
+      "E0385",
+    );
+    return null;
+  }
+  if (!checkTypeArgArity(tpl.decl.name.name, tpl.decl.typeParams, typeArgs, expr.span, diagnostics)) {
+    return null;
+  }
+
+  // Resolve type args; if any remain type params, we're checking a template body — don't mono yet.
+  const resolvedArgTypes: ValueType[] = [];
+  let hasTypeParamArg = false;
+  for (const arg of typeArgs) {
+    const vt = resolveAnnotation(arg, structs, enums, diagnostics);
+    if (vt === null) {
+      return null;
+    }
+    if (typeof vt === "object" && vt.kind === "typeParam") {
+      hasTypeParamArg = true;
+    }
+    resolvedArgTypes.push(vt);
+  }
+
+  if (!hasTypeParamArg) {
+    if (!checkConstraints(tpl.decl.typeParams, typeArgs, structs, enums, diagnostics, expr.span)) {
+      return null;
+    }
+    const instanceLocal = mangleFunctionInstance(tpl.decl.name.name, typeArgs);
+    instantiationCollector.callRewrites.set(expr.span.start.offset, instanceLocal);
+    instantiationCollector.add({
+      kind: "function",
+      instanceLocalName: instanceLocal,
+      moduleId: tpl.moduleId,
+      modulePath: tpl.modulePath,
+      templateLocalName: tpl.decl.name.name,
+      typeArgs,
+    });
+  }
+
+  const subst = new Map<string, TypeAnnotation>();
+  for (let i = 0; i < tpl.decl.typeParams.length; i += 1) {
+    subst.set(tpl.decl.typeParams[i]!.name.name, typeArgs[i]!);
+  }
+  const sub = (ann: TypeAnnotation): TypeAnnotation => {
+    if (ann.kind === "PrimitiveType") {
+      return ann;
+    }
+    if (ann.kind === "ArrayType") {
+      return { kind: "ArrayType", element: sub(ann.element), span: ann.span };
+    }
+    if (ann.namespace === null && ann.typeArgs.length === 0 && subst.has(ann.name)) {
+      return subst.get(ann.name)!;
+    }
+    if (ann.typeArgs.length === 0) {
+      return ann;
+    }
+    return {
+      kind: "NamedType",
+      namespace: ann.namespace,
+      name: ann.name,
+      typeArgs: ann.typeArgs.map(sub),
+      span: ann.span,
+    };
+  };
+
+  if (expr.args.length !== tpl.decl.params.length) {
+    diagnostics.error(
+      `Function '${tpl.decl.name.name}' expects ${tpl.decl.params.length} argument(s), got ${expr.args.length}`,
+      expr.span,
+      "E0315",
+    );
+    return null;
+  }
+
+  for (let i = 0; i < expr.args.length; i += 1) {
+    const expected = resolveAnnotation(sub(tpl.decl.params[i]!.typeAnnotation), structs, enums, diagnostics);
+    if (expected === null) {
+      return null;
+    }
+    if (!valueMatchesBinding(expr.args[i]!, argTypes[i]!, expected)) {
+      diagnostics.error(typeMismatchMessage(expected, argTypes[i]!), expr.args[i]!.span, "E0303");
+      return null;
+    }
+  }
+
+  const returnType = resolveReturnType(sub(tpl.decl.returnType), structs, enums, diagnostics);
+  if (returnType === undefined) {
+    return null;
+  }
+  if (returnType === "void") {
+    if (!allowVoidCall) {
+      diagnostics.error(
+        `Void function '${tpl.decl.name.name}' cannot be used as a value`,
+        expr.span,
+        "E0309",
+      );
+    }
+    return null;
+  }
+  void resolvedArgTypes;
+  return returnType;
 }
 
 function checkFunction(
@@ -1880,6 +2945,41 @@ function checkClassMembers(
       }
     }
   }
+
+  // Check generic method templates with type params in scope.
+  for (const member of def.decl.members) {
+    if (member.kind !== "ClassMethod" || member.typeParams.length === 0 || member.isAbstract) {
+      continue;
+    }
+    const bound = bindTypeParams(member.typeParams, structs, enums, diagnostics);
+    if (!bound) {
+      continue;
+    }
+    const prev = activeTypeParams;
+    activeTypeParams = bound;
+    memberContext = {
+      thisType: { kind: "class", name: def.name },
+      enclosingClass: def,
+      enclosingStruct: null,
+      isConstructor: false,
+      isStatic: member.isStatic,
+    };
+    const scope = new Map<string, Binding>();
+    for (const param of member.params) {
+      const paramType = resolveAnnotation(param.typeAnnotation, structs, enums, diagnostics);
+      if (paramType === null) {
+        continue;
+      }
+      scope.set(param.name.name, { type: paramType, mutable: false });
+    }
+    const returnType = resolveReturnType(member.returnType, structs, enums, diagnostics);
+    if (returnType !== undefined && member.body) {
+      for (const stmt of member.body) {
+        checkStatement(stmt, scope, functions, structs, enums, returnType, diagnostics, 0);
+      }
+    }
+    activeTypeParams = prev;
+  }
   memberContext = null;
 }
 
@@ -1930,7 +3030,7 @@ function findClassByLocal(
   if (namespace) {
     return activeNamespaces.get(namespace)?.classes.get(name);
   }
-  return activeClasses.get(name);
+  return activeClasses.get(name) ?? specializedClasses.get(name);
 }
 
 function checkStatement(
@@ -2437,6 +3537,11 @@ function findStructByTypeName(
       return def;
     }
   }
+  for (const def of specializedStructs.values()) {
+    if (def.name === typeName) {
+      return def;
+    }
+  }
   return undefined;
 }
 
@@ -2545,6 +3650,7 @@ function checkExpression(
       return "char";
     case "StructLiteral": {
       let def: StructDef | undefined;
+      let template = activeGenericStructs.get(expr.name.name);
       if (expr.namespace) {
         const ns = activeNamespaces.get(expr.namespace.name);
         if (!ns) {
@@ -2564,9 +3670,70 @@ function checkExpression(
           );
           return null;
         }
-      } else {
-        def = structs.get(expr.name.name);
+      } else if (template || expr.typeArgs.length > 0) {
+        if (!template) {
+          diagnostics.error(`Unknown generic struct '${expr.name.name}'`, expr.name.span, "E0104");
+          return null;
+        }
+        let typeArgs = expr.typeArgs;
+        if (typeArgs.length === 0 && expectedType && isStructType(expectedType)) {
+          // Cannot easily reverse-mangle; require explicit args or field inference.
+        }
+        if (typeArgs.length === 0) {
+          // Infer from field initializers against template field types.
+          const fieldArgTypes: ValueType[] = [];
+          const fieldAnns: TypeAnnotation[] = [];
+          for (const field of template.decl.fields) {
+            const init = expr.fields.find((f) => f.name.name === field.name.name);
+            if (!init) {
+              continue;
+            }
+            const vt = checkExpression(init.value, scope, functions, structs, enums, diagnostics);
+            if (!vt) {
+              return null;
+            }
+            fieldArgTypes.push(vt);
+            fieldAnns.push(field.typeAnnotation);
+          }
+          const inferred = inferTypeArgs(template.decl.typeParams, fieldAnns, fieldArgTypes);
+          if (!inferred) {
+            diagnostics.error(
+              `Cannot infer type arguments for '${expr.name.name}'`,
+              expr.span,
+              "E0385",
+            );
+            return null;
+          }
+          typeArgs = inferred;
+        }
+        const instantiated = instantiateGenericStruct(
+          template,
+          typeArgs,
+          expr.span,
+          structs,
+          enums,
+          diagnostics,
+        );
+        if (!instantiated || !isStructType(instantiated)) {
+          return null;
+        }
+        instantiationCollector.structLiteralRewrites.set(expr.span.start.offset, mangleInstance(template.decl.name.name, typeArgs));
+        def = specializedStructs.get(mangleInstance(template.decl.name.name, typeArgs))
+          ?? structs.get(mangleInstance(template.decl.name.name, typeArgs));
         if (!def) {
+          return null;
+        }
+      } else {
+        def = structs.get(expr.name.name) ?? specializedStructs.get(expr.name.name);
+        if (!def) {
+          if (activeGenericStructs.has(expr.name.name)) {
+            diagnostics.error(
+              `Generic type '${expr.name.name}' requires type arguments`,
+              expr.name.span,
+              "E0382",
+            );
+            return null;
+          }
           diagnostics.error(`Unknown struct '${expr.name.name}'`, expr.name.span, "E0104");
           return null;
         }
@@ -2895,10 +4062,107 @@ function checkExpression(
       return null;
     }
     case "NewExpression": {
-      const classDef = findClassByLocal(
+      let classDef = findClassByLocal(
         expr.className.name,
         expr.namespace?.name ?? null,
       );
+      const classTpl =
+        expr.namespace == null ? activeGenericClasses.get(expr.className.name) : undefined;
+
+      if (!classDef && classTpl) {
+        let typeArgs = expr.typeArgs;
+        if (typeArgs.length === 0) {
+          // Infer from constructor args.
+          const argTypes: ValueType[] = [];
+          for (const arg of expr.args) {
+            const t = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+            if (!t) {
+              return null;
+            }
+            argTypes.push(t);
+          }
+          const ctor = classTpl.decl.members.find((m) => m.kind === "ConstructorDeclaration");
+          if (!ctor || ctor.kind !== "ConstructorDeclaration") {
+            diagnostics.error(
+              `Cannot infer type arguments for '${expr.className.name}' without a constructor`,
+              expr.span,
+              "E0385",
+            );
+            return null;
+          }
+          const inferred = inferTypeArgs(
+            classTpl.decl.typeParams,
+            ctor.params.map((p) => p.typeAnnotation),
+            argTypes,
+          );
+          if (!inferred) {
+            diagnostics.error(
+              `Cannot infer type arguments for '${expr.className.name}'`,
+              expr.span,
+              "E0385",
+            );
+            return null;
+          }
+          typeArgs = inferred;
+          // Re-check will use typeArgs below — args already typed.
+          const instantiated = instantiateGenericClass(
+            classTpl,
+            typeArgs,
+            expr.span,
+            structs,
+            enums,
+            diagnostics,
+          );
+          if (!instantiated || !isClassType(instantiated)) {
+            return null;
+          }
+          instantiationCollector.newRewrites.set(
+            expr.span.start.offset,
+            mangleInstance(classTpl.decl.name.name, typeArgs),
+          );
+          classDef = specializedClasses.get(mangleInstance(classTpl.decl.name.name, typeArgs));
+          if (!classDef) {
+            return null;
+          }
+          // Validate args against specialized constructor.
+          if (expr.args.length !== classDef.constructorParams.length) {
+            diagnostics.error(
+              `Constructor of '${classDef.localName}' expects ${classDef.constructorParams.length} argument(s), got ${expr.args.length}`,
+              expr.span,
+              "E0315",
+            );
+            return null;
+          }
+          for (let i = 0; i < expr.args.length; i += 1) {
+            if (!valueMatchesBinding(expr.args[i]!, argTypes[i]!, classDef.constructorParams[i]!)) {
+              diagnostics.error(
+                typeMismatchMessage(classDef.constructorParams[i]!, argTypes[i]!),
+                expr.args[i]!.span,
+                "E0303",
+              );
+              return null;
+            }
+          }
+          return { kind: "class", name: classDef.name };
+        }
+        const instantiated = instantiateGenericClass(
+          classTpl,
+          typeArgs,
+          expr.span,
+          structs,
+          enums,
+          diagnostics,
+        );
+        if (!instantiated || !isClassType(instantiated)) {
+          return null;
+        }
+        instantiationCollector.newRewrites.set(
+          expr.span.start.offset,
+          mangleInstance(classTpl.decl.name.name, typeArgs),
+        );
+        classDef = specializedClasses.get(mangleInstance(classTpl.decl.name.name, typeArgs));
+      }
+
       if (!classDef) {
         const label = expr.namespace
           ? `${expr.namespace.name}.${expr.className.name}`
@@ -3118,6 +4382,20 @@ function checkExpression(
 
       const sig = functions.get(expr.callee.name);
       if (!sig) {
+        const genericTpl = activeGenericFunctions.get(expr.callee.name);
+        if (genericTpl) {
+          return checkGenericFunctionCall(
+            expr,
+            genericTpl,
+            scope,
+            functions,
+            structs,
+            enums,
+            diagnostics,
+            allowVoidCall,
+            expectedType,
+          );
+        }
         diagnostics.error(
           `Unknown function '${expr.callee.name}'`,
           expr.callee.span,
@@ -3263,7 +4541,30 @@ function checkMethodCall(
       diagnostics.error(`Unknown class '${objectType.name}'`, callee.object.span, "E0104");
       return null;
     }
-    const method = def.instanceMethods.find((m) => m.name === callee.property.name);
+    let method = def.instanceMethods.find((m) => m.name === callee.property.name);
+    // Generic method on (possibly specialized) class.
+    if (!method) {
+      const genericMethod = def.decl.members.find(
+        (m): m is ClassMethod =>
+          m.kind === "ClassMethod" &&
+          !m.isStatic &&
+          m.name.name === callee.property.name &&
+          m.typeParams.length > 0,
+      );
+      if (genericMethod) {
+        return checkGenericMethodCall(
+          expr,
+          def,
+          genericMethod,
+          scope,
+          functions,
+          structs,
+          enums,
+          diagnostics,
+          allowVoidCall,
+        );
+      }
+    }
     if (!method) {
       diagnostics.error(
         `Unknown method '${callee.property.name}' on class '${def.localName}'`,
@@ -3301,6 +4602,44 @@ function checkMethodCall(
     if (!method) {
       diagnostics.error(
         `Unknown method '${callee.property.name}' on interface '${def.localName}'`,
+        callee.property.span,
+        "E0324",
+      );
+      return null;
+    }
+    return checkMethodArgs(
+      method.name,
+      method.params,
+      method.returnType,
+      expr,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      allowVoidCall,
+    );
+  }
+
+  if (
+    typeof objectType === "object" &&
+    objectType.kind === "typeParam" &&
+    objectType.constraintKind === "interface" &&
+    objectType.constraintName
+  ) {
+    const def = findInterfaceByMangled(objectType.constraintName);
+    if (!def) {
+      diagnostics.error(
+        `Unknown constraint interface '${objectType.constraintName}'`,
+        callee.object.span,
+        "E0104",
+      );
+      return null;
+    }
+    const method = def.methods.find((m) => m.name === callee.property.name);
+    if (!method) {
+      diagnostics.error(
+        `Unknown method '${callee.property.name}' on constraint '${def.localName}'`,
         callee.property.span,
         "E0324",
       );
@@ -3427,6 +4766,111 @@ function checkMethodCall(
       diagnostics.error(`Unknown method '${method}'`, callee.property.span, "E0324");
       return null;
   }
+}
+
+function checkGenericMethodCall(
+  expr: Extract<Expression, { kind: "CallExpression" }>,
+  classDef: ClassDef,
+  method: ClassMethod,
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  allowVoidCall: boolean,
+): ValueType | null {
+  const argTypes: ValueType[] = [];
+  for (const arg of expr.args) {
+    const t = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+    if (!t) {
+      return null;
+    }
+    argTypes.push(t);
+  }
+
+  let typeArgs = expr.typeArgs;
+  if (typeArgs.length === 0) {
+    const inferred = inferTypeArgs(
+      method.typeParams,
+      method.params.map((p) => p.typeAnnotation),
+      argTypes,
+    );
+    if (!inferred) {
+      diagnostics.error(
+        `Cannot infer type arguments for method '${method.name.name}'`,
+        expr.span,
+        "E0385",
+      );
+      return null;
+    }
+    typeArgs = inferred;
+  }
+  if (!checkTypeArgArity(method.name.name, method.typeParams, typeArgs, expr.span, diagnostics)) {
+    return null;
+  }
+  if (!checkConstraints(method.typeParams, typeArgs, structs, enums, diagnostics, expr.span)) {
+    return null;
+  }
+
+  const methodLocalName =
+    typeArgs.length === 0
+      ? method.name.name
+      : `${method.name.name}__${typeArgs.map((a) => {
+          if (a.kind === "PrimitiveType") return a.name;
+          if (a.kind === "ArrayType") return `arr`;
+          return a.name;
+        }).join("__")}`;
+
+  instantiationCollector.methodCallRewrites.set(expr.span.start.offset, methodLocalName);
+  instantiationCollector.add({
+    kind: "classMethod",
+    instanceLocalName: methodLocalName,
+    moduleId: activeModuleId,
+    modulePath: activeModulePath,
+    templateLocalName: classDef.decl.name.name,
+    typeArgs,
+    ownerInstanceLocalName: classDef.localName,
+    methodTemplateName: method.name.name,
+    ownerTypeArgs: [],
+    methodTypeArgs: typeArgs,
+  });
+
+  const subst = buildSubst(method.typeParams, typeArgs);
+  const sub = (ann: TypeAnnotation): TypeAnnotation => substituteAnnotation(ann, subst);
+
+  if (expr.args.length !== method.params.length) {
+    diagnostics.error(
+      `Method '${method.name.name}' expects ${method.params.length} argument(s), got ${expr.args.length}`,
+      expr.span,
+      "E0315",
+    );
+    return null;
+  }
+  for (let i = 0; i < expr.args.length; i += 1) {
+    const expected = resolveAnnotation(sub(method.params[i]!.typeAnnotation), structs, enums, diagnostics);
+    if (expected === null) {
+      return null;
+    }
+    if (!valueMatchesBinding(expr.args[i]!, argTypes[i]!, expected)) {
+      diagnostics.error(typeMismatchMessage(expected, argTypes[i]!), expr.args[i]!.span, "E0303");
+      return null;
+    }
+  }
+  const returnType = resolveReturnType(sub(method.returnType), structs, enums, diagnostics);
+  if (returnType === undefined) {
+    return null;
+  }
+  if (returnType === "void") {
+    if (!allowVoidCall) {
+      diagnostics.error(
+        `Void method '${method.name.name}' cannot be used as a value`,
+        expr.span,
+        "E0309",
+      );
+    }
+    return null;
+  }
+  return returnType;
 }
 
 function checkMethodArgs(

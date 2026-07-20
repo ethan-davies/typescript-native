@@ -313,7 +313,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("br label %for.exit.0");
     });
 
-    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, structs, enums, struct-methods, classes, inheritance, and interfaces examples", () => {
+    it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, structs, enums, struct-methods, classes, inheritance, interfaces, and generics examples", () => {
       for (const name of [
         "hello.tsn",
         "variables.tsn",
@@ -327,12 +327,87 @@ describe("compile pipeline", () => {
         "classes.tsn",
         "inheritance.tsn",
         "interfaces.tsn",
+        "generics.tsn",
       ]) {
         const source = readFileSync(join(examplesDir, name), "utf8");
         const result = compile(source);
         expect(result.success, name).toBe(true);
         expect(result.ir, name).toContain("define i32 @main()");
       }
+    });
+
+    it("monomorphizes generic structs and functions", () => {
+      const result = compile(`
+        struct Box<T> {
+          value: T;
+        }
+        function identity<T>(value: T): T {
+          return value;
+        }
+        function main(): void {
+          let a: Box<i32> = Box<i32> { value: 1 };
+          print(identity(a.value));
+          print(identity("x"));
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("%Box__i32 = type");
+      expect(result.ir).toContain("define i32 @identity__i32(i32 %");
+      expect(result.ir).toContain("define ptr @identity__string(ptr %");
+      expect(result.ir).not.toContain("struct Box<");
+    });
+
+    it("monomorphizes nested generics and multi-param structs", () => {
+      const result = compile(`
+        struct Array<T> { data: T[]; }
+        struct Pair<K, V> { key: K; value: V; }
+        function main(): void {
+          let nested: Array<Array<i32>> = Array<Array<i32>> { data: [] };
+          let p = Pair<i32, string> { key: 1, value: "a" };
+          print(p.key);
+          print(p.value);
+          print(nested.data.length);
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("%Array__Array__i32 = type");
+      expect(result.ir).toContain("%Pair__i32__string = type");
+    });
+
+    it("infers generic class type arguments from constructor args", () => {
+      const result = compile(`
+        class Box<T> {
+          value: T;
+          constructor(value: T) {
+            this.value = value;
+          }
+          get(): T {
+            return this.value;
+          }
+        }
+        function main(): void {
+          let b = new Box("hi");
+          print(b.get());
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("Box__string");
+    });
+
+    it("monomorphizes generic methods", () => {
+      const result = compile(`
+        class Cache {
+          get<T>(key: string, value: T): T {
+            return value;
+          }
+        }
+        function main(): void {
+          let c = new Cache();
+          print(c.get<string>("k", "v"));
+        }
+      `);
+      expect(result.success).toBe(true);
+      expect(result.ir).toContain("get__string");
     });
 
     it("compiles struct methods with this", () => {
@@ -716,6 +791,35 @@ describe("compile pipeline", () => {
   });
 
   describe("typecheck errors", () => {
+    it("fails when a type argument violates a generic constraint", () => {
+      const result = compile(`
+        interface Comparable {
+          compare(other: i32): i32;
+        }
+        function sort<T extends Comparable>(item: T): void {
+          print(item.compare(0));
+        }
+        function main(): void {
+          sort<i32>(1);
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0384")).toBe(true);
+    });
+
+    it("fails when a generic type is used without type arguments", () => {
+      const result = compile(`
+        struct Box<T> {
+          value: T;
+        }
+        function main(): void {
+          let b: Box = Box<i32> { value: 1 };
+        }
+      `);
+      expect(result.success).toBe(false);
+      expect(result.diagnostics.some((d) => d.code === "E0382")).toBe(true);
+    });
+
     it("fails on unknown function calls", () => {
       const result = compile(`
         function main(): void {
@@ -1149,6 +1253,14 @@ describe("compile pipeline", () => {
 });
 
 describe("modules / compileFile", () => {
+  it("compiles examples/generics.tsn with module-mangled symbols", () => {
+    const result = compileFile(join(examplesDir, "generics.tsn"));
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("Box__i32");
+    expect(result.ir).toContain("rank__Num");
+    expect(result.ir).toContain("BoxClass__string");
+  });
+
   it("compiles import math and emits mangled calls", () => {
     const result = compileFile(join(modulesDir, "main.tsn"));
     expect(result.success).toBe(true);

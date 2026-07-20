@@ -263,6 +263,9 @@ export class LlvmCodegen {
 
       for (const decl of mod.ast.body) {
         if (decl.kind === "StructDeclaration") {
+          if (decl.typeParams.length > 0) {
+            continue;
+          }
           const info = this.registerStruct(decl, mod.moduleId);
           localStructs.set(decl.name.name, info);
         }
@@ -270,6 +273,9 @@ export class LlvmCodegen {
 
       for (const decl of mod.ast.body) {
         if (decl.kind === "InterfaceDeclaration") {
+          if (decl.typeParams.length > 0) {
+            continue;
+          }
           const info = this.registerInterfaceStub(decl, mod.moduleId);
           localInterfaces.set(decl.name.name, info);
           this.interfaces.set(info.name, info);
@@ -278,6 +284,9 @@ export class LlvmCodegen {
 
       for (const decl of mod.ast.body) {
         if (decl.kind === "ClassDeclaration") {
+          if (decl.typeParams.length > 0) {
+            continue;
+          }
           const info = this.registerClassStub(decl, mod.moduleId);
           localClasses.set(decl.name.name, info);
           this.classes.set(info.name, info);
@@ -387,6 +396,9 @@ export class LlvmCodegen {
 
       for (const decl of mod.ast.body) {
         if (decl.kind !== "FunctionDeclaration") {
+          continue;
+        }
+        if (decl.typeParams.length > 0) {
           continue;
         }
         const fn = decl;
@@ -995,6 +1007,11 @@ export class LlvmCodegen {
       return ann.name;
     }
     if (ann.kind === "NamedType") {
+      if (ann.typeArgs.length > 0) {
+        throw new Error(
+          `Codegen: unexpected type arguments on '${ann.name}' (monomorphize should have removed them)`,
+        );
+      }
       if (ann.namespace) {
         const ns = namespaces.get(ann.namespace);
         if (!ns) {

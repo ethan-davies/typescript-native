@@ -3,6 +3,7 @@ import { resolve as resolvePath } from "node:path";
 import type { Program } from "./ast/nodes.js";
 import { LlvmCodegen } from "./codegen/llvm.js";
 import { DiagnosticCollector, type Diagnostic } from "./diagnostics/diagnostic.js";
+import { monomorphizeModules } from "./generics/monomorphize.js";
 import { Lexer } from "./lexer/lexer.js";
 import { resolveModules, type ResolvedModule } from "./modules/resolve.js";
 import { Parser } from "./parser/parser.js";
@@ -23,7 +24,7 @@ export interface CompileResult {
 }
 
 /**
- * Compile source text through lexer → parser → validate → typecheck → LLVM IR.
+ * Compile source text through lexer → parser → validate → typecheck → monomorphize → LLVM IR.
  * Imports are not supported here; use {@link compileFile} for multi-file programs.
  */
 export function compile(source: string, _options: CompileOptions = {}): CompileResult {
@@ -46,8 +47,13 @@ export function compile(source: string, _options: CompileOptions = {}): CompileR
     validate(ast, diagnostics);
   }
 
+  let monoModules: ResolvedModule[] = [synthetic];
+
   if (!diagnostics.hasErrors) {
-    typecheck(ast, diagnostics);
+    const inst = typecheck(ast, diagnostics);
+    if (!diagnostics.hasErrors) {
+      monoModules = monomorphizeModules([synthetic], inst);
+    }
   }
 
   if (diagnostics.hasErrors) {
@@ -60,10 +66,10 @@ export function compile(source: string, _options: CompileOptions = {}): CompileR
     };
   }
 
-  const ir = new LlvmCodegen().emitModules([synthetic]);
+  const ir = new LlvmCodegen().emitModules(monoModules);
   return {
-    ast,
-    modules: [synthetic],
+    ast: monoModules[0]?.ast ?? ast,
+    modules: monoModules,
     ir,
     diagnostics: diagnostics.diagnostics,
     success: true,
@@ -109,8 +115,12 @@ export function compileFile(
 
   validateModules(resolved.modules, diagnostics);
 
+  let monoModules = resolved.modules;
   if (!diagnostics.hasErrors) {
-    typecheckModules(resolved.modules, diagnostics);
+    const inst = typecheckModules(resolved.modules, diagnostics);
+    if (!diagnostics.hasErrors) {
+      monoModules = monomorphizeModules(resolved.modules, inst);
+    }
   }
 
   if (diagnostics.hasErrors) {
@@ -123,10 +133,10 @@ export function compileFile(
     };
   }
 
-  const ir = new LlvmCodegen().emitModules(resolved.modules);
+  const ir = new LlvmCodegen().emitModules(monoModules);
   return {
-    ast: entry.ast,
-    modules: resolved.modules,
+    ast: monoModules.find((m) => m.isEntry)?.ast ?? entry.ast,
+    modules: monoModules,
     ir,
     diagnostics: diagnostics.diagnostics,
     success: true,

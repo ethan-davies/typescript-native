@@ -43,6 +43,13 @@ export class DiagnosticCollector {
     return this.items.some((d) => d.severity === "error");
   }
 
+  /** Discard diagnostics beyond `length` (used for speculative parses). */
+  truncate(length: number): void {
+    if (length < this.items.length) {
+      this.items.length = length;
+    }
+  }
+
   format(fileName = "<source>"): string {
     return this.items
       .map((d) => {

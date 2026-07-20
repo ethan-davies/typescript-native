@@ -658,4 +658,112 @@ describe("Parser", () => {
     expect(diagnostics.hasErrors).toBe(true);
     expect(diagnostics.diagnostics.some((d) => d.code === "E0370")).toBe(true);
   });
+
+  it("parses generic structs, functions, constraints, and type arguments", () => {
+    const { ast, diagnostics } = parse(`
+      struct Box<T> {
+        value: T;
+      }
+      struct Pair<K, V> {
+        key: K;
+        value: V;
+      }
+      function identity<T>(value: T): T {
+        return value;
+      }
+      function sort<T extends Comparable>(items: T): void {}
+      function main(): void {
+        let b: Box<i32> = Box<i32> { value: 1 };
+        print(identity<i32>(1));
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(ast.body[0]).toMatchObject({
+      kind: "StructDeclaration",
+      name: { name: "Box" },
+      typeParams: [{ kind: "TypeParameter", name: { name: "T" }, constraint: null }],
+    });
+    expect(ast.body[1]).toMatchObject({
+      kind: "StructDeclaration",
+      name: { name: "Pair" },
+      typeParams: [
+        { name: { name: "K" } },
+        { name: { name: "V" } },
+      ],
+    });
+    expect(ast.body[2]).toMatchObject({
+      kind: "FunctionDeclaration",
+      name: { name: "identity" },
+      typeParams: [{ name: { name: "T" } }],
+    });
+    expect(ast.body[3]).toMatchObject({
+      kind: "FunctionDeclaration",
+      name: { name: "sort" },
+      typeParams: [
+        {
+          name: { name: "T" },
+          constraint: { kind: "NamedType", name: "Comparable" },
+        },
+      ],
+    });
+    const main = ast.body[4];
+    expect(main?.kind).toBe("FunctionDeclaration");
+    if (main?.kind === "FunctionDeclaration") {
+      const letStmt = main.body[0];
+      expect(letStmt?.kind).toBe("VariableDeclaration");
+      if (letStmt?.kind === "VariableDeclaration") {
+        expect(letStmt.typeAnnotation).toMatchObject({
+          kind: "NamedType",
+          name: "Box",
+          typeArgs: [{ kind: "PrimitiveType", name: "i32" }],
+        });
+        expect(letStmt.initializer).toMatchObject({
+          kind: "StructLiteral",
+          name: { name: "Box" },
+          typeArgs: [{ kind: "PrimitiveType", name: "i32" }],
+        });
+      }
+      const printStmt = main.body[1];
+      expect(printStmt?.kind).toBe("ExpressionStatement");
+      if (printStmt?.kind === "ExpressionStatement") {
+        expect(printStmt.expression).toMatchObject({
+          kind: "CallExpression",
+          callee: { name: "print" },
+        });
+        const inner = printStmt.expression;
+        if (inner.kind === "CallExpression") {
+          expect(inner.args[0]).toMatchObject({
+            kind: "CallExpression",
+            callee: { name: "identity" },
+            typeArgs: [{ kind: "PrimitiveType", name: "i32" }],
+          });
+        }
+      }
+    }
+  });
+
+  it("keeps comparison expressions distinct from generic calls", () => {
+    const { ast, diagnostics } = parse(`
+      function main(): void {
+        let a: i32 = 1;
+        let b: i32 = 2;
+        if (a < b) {
+          print(a);
+        }
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    const main = ast.body[0];
+    expect(main?.kind).toBe("FunctionDeclaration");
+    if (main?.kind === "FunctionDeclaration") {
+      const ifStmt = main.body[2];
+      expect(ifStmt?.kind).toBe("IfStatement");
+      if (ifStmt?.kind === "IfStatement") {
+        expect(ifStmt.condition).toMatchObject({
+          kind: "BinaryExpression",
+          operator: "<",
+        });
+      }
+    }
+  });
 });

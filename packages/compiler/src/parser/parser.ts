@@ -47,6 +47,7 @@ import type {
   ThisExpression,
   TopLevelDeclaration,
   TypeAnnotation,
+  TypeParameter,
   UnaryExpression,
   UpdateStatement,
   VariableDeclaration,
@@ -80,13 +81,16 @@ const UPDATE_OPS = new Set<TokenKind>([TokenKind.PlusPlus, TokenKind.MinusMinus]
  *
  *   program      = importDecl* (functionDecl | structDecl | enumDecl | classDecl | interfaceDecl)*
  *   importDecl   = "import" String ("as" Ident)? ";"
- *   functionDecl = "export"? "function" Ident "(" params? ")" ":" type block
- *   structDecl   = "export"? "struct" Ident "{" (structField | structMethod)* "}"
+ *   functionDecl = "export"? "function" Ident typeParams? "(" params? ")" ":" type block
+ *   structDecl   = "export"? "struct" Ident typeParams? "{" (structField | structMethod)* "}"
  *   enumDecl     = "export"? "enum" Ident "{" (Ident ("," Ident)* ","?)? "}"
- *   classDecl    = "export"? "abstract"? "class" Ident ("extends" type)? ("implements" type ("," type)*)? "{" classMember* "}"
- *   interfaceDecl = "export"? "interface" Ident ("extends" type ("," type)*)? "{" ifaceMethod* "}"
- *   structLiteral = (Ident | Ident "." Ident) "{" fields? "}"
- *   type         = Ident ("." Ident)? ("[" "]")*
+ *   classDecl    = "export"? "abstract"? "class" Ident typeParams? ("extends" type)? ("implements" type ("," type)*)? "{" classMember* "}"
+ *   interfaceDecl = "export"? "interface" Ident typeParams? ("extends" type ("," type)*)? "{" ifaceMethod* "}"
+ *   structLiteral = (Ident | Ident "." Ident) typeArgs? "{" fields? "}"
+ *   type         = Ident ("." Ident)? typeArgs? ("[" "]")*
+ *   typeParams   = "<" typeParam ("," typeParam)* ">"
+ *   typeParam    = Ident ("extends" type)?
+ *   typeArgs     = "<" type ("," type)* ">"
  */
 export class Parser {
   private readonly tokens: Token[];
@@ -300,6 +304,12 @@ export class Parser {
       span: nameToken.span,
     };
 
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
     if (!this.expect(TokenKind.LBrace, "Expected '{' after struct name")) {
       this.synchronizeToTopLevel();
       return null;
@@ -335,15 +345,19 @@ export class Parser {
       kind: "StructDeclaration",
       exported,
       name,
+      typeParams,
       fields,
       methods,
       span: { start, end: rbrace.span.end },
     };
   }
 
-  /** Method: Ident "(" ... vs field: Ident ":" */
+  /** Method: Ident "(" / Ident "<" ... vs field: Ident ":" */
   private isStructMethodStart(): boolean {
-    return this.check(TokenKind.Identifier) && this.checkNext(TokenKind.LParen);
+    return (
+      this.check(TokenKind.Identifier) &&
+      (this.checkNext(TokenKind.LParen) || this.checkNext(TokenKind.Less))
+    );
   }
 
   private parseStructMethod(): StructMethod | null {
@@ -358,6 +372,11 @@ export class Parser {
       name: nameToken.lexeme,
       span: nameToken.span,
     };
+
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      return null;
+    }
 
     if (!this.expect(TokenKind.LParen, "Expected '(' after method name")) {
       return null;
@@ -389,6 +408,7 @@ export class Parser {
     return {
       kind: "StructMethod",
       name,
+      typeParams,
       params,
       returnType,
       body: body.statements,
@@ -453,6 +473,12 @@ export class Parser {
       name: nameToken.lexeme,
       span: nameToken.span,
     };
+
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
 
     let superclass: NamedType | null = null;
     if (this.match(TokenKind.Extends)) {
@@ -520,6 +546,7 @@ export class Parser {
       exported,
       isAbstract,
       name,
+      typeParams,
       superclass,
       implementsTypes,
       members,
@@ -546,6 +573,12 @@ export class Parser {
       name: nameToken.lexeme,
       span: nameToken.span,
     };
+
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
 
     const bases: NamedType[] = [];
     if (this.match(TokenKind.Extends)) {
@@ -596,6 +629,7 @@ export class Parser {
       kind: "InterfaceDeclaration",
       exported,
       name,
+      typeParams,
       bases,
       methods,
       span: { start, end: rbrace.span.end },
@@ -629,6 +663,11 @@ export class Parser {
       return "skipped";
     }
 
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      return null;
+    }
+
     if (!this.expect(TokenKind.LParen, "Expected '(' after method name")) {
       return null;
     }
@@ -659,6 +698,7 @@ export class Parser {
     return {
       kind: "InterfaceMethodSignature",
       name: { kind: "Identifier", name: nameToken.lexeme, span: nameToken.span },
+      typeParams,
       params,
       returnType,
       span: { start, end: semi.span.end },
@@ -700,7 +740,7 @@ export class Parser {
       return null;
     }
 
-    if (this.checkNext(TokenKind.LParen)) {
+    if (this.checkNext(TokenKind.LParen) || this.checkNext(TokenKind.Less)) {
       return this.parseClassMethod(visibility, isStatic, isAbstract, isReadonly, start);
     }
 
@@ -767,6 +807,11 @@ export class Parser {
       span: nameToken.span,
     };
 
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      return null;
+    }
+
     if (!this.expect(TokenKind.LParen, "Expected '(' after method name")) {
       return null;
     }
@@ -798,6 +843,7 @@ export class Parser {
         isStatic,
         isAbstract: true,
         name,
+        typeParams,
         params,
         returnType,
         body: null,
@@ -816,6 +862,7 @@ export class Parser {
       isStatic,
       isAbstract: false,
       name,
+      typeParams,
       params,
       returnType,
       body: body.statements,
@@ -973,6 +1020,12 @@ export class Parser {
       span: nameToken.span,
     };
 
+    const typeParams = this.parseTypeParameterList();
+    if (typeParams === null) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
     if (!this.expect(TokenKind.LParen, "Expected '(' after function name")) {
       this.synchronizeToTopLevel();
       return null;
@@ -1010,6 +1063,7 @@ export class Parser {
       kind: "FunctionDeclaration",
       exported,
       name,
+      typeParams,
       params,
       returnType,
       body: body.statements,
@@ -1723,8 +1777,11 @@ export class Parser {
     const start = this.peek().span.start;
 
     // Method call: Ident . Ident ( ... ) or Ident [ ... ] . Ident ( ... )
-    // Function call: Ident (
-    if (this.check(TokenKind.Identifier) && this.checkNext(TokenKind.LParen)) {
+    // Function call: Ident ( or Ident <TypeArgs>(
+    if (
+      this.check(TokenKind.Identifier) &&
+      (this.checkNext(TokenKind.LParen) || this.looksLikeGenericCall())
+    ) {
       const expression = this.parseCallExpression();
       if (!expression) {
         return null;
@@ -1981,16 +2038,22 @@ export class Parser {
         return this.parseCallArgs(superExpr, token.span.start);
       }
       expr = superExpr;
-    } else if (this.check(TokenKind.Identifier) && this.checkNext(TokenKind.LParen)) {
+    } else if (
+      this.check(TokenKind.Identifier) &&
+      (this.checkNext(TokenKind.LParen) || this.looksLikeGenericCall())
+    ) {
       expr = this.parseCallExpression();
     } else if (
       this.check(TokenKind.Identifier) &&
       this.checkNext(TokenKind.Dot) &&
       this.checkAhead(2, TokenKind.Identifier) &&
-      this.checkAhead(3, TokenKind.LBrace)
+      (this.checkAhead(3, TokenKind.LBrace) || this.looksLikeGenericStructLiteral(3))
     ) {
       expr = this.parseStructLiteral();
-    } else if (this.check(TokenKind.Identifier) && this.checkNext(TokenKind.LBrace)) {
+    } else if (
+      this.check(TokenKind.Identifier) &&
+      (this.checkNext(TokenKind.LBrace) || this.looksLikeGenericStructLiteral(1))
+    ) {
       expr = this.parseStructLiteral();
     } else if (this.check(TokenKind.Identifier)) {
       const token = this.advance();
@@ -2093,6 +2156,11 @@ export class Parser {
       };
     }
 
+    const typeArgs = this.parseTypeArgumentListOptional(TokenKind.LParen);
+    if (typeArgs === null) {
+      return null;
+    }
+
     if (!this.expect(TokenKind.LParen, "Expected '(' after class name in 'new' expression")) {
       return null;
     }
@@ -2122,6 +2190,7 @@ export class Parser {
       kind: "NewExpression",
       namespace,
       className,
+      typeArgs,
       args,
       span: { start, end },
     };
@@ -2168,7 +2237,7 @@ export class Parser {
           span: { start: current.span.start, end: property.span.end },
         };
 
-        if (this.check(TokenKind.LParen)) {
+        if (this.check(TokenKind.LParen) || this.looksLikeTypeArgsThen(TokenKind.LParen)) {
           const call = this.parseCallArgs(member);
           if (!call) {
             return null;
@@ -2251,6 +2320,11 @@ export class Parser {
       };
     }
 
+    const typeArgs = this.parseTypeArgumentListOptional(TokenKind.LBrace);
+    if (typeArgs === null) {
+      return null;
+    }
+
     if (!this.expect(TokenKind.LBrace, "Expected '{' after struct name")) {
       return null;
     }
@@ -2283,6 +2357,7 @@ export class Parser {
       kind: "StructLiteral",
       namespace,
       name,
+      typeArgs,
       fields,
       span: { start, end },
     };
@@ -2338,6 +2413,11 @@ export class Parser {
     callee: Identifier | MemberExpression | SuperExpression,
     start = callee.span.start,
   ): CallExpression | null {
+    const typeArgs = this.parseTypeArgumentListOptional(TokenKind.LParen);
+    if (typeArgs === null) {
+      return null;
+    }
+
     if (!this.expect(TokenKind.LParen, "Expected '(' after function name")) {
       return null;
     }
@@ -2366,6 +2446,7 @@ export class Parser {
     return {
       kind: "CallExpression",
       callee,
+      typeArgs,
       args,
       span: { start, end },
     };
@@ -2384,24 +2465,33 @@ export class Parser {
         name: token.lexeme as PrimitiveTypeName,
         span: token.span,
       };
-    } else if (this.check(TokenKind.Dot)) {
-      this.advance();
-      const nameToken = this.expect(TokenKind.Identifier, "Expected type name after '.'");
-      if (!nameToken) {
+    } else {
+      let namespace: string | null = null;
+      let nameLexeme = token.lexeme;
+      let nameEnd = token.span.end;
+
+      if (this.check(TokenKind.Dot)) {
+        this.advance();
+        const nameToken = this.expect(TokenKind.Identifier, "Expected type name after '.'");
+        if (!nameToken) {
+          return null;
+        }
+        namespace = token.lexeme;
+        nameLexeme = nameToken.lexeme;
+        nameEnd = nameToken.span.end;
+      }
+
+      const typeArgs = this.parseTypeArgumentListInTypePosition();
+      if (typeArgs === null) {
         return null;
       }
+      const end = typeArgs.length > 0 ? this.previous().span.end : nameEnd;
       type = {
         kind: "NamedType",
-        namespace: token.lexeme,
-        name: nameToken.lexeme,
-        span: { start: token.span.start, end: nameToken.span.end },
-      };
-    } else {
-      type = {
-        kind: "NamedType",
-        namespace: null,
-        name: token.lexeme,
-        span: token.span,
+        namespace,
+        name: nameLexeme,
+        typeArgs,
+        span: { start: token.span.start, end },
       };
     }
 
@@ -2419,6 +2509,170 @@ export class Parser {
     }
 
     return type;
+  }
+
+  /**
+   * Parse `<T, U extends C>` after a declaration name.
+   * Returns [] when no `<` is present; null on hard parse failure.
+   */
+  private parseTypeParameterList(): TypeParameter[] | null {
+    if (!this.check(TokenKind.Less)) {
+      return [];
+    }
+    this.advance(); // <
+
+    const params: TypeParameter[] = [];
+    const first = this.parseTypeParameter();
+    if (!first) {
+      return null;
+    }
+    params.push(first);
+
+    while (this.check(TokenKind.Comma)) {
+      this.advance();
+      const param = this.parseTypeParameter();
+      if (!param) {
+        return null;
+      }
+      params.push(param);
+    }
+
+    if (!this.expect(TokenKind.Greater, "Expected '>' after type parameters")) {
+      return null;
+    }
+    return params;
+  }
+
+  private parseTypeParameter(): TypeParameter | null {
+    const nameToken = this.expect(TokenKind.Identifier, "Expected type parameter name");
+    if (!nameToken) {
+      return null;
+    }
+
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    let constraint: TypeAnnotation | null = null;
+    let end = nameToken.span.end;
+    if (this.match(TokenKind.Extends)) {
+      constraint = this.parseType();
+      if (!constraint) {
+        return null;
+      }
+      end = constraint.span.end;
+    }
+
+    return {
+      kind: "TypeParameter",
+      name,
+      constraint,
+      span: { start: nameToken.span.start, end },
+    };
+  }
+
+  /** Required type-argument list in type position (`Array<i32>`). Empty if no `<`. */
+  private parseTypeArgumentListInTypePosition(): TypeAnnotation[] | null {
+    if (!this.check(TokenKind.Less)) {
+      return [];
+    }
+    return this.parseTypeArgumentListRequired();
+  }
+
+  /**
+   * Optional type args in expression position: only consume if `<...>` is followed by `after`.
+   * Returns [] when absent; null on hard failure after committing.
+   */
+  private parseTypeArgumentListOptional(after: TokenKind): TypeAnnotation[] | null {
+    if (!this.check(TokenKind.Less)) {
+      return [];
+    }
+    const saved = this.current;
+    const diagCount = this.diagnostics.diagnostics.length;
+    const args = this.parseTypeArgumentListRequired();
+    if (args === null || !this.check(after)) {
+      this.current = saved;
+      this.diagnostics.truncate(diagCount);
+      return [];
+    }
+    return args;
+  }
+
+  private parseTypeArgumentListRequired(): TypeAnnotation[] | null {
+    if (!this.expect(TokenKind.Less, "Expected '<'")) {
+      return null;
+    }
+
+    const args: TypeAnnotation[] = [];
+    const first = this.parseType();
+    if (!first) {
+      return null;
+    }
+    args.push(first);
+
+    while (this.check(TokenKind.Comma)) {
+      this.advance();
+      const arg = this.parseType();
+      if (!arg) {
+        return null;
+      }
+      args.push(arg);
+    }
+
+    if (!this.expect(TokenKind.Greater, "Expected '>' after type arguments")) {
+      return null;
+    }
+    return args;
+  }
+
+  /** True when current Ident is followed by `<...>(`. */
+  private looksLikeGenericCall(): boolean {
+    if (!this.check(TokenKind.Identifier) || !this.checkNext(TokenKind.Less)) {
+      return false;
+    }
+    const saved = this.current;
+    const diagCount = this.diagnostics.diagnostics.length;
+    this.advance(); // Ident
+    const args = this.parseTypeArgumentListRequired();
+    const ok = args !== null && this.check(TokenKind.LParen);
+    this.current = saved;
+    this.diagnostics.truncate(diagCount);
+    return ok;
+  }
+
+  /** True when tokens starting at `offset` look like `<...>{`. Offset is relative to current. */
+  private looksLikeGenericStructLiteral(offset: number): boolean {
+    if (!this.checkAhead(offset, TokenKind.Less)) {
+      return false;
+    }
+    const saved = this.current;
+    const diagCount = this.diagnostics.diagnostics.length;
+    this.current = saved + offset;
+    const args = this.parseTypeArgumentListRequired();
+    const ok = args !== null && this.check(TokenKind.LBrace);
+    this.current = saved;
+    this.diagnostics.truncate(diagCount);
+    return ok;
+  }
+
+  /** True when current position starts with `<...>` followed by `after`. */
+  private looksLikeTypeArgsThen(after: TokenKind): boolean {
+    if (!this.check(TokenKind.Less)) {
+      return false;
+    }
+    const saved = this.current;
+    const diagCount = this.diagnostics.diagnostics.length;
+    const args = this.parseTypeArgumentListRequired();
+    const ok = args !== null && this.check(after);
+    this.current = saved;
+    this.diagnostics.truncate(diagCount);
+    return ok;
+  }
+
+  private previous(): Token {
+    return this.tokens[this.current - 1]!;
   }
 
   private match(kind: TokenKind): boolean {

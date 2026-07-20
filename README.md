@@ -75,6 +75,7 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 
 - A single top-level `function main(): void` with no parameters (return type required)
 - Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, arrays `T[]`, `struct`, `enum`, `class`, and `interface` types
+- Generics: type parameters on structs, classes, interfaces, functions, and methods; constraints (`T extends I`); nested type arguments; call-site inference; compile-time monomorphization (no runtime generics)
 - Struct declarations, literals (`Person { name: "...", age: 16 }`), field access, field assignment, and instance methods
 - Classes: `new`, constructors, instance/static fields and methods, `public`/`private`, `readonly`, inheritance (`extends`), and `abstract` classes (heap reference types)
 - Interfaces: method-only contracts with `implements` / `extends`, compile-time compliance checks, and fat-pointer dynamic dispatch when typed as an interface
@@ -105,6 +106,7 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 | [`examples/classes.tsn`](./examples/classes.tsn) | Classes, `new`, constructors, static/readonly/private |
 | [`examples/inheritance.tsn`](./examples/inheritance.tsn) | Abstract classes, `extends`, virtual methods |
 | [`examples/interfaces.tsn`](./examples/interfaces.tsn) | Interfaces, `implements`, itable dispatch |
+| [`examples/generics.tsn`](./examples/generics.tsn) | Generic structs/classes/functions/methods, constraints, inference |
 
 ## Development
 

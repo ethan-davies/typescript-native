@@ -42,6 +42,7 @@ export type AstNode =
   | ConstructorDeclaration
   | InterfaceDeclaration
   | InterfaceMethodSignature
+  | TypeParameter
   | Parameter
   | VariableDeclaration
   | AssignmentStatement
@@ -111,6 +112,13 @@ export type Statement =
   | BreakStatement
   | ContinueStatement;
 
+export interface TypeParameter extends AstNodeBase {
+  readonly kind: "TypeParameter";
+  readonly name: Identifier;
+  /** Constraint from `extends`; null when unconstrained. */
+  readonly constraint: TypeAnnotation | null;
+}
+
 export interface Parameter extends AstNodeBase {
   readonly kind: "Parameter";
   readonly name: Identifier;
@@ -121,6 +129,7 @@ export interface FunctionDeclaration extends AstNodeBase {
   readonly kind: "FunctionDeclaration";
   readonly exported: boolean;
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
   readonly returnType: TypeAnnotation;
   readonly body: Statement[];
@@ -135,6 +144,7 @@ export interface StructField extends AstNodeBase {
 export interface StructMethod extends AstNodeBase {
   readonly kind: "StructMethod";
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
   readonly returnType: TypeAnnotation;
   readonly body: Statement[];
@@ -144,6 +154,7 @@ export interface StructDeclaration extends AstNodeBase {
   readonly kind: "StructDeclaration";
   readonly exported: boolean;
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   readonly fields: StructField[];
   readonly methods: StructMethod[];
 }
@@ -177,6 +188,7 @@ export interface ClassMethod extends AstNodeBase {
   readonly isStatic: boolean;
   readonly isAbstract: boolean;
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
   readonly returnType: TypeAnnotation;
   /** null when abstract. */
@@ -197,6 +209,7 @@ export interface ClassDeclaration extends AstNodeBase {
   readonly exported: boolean;
   readonly isAbstract: boolean;
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   /** Local or qualified superclass name; null if none. */
   readonly superclass: NamedType | null;
   /** Interfaces this class promises to implement. */
@@ -207,6 +220,7 @@ export interface ClassDeclaration extends AstNodeBase {
 export interface InterfaceMethodSignature extends AstNodeBase {
   readonly kind: "InterfaceMethodSignature";
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
   readonly returnType: TypeAnnotation;
 }
@@ -215,6 +229,7 @@ export interface InterfaceDeclaration extends AstNodeBase {
   readonly kind: "InterfaceDeclaration";
   readonly exported: boolean;
   readonly name: Identifier;
+  readonly typeParams: TypeParameter[];
   /** Interfaces this interface extends. */
   readonly bases: NamedType[];
   readonly methods: InterfaceMethodSignature[];
@@ -315,6 +330,8 @@ export type CallCallee = Identifier | MemberExpression | SuperExpression;
 export interface CallExpression extends AstNodeBase {
   readonly kind: "CallExpression";
   readonly callee: CallCallee;
+  /** Explicit type arguments from `foo<T>(...)`; empty when inferred or non-generic. */
+  readonly typeArgs: TypeAnnotation[];
   readonly args: Expression[];
 }
 
@@ -359,6 +376,7 @@ export interface StructLiteral extends AstNodeBase {
   /** Import alias when written as `math.Point { ... }`; null for bare `Point { ... }`. */
   readonly namespace: Identifier | null;
   readonly name: Identifier;
+  readonly typeArgs: TypeAnnotation[];
   readonly fields: StructFieldInit[];
 }
 
@@ -367,6 +385,7 @@ export interface NewExpression extends AstNodeBase {
   /** Import alias when written as `new math.Person(...)`; null for bare `new Person(...)`. */
   readonly namespace: Identifier | null;
   readonly className: Identifier;
+  readonly typeArgs: TypeAnnotation[];
   readonly args: Expression[];
 }
 
@@ -431,4 +450,5 @@ export interface NamedType extends AstNodeBase {
   /** Import alias when written as `math.Point`; null for bare `Point`. */
   readonly namespace: string | null;
   readonly name: string;
+  readonly typeArgs: TypeAnnotation[];
 }

@@ -51,6 +51,7 @@ export type {
   ThisExpression,
   TopLevelDeclaration,
   TypeAnnotation,
+  TypeParameter,
   UnaryExpression,
   UpdateStatement,
   VariableDeclaration,
