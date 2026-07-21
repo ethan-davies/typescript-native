@@ -1,0 +1,29 @@
+function greet(name: string, greeting: string = "Hello"): void {
+  print(greeting + ", " + name);
+}
+
+function createPerson(name: string, age: i32 = 0, active: bool = true): void {
+  print(name);
+  print(age);
+  print(active);
+}
+
+function configure(host: string, port: i32 = 80, secure: bool = false): void {
+  print(host);
+  print(port);
+  print(secure);
+}
+
+function main(): void {
+  greet("Ethan");
+  greet("Ethan", "Hi");
+
+  createPerson("Ethan");
+  createPerson("Ethan", 18);
+  createPerson("Ethan", 18, false);
+
+  createPerson(age: 16, name: "Alex");
+  createPerson("Sam", age: 20, active: false);
+
+  configure("example.com", secure: true);
+}

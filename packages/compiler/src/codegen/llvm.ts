@@ -1,6 +1,7 @@
 import type {
   AssignmentStatement,
   BinaryExpression,
+  CallArgument,
   CallExpression,
   ClassDeclaration,
   ClassMethod,
@@ -86,6 +87,11 @@ function isNullablePointerUnion(type: ValueType): boolean {
   }
   const nonNull = arms.filter((a) => a !== "null");
   return nonNull.length > 0 && nonNull.every((a) => isSinglePtrType(a as ValueType));
+}
+
+/** Typecheck rewrites named/default args to a positional Expression[] before codegen. */
+function asExpressions(args: readonly CallArgument[]): Expression[] {
+  return args as Expression[];
 }
 
 /** Union tag constants matching typeofTagForType. */
@@ -2128,7 +2134,7 @@ export class LlvmCodegen {
 
     const args: EmittedValue[] = [];
     for (let i = 0; i < expr.args.length; i += 1) {
-      args.push(this.emitExpression(expr.args[i]!, lines, classInfo.constructorParams[i]));
+      args.push(this.emitExpression(asExpressions(expr.args)[i]!, lines, classInfo.constructorParams[i]));
     }
     const argList = [
       `ptr ${obj}`,
@@ -2756,7 +2762,7 @@ export class LlvmCodegen {
     }
     const args: EmittedValue[] = [];
     for (let i = 0; i < call.args.length; i += 1) {
-      args.push(this.emitExpression(call.args[i]!, lines, base.constructorParams[i]));
+      args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, base.constructorParams[i]));
     }
     const argList = [
       `ptr ${this.thisPtr}`,
@@ -3406,7 +3412,7 @@ export class LlvmCodegen {
         `Codegen: unknown function '${call.callee.object.name}.${call.callee.property.name}'`,
       );
     }
-    return this.emitCallWithSig(sig, call.args, lines, asStatement);
+    return this.emitCallWithSig(sig, asExpressions(call.args), lines, asStatement);
   }
 
   private emitStructLiteral(expr: StructLiteral, lines: string[]): EmittedValue {
@@ -3836,7 +3842,7 @@ export class LlvmCodegen {
       if (method) {
         const args: EmittedValue[] = [];
         for (let i = 0; i < call.args.length; i += 1) {
-          args.push(this.emitExpression(call.args[i]!, lines, method.params[i]));
+          args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
         }
         const argList = args.map((a) => `${toLlvmType(a.type)} ${a.llvm}`).join(", ");
         if (method.returnType === "void") {
@@ -3864,7 +3870,7 @@ export class LlvmCodegen {
       const thisAddr = this.emitStructAddress(callee.object, objectType, lines);
       const args: EmittedValue[] = [];
       for (let i = 0; i < call.args.length; i += 1) {
-        args.push(this.emitExpression(call.args[i]!, lines, method.params[i]));
+        args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
       }
       const argList = [
         `ptr ${thisAddr}`,
@@ -3892,7 +3898,7 @@ export class LlvmCodegen {
       const obj = this.emitExpression(callee.object, lines);
       const args: EmittedValue[] = [];
       for (let i = 0; i < call.args.length; i += 1) {
-        args.push(this.emitExpression(call.args[i]!, lines, method.params[i]));
+        args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
       }
       const argList = [
         `ptr ${obj.llvm}`,
@@ -3953,7 +3959,7 @@ export class LlvmCodegen {
       const obj = this.emitExpression(callee.object, lines);
       const args: EmittedValue[] = [];
       for (let i = 0; i < call.args.length; i += 1) {
-        args.push(this.emitExpression(call.args[i]!, lines, method.params[i]));
+        args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
       }
       const data = this.nextTemp();
       lines.push(`  ${data} = extractvalue %${def.name} ${obj.llvm}, 0`);
@@ -3992,7 +3998,7 @@ export class LlvmCodegen {
 
     switch (method) {
       case "push":
-        this.emitArrayPush(object.llvm, call.args[0]!, elementType, lines);
+        this.emitArrayPush(object.llvm, asExpressions(call.args)[0]!, elementType, lines);
         if (!asStatement) {
           throw new Error("Codegen: push used as value");
         }
@@ -4000,9 +4006,9 @@ export class LlvmCodegen {
       case "pop":
         return this.emitArrayPop(object.llvm, elementType, lines);
       case "includes":
-        return this.emitArrayIncludes(object.llvm, call.args[0]!, elementType, lines);
+        return this.emitArrayIncludes(object.llvm, asExpressions(call.args)[0]!, elementType, lines);
       case "indexOf":
-        return this.emitArrayIndexOf(object.llvm, call.args[0]!, elementType, lines);
+        return this.emitArrayIndexOf(object.llvm, asExpressions(call.args)[0]!, elementType, lines);
       default:
         throw new Error(`Codegen: unknown method '${method}'`);
     }
@@ -4527,14 +4533,14 @@ export class LlvmCodegen {
     if (call.callee.kind === "Identifier") {
       const sig = this.localFunctions.get(call.callee.name);
       if (sig) {
-        return this.emitCallWithSig(sig, call.args, lines, asStatement);
+        return this.emitCallWithSig(sig, asExpressions(call.args), lines, asStatement);
       }
     }
     const callee = this.emitExpression(call.callee, lines);
     if (!isFunctionType(callee.type)) {
       throw new Error("Codegen: calling non-function value");
     }
-    return this.emitIndirectCall(callee, callee.type, call.args, lines, asStatement);
+    return this.emitIndirectCall(callee, callee.type, asExpressions(call.args), lines, asStatement);
   }
 
   private storagePtr(local: LocalBinding, lines: string[]): string {
@@ -4565,7 +4571,7 @@ export class LlvmCodegen {
       }
       if (e.kind === "CallExpression") {
         visitExpr(e.callee);
-        for (const a of e.args) visitExpr(a);
+        for (const a of asExpressions(e.args)) visitExpr(a);
       } else if (e.kind === "BinaryExpression") {
         visitExpr(e.left);
         visitExpr(e.right);
@@ -4583,7 +4589,7 @@ export class LlvmCodegen {
       } else if (e.kind === "StructLiteral") {
         for (const f of e.fields) visitExpr(f.value);
       } else if (e.kind === "NewExpression") {
-        for (const a of e.args) visitExpr(a);
+        for (const a of asExpressions(e.args)) visitExpr(a);
       }
     };
     const visitStmt = (s: Statement): void => {
@@ -5004,7 +5010,7 @@ export class LlvmCodegen {
     const emittedArgs: EmittedValue[] = [];
     const formatParts: string[] = [];
 
-    for (const arg of call.args) {
+    for (const arg of asExpressions(call.args)) {
       const value = this.emitExpression(arg, lines);
       if (value.type === "bool") {
         const boolStr = this.emitBoolToString(value.llvm, lines);

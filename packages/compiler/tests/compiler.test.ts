@@ -334,6 +334,8 @@ describe("compile pipeline", () => {
         "multi-constraints.tsn",
         "dictionaries.tsn",
         "type-operators.tsn",
+        "function-types.tsn",
+        "default-named-args.tsn",
         "lambdas.tsn",
       ]) {
         const source = readFileSync(join(examplesDir, name), "utf8");
@@ -1747,6 +1749,96 @@ describe("nullability and control-flow narrowing", () => {
   });
 });
 
+describe("function types", () => {
+  it("compiles function type aliases, params, and named function values", () => {
+    const result = compile(`
+      type Operation = (i32, i32) => i32;
+      function add(a: i32, b: i32): i32 {
+        return a + b;
+      }
+      function execute(operation: Operation): i32 {
+        return operation(10, 20);
+      }
+      function main(): void {
+        let op: Operation = add;
+        print(execute(op));
+        print(execute(add));
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%__Callable = type { ptr, ptr }");
+    expect(result.ir).toContain("add__as_closure");
+  });
+
+  it("compiles function-typed returns and indirect calls", () => {
+    const result = compile(`
+      function double(value: i32): i32 {
+        return value * 2;
+      }
+      function createDoubler(): (i32) => i32 {
+        return double;
+      }
+      function main(): void {
+        let doubleIt: (i32) => i32 = createDoubler();
+        print(doubleIt(21));
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%__Callable = type { ptr, ptr }");
+  });
+
+  it("rejects assigning a named function with the wrong return type", () => {
+    const result = compile(`
+      function greet(a: i32, b: i32): string {
+        return "hi";
+      }
+      function main(): void {
+        let op: (i32, i32) => i32 = greet;
+      }
+    `);
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0303")).toBe(true);
+  });
+
+  it("rejects assigning a named function with the wrong arity", () => {
+    const result = compile(`
+      function identity(a: i32): i32 {
+        return a;
+      }
+      function main(): void {
+        let op: (i32, i32) => i32 = identity;
+      }
+    `);
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0303")).toBe(true);
+  });
+
+  it("rejects calling a non-function value", () => {
+    const result = compile(`
+      function main(): void {
+        let x: i32 = 1;
+        x(2);
+      }
+    `);
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0307")).toBe(true);
+  });
+
+  it("rejects wrong argument arity on a function-typed variable", () => {
+    const result = compile(`
+      function add(a: i32, b: i32): i32 {
+        return a + b;
+      }
+      function main(): void {
+        let op: (i32, i32) => i32 = add;
+        print(op(1));
+      }
+    `);
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0315")).toBe(true);
+  });
+});
+
 describe("lambdas and closures", () => {
   it("compiles expression-bodied lambdas and indirect calls", () => {
     const result = compile(`
@@ -1836,6 +1928,191 @@ describe("lambdas and closures", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.ir).toContain("add__as_closure");
+  });
+});
+
+describe("default and named arguments", () => {
+  it("compiles omitted and explicit default arguments", () => {
+    const result = compile(`
+      function greet(name: string, greeting: string = "Hello"): void {
+        print(greeting + ", " + name);
+      }
+      function main(): void {
+        greet("Ethan");
+        greet("Ethan", "Hi");
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("@greet");
+  });
+
+  it("fills multiple trailing defaults", () => {
+    const result = compile(`
+      function createPerson(name: string, age: i32 = 0, active: bool = true): void {
+        print(name);
+        print(age);
+        print(active);
+      }
+      function main(): void {
+        createPerson("Ethan");
+        createPerson("Ethan", 16);
+        createPerson("Ethan", 16, false);
+      }
+    `);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects default values with the wrong type", () => {
+    const result = compile(`
+      function test(x: i32 = "hello"): void {}
+      function main(): void {}
+    `);
+    expect(result.success).toBe(false);
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.includes("Default value of type string is not assignable to parameter type i32"),
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves named arguments in any order and skips defaults", () => {
+    const result = compile(`
+      function configure(host: string, port: i32 = 80, secure: bool = false): void {
+        print(host);
+        print(port);
+        print(secure);
+      }
+      function main(): void {
+        configure(secure: true, host: "example.com");
+        configure("example.com", secure: true);
+      }
+    `);
+    expect(result.success).toBe(true);
+  });
+
+  it("type-checks named arguments by parameter name", () => {
+    const result = compile(`
+      function createPerson(name: string, age: i32): void {
+        print(name);
+        print(age);
+      }
+      function main(): void {
+        createPerson(name: 123, age: "sixteen");
+      }
+    `);
+    expect(result.success).toBe(false);
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.includes("Argument 'name' expects string, got i32"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects duplicate and unknown named arguments", () => {
+    const dup = compile(`
+      function createPerson(name: string, age: i32): void {
+        print(name);
+      }
+      function main(): void {
+        createPerson("Ethan", name: "Alex");
+      }
+    `);
+    expect(dup.success).toBe(false);
+    expect(
+      dup.diagnostics.some((d) => d.message.includes("Argument 'name' was provided more than once")),
+    ).toBe(true);
+
+    const unknown = compile(`
+      function createPerson(name: string, age: i32): void {
+        print(name);
+      }
+      function main(): void {
+        createPerson(username: "Ethan");
+      }
+    `);
+    expect(unknown.success).toBe(false);
+    expect(
+      unknown.diagnostics.some((d) =>
+        d.message.includes("Function 'createPerson' has no parameter named 'username'"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects missing required arguments even when later params have defaults", () => {
+    const result = compile(`
+      function createPerson(name: string, age: i32, active: bool = true): void {
+        print(name);
+      }
+      function main(): void {
+        createPerson("Ethan");
+      }
+    `);
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0315")).toBe(true);
+  });
+
+  it("allows assigning a function with defaults to a function type without defaults", () => {
+    const result = compile(`
+      function greet(name: string, greeting: string = "Hello"): void {
+        print(greeting + ", " + name);
+      }
+      function main(): void {
+        let fn: (string, string) => void = greet;
+        fn("Ethan", "Hi");
+      }
+    `);
+    expect(result.success).toBe(true);
+  });
+
+  it("does not apply defaults or named args through function values", () => {
+    const arity = compile(`
+      function greet(name: string, greeting: string = "Hello"): void {
+        print(greeting + ", " + name);
+      }
+      function main(): void {
+        let fn = greet;
+        fn("Ethan");
+      }
+    `);
+    expect(arity.success).toBe(false);
+    expect(arity.diagnostics.some((d) => d.code === "E0315")).toBe(true);
+
+    const named = compile(`
+      function createPerson(name: string, age: i32): void {
+        print(name);
+      }
+      function main(): void {
+        let fn = createPerson;
+        fn(name: "Ethan", age: 16);
+      }
+    `);
+    expect(named.success).toBe(false);
+    expect(
+      named.diagnostics.some((d) =>
+        d.message.includes("Named arguments require a direct function reference"),
+      ),
+    ).toBe(true);
+  });
+
+  it("evaluates default expressions at the call site only when omitted", () => {
+    const result = compile(`
+      function getDefault(): i32 {
+        return 42;
+      }
+      function test(x: i32 = getDefault()): void {
+        print(x);
+      }
+      function main(): void {
+        test();
+        test(10);
+      }
+    `);
+    expect(result.success).toBe(true);
+    // Omitted-arg call expands to getDefault() at the call site in main.
+    expect(result.ir).toContain("call i32 @getDefault()");
+    // Two calls to test: one with the default expansion, one with literal 10.
+    const testCalls = result.ir?.match(/call void @test\(/g) ?? [];
+    expect(testCalls.length).toBeGreaterThanOrEqual(2);
   });
 });
 

@@ -47,6 +47,7 @@ export type AstNode =
   | TypeAliasDeclaration
   | TypeParameter
   | Parameter
+  | NamedArgument
   | LambdaParameter
   | LambdaExpression
   | VariableDeclaration
@@ -134,7 +135,18 @@ export interface Parameter extends AstNodeBase {
   readonly kind: "Parameter";
   readonly name: Identifier;
   readonly typeAnnotation: TypeAnnotation;
+  /** Optional default; evaluated at the call site when the argument is omitted. */
+  readonly defaultValue: Expression | null;
 }
+
+/** Named argument at a call site: `foo(name: value)`. Not a standalone expression. */
+export interface NamedArgument extends AstNodeBase {
+  readonly kind: "NamedArgument";
+  readonly name: Identifier;
+  readonly value: Expression;
+}
+
+export type CallArgument = Expression | NamedArgument;
 
 export interface FunctionDeclaration extends AstNodeBase {
   readonly kind: "FunctionDeclaration";
@@ -377,7 +389,7 @@ export interface CallExpression extends AstNodeBase {
   readonly callee: CallCallee;
   /** Explicit type arguments from `foo<T>(...)`; empty when inferred or non-generic. */
   readonly typeArgs: TypeAnnotation[];
-  readonly args: Expression[];
+  readonly args: CallArgument[];
 }
 
 export interface LambdaParameter extends AstNodeBase {
@@ -460,7 +472,7 @@ export interface NewExpression extends AstNodeBase {
   readonly namespace: Identifier | null;
   readonly className: Identifier;
   readonly typeArgs: TypeAnnotation[];
-  readonly args: Expression[];
+  readonly args: CallArgument[];
 }
 
 export interface ThisExpression extends AstNodeBase {

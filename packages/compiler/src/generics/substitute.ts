@@ -116,7 +116,7 @@ export function substituteAnnotation(ann: TypeAnnotation, subst: TypeSubst): Typ
     case "TypeofType": {
       const result: TypeofType = {
         kind: "TypeofType",
-        expression: substExpression(ann.expression, subst),
+        expression: substituteExpression(ann.expression, subst),
         span: ann.span,
       };
       return result;
@@ -179,17 +179,22 @@ function substParams(params: readonly Parameter[], subst: TypeSubst): Parameter[
   return params.map((p) => ({
     ...p,
     typeAnnotation: substituteAnnotation(p.typeAnnotation, subst),
+    defaultValue: p.defaultValue ? substituteExpression(p.defaultValue, subst) : null,
   }));
 }
 
-function substExpression(expr: Expression, subst: TypeSubst): Expression {
+export function substituteExpression(expr: Expression, subst: TypeSubst): Expression {
   switch (expr.kind) {
     case "CallExpression":
       return {
         ...expr,
         typeArgs: expr.typeArgs.map((a) => substituteAnnotation(a, subst)),
-        args: expr.args.map((a) => substExpression(a, subst)),
-        callee: substExpression(expr.callee, subst),
+        args: expr.args.map((a) =>
+          a.kind === "NamedArgument"
+            ? { ...a, value: substituteExpression(a.value, subst) }
+            : substituteExpression(a, subst),
+        ),
+        callee: substituteExpression(expr.callee, subst),
       };
     case "LambdaExpression":
       return {
@@ -205,7 +210,7 @@ function substExpression(expr: Expression, subst: TypeSubst): Expression {
           expr.body.kind === "expression"
             ? {
                 kind: "expression",
-                expression: substExpression(expr.body.expression, subst),
+                expression: substituteExpression(expr.body.expression, subst),
               }
             : {
                 kind: "block",
@@ -216,7 +221,11 @@ function substExpression(expr: Expression, subst: TypeSubst): Expression {
       return {
         ...expr,
         typeArgs: expr.typeArgs.map((a) => substituteAnnotation(a, subst)),
-        args: expr.args.map((a) => substExpression(a, subst)),
+        args: expr.args.map((a) =>
+          a.kind === "NamedArgument"
+            ? { ...a, value: substituteExpression(a.value, subst) }
+            : substituteExpression(a, subst),
+        ),
       };
     case "StructLiteral":
       return {
@@ -224,37 +233,37 @@ function substExpression(expr: Expression, subst: TypeSubst): Expression {
         typeArgs: expr.typeArgs.map((a) => substituteAnnotation(a, subst)),
         fields: expr.fields.map((f) => ({
           ...f,
-          value: substExpression(f.value, subst),
+          value: substituteExpression(f.value, subst),
         })),
       };
     case "BinaryExpression":
       return {
         ...expr,
-        left: substExpression(expr.left, subst),
-        right: substExpression(expr.right, subst),
+        left: substituteExpression(expr.left, subst),
+        right: substituteExpression(expr.right, subst),
       };
     case "UnaryExpression":
-      return { ...expr, operand: substExpression(expr.operand, subst) };
+      return { ...expr, operand: substituteExpression(expr.operand, subst) };
     case "TypeofExpression":
-      return { ...expr, operand: substExpression(expr.operand, subst) };
+      return { ...expr, operand: substituteExpression(expr.operand, subst) };
     case "IsExpression":
       return {
         ...expr,
-        value: substExpression(expr.value, subst),
+        value: substituteExpression(expr.value, subst),
         typeAnnotation: substituteAnnotation(expr.typeAnnotation, subst),
       };
     case "IndexExpression":
       return {
         ...expr,
-        object: substExpression(expr.object, subst),
-        index: substExpression(expr.index, subst),
+        object: substituteExpression(expr.object, subst),
+        index: substituteExpression(expr.index, subst),
       };
     case "MemberExpression":
-      return { ...expr, object: substExpression(expr.object, subst) };
+      return { ...expr, object: substituteExpression(expr.object, subst) };
     case "ArrayLiteral":
       return {
         ...expr,
-        elements: expr.elements.map((e) => substExpression(e, subst)),
+        elements: expr.elements.map((e) => substituteExpression(e, subst)),
       };
     default:
       return expr;
@@ -269,7 +278,7 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
         typeAnnotation: stmt.typeAnnotation
           ? substituteAnnotation(stmt.typeAnnotation, subst)
           : null,
-        initializer: stmt.initializer ? substExpression(stmt.initializer, subst) : null,
+        initializer: stmt.initializer ? substituteExpression(stmt.initializer, subst) : null,
       };
     case "AssignmentStatement":
       return {
@@ -280,28 +289,28 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
             : stmt.target.kind === "IndexExpression"
               ? {
                   ...stmt.target,
-                  object: substExpression(stmt.target.object, subst),
-                  index: substExpression(stmt.target.index, subst),
+                  object: substituteExpression(stmt.target.object, subst),
+                  index: substituteExpression(stmt.target.index, subst),
                 }
               : {
                   ...stmt.target,
-                  object: substExpression(stmt.target.object, subst),
+                  object: substituteExpression(stmt.target.object, subst),
                 },
-        value: substExpression(stmt.value, subst),
+        value: substituteExpression(stmt.value, subst),
       };
     case "UpdateStatement":
       return stmt;
     case "ExpressionStatement":
-      return { ...stmt, expression: substExpression(stmt.expression, subst) };
+      return { ...stmt, expression: substituteExpression(stmt.expression, subst) };
     case "ReturnStatement":
       return {
         ...stmt,
-        value: stmt.value ? substExpression(stmt.value, subst) : null,
+        value: stmt.value ? substituteExpression(stmt.value, subst) : null,
       };
     case "IfStatement":
       return {
         ...stmt,
-        condition: substExpression(stmt.condition, subst),
+        condition: substituteExpression(stmt.condition, subst),
         consequent: stmt.consequent.map((s) => substStatement(s, subst)),
         alternate: Array.isArray(stmt.alternate)
           ? stmt.alternate.map((s) => substStatement(s, subst))
@@ -312,7 +321,7 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
     case "WhileStatement":
       return {
         ...stmt,
-        condition: substExpression(stmt.condition, subst),
+        condition: substituteExpression(stmt.condition, subst),
         body: stmt.body.map((s) => substStatement(s, subst)),
       };
     case "ForStatement":
@@ -321,7 +330,7 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
         initializer: stmt.initializer
           ? (substStatement(stmt.initializer, subst) as typeof stmt.initializer)
           : null,
-        condition: stmt.condition ? substExpression(stmt.condition, subst) : null,
+        condition: stmt.condition ? substituteExpression(stmt.condition, subst) : null,
         update: stmt.update
           ? stmt.update.kind === "UpdateStatement"
             ? stmt.update
@@ -332,7 +341,7 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
     case "ForInStatement":
       return {
         ...stmt,
-        iterable: substExpression(stmt.iterable, subst),
+        iterable: substituteExpression(stmt.iterable, subst),
         body: stmt.body.map((s) => substStatement(s, subst)),
       };
     case "BreakStatement":
@@ -414,7 +423,7 @@ export function specializeClassDecl(
           ...member,
           typeAnnotation: substituteAnnotation(member.typeAnnotation, subst),
           initializer: member.initializer
-            ? substExpression(member.initializer, subst)
+            ? substituteExpression(member.initializer, subst)
             : null,
         };
         return field;

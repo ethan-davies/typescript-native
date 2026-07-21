@@ -9,6 +9,7 @@ import type {
   BindingPattern,
   BooleanLiteral,
   BreakStatement,
+  CallArgument,
   CallExpression,
   CharLiteral,
   ClassDeclaration,
@@ -44,6 +45,7 @@ import type {
   LiteralType,
   MappedType,
   MemberExpression,
+  NamedArgument,
   NamedType,
   NewExpression,
   NullLiteral,
@@ -1239,6 +1241,20 @@ export class Parser {
       params.push(param);
     }
 
+    let sawDefault = false;
+    for (const param of params) {
+      if (param.defaultValue !== null) {
+        sawDefault = true;
+      } else if (sawDefault) {
+        this.diagnostics.error(
+          "Required parameters must come before parameters with default values",
+          param.span,
+          "E0102",
+        );
+        return null;
+      }
+    }
+
     return params;
   }
 
@@ -1263,11 +1279,23 @@ export class Parser {
       return null;
     }
 
+    let defaultValue: Expression | null = null;
+    if (this.match(TokenKind.Equal)) {
+      defaultValue = this.parseExpression();
+      if (!defaultValue) {
+        return null;
+      }
+    }
+
     return {
       kind: "Parameter",
       name,
       typeAnnotation,
-      span: { start: name.span.start, end: typeAnnotation.span.end },
+      defaultValue,
+      span: {
+        start: name.span.start,
+        end: defaultValue?.span.end ?? typeAnnotation.span.end,
+      },
     };
   }
 
@@ -2440,33 +2468,19 @@ export class Parser {
       return null;
     }
 
-    const args: Expression[] = [];
-    if (!this.check(TokenKind.RParen)) {
-      const first = this.parseExpression();
-      if (!first) {
-        return null;
-      }
-      args.push(first);
-
-      while (this.check(TokenKind.Comma)) {
-        this.advance();
-        const arg = this.parseExpression();
-        if (!arg) {
-          return null;
-        }
-        args.push(arg);
-      }
+    const args = this.parseArgumentList("Expected ')' after constructor arguments");
+    if (args === null) {
+      return null;
     }
 
-    const rparen = this.expect(TokenKind.RParen, "Expected ')' after constructor arguments");
-    const end = rparen?.span.end ?? this.peek().span.end;
+    const end = args.end;
 
     return {
       kind: "NewExpression",
       namespace,
       className,
       typeArgs,
-      args,
+      args: args.args,
       span: { start, end },
     };
   }
@@ -2706,34 +2720,93 @@ export class Parser {
       return null;
     }
 
-    const args: Expression[] = [];
-    if (!this.check(TokenKind.RParen)) {
-      const first = this.parseExpression();
-      if (!first) {
-        return null;
-      }
-      args.push(first);
-
-      while (this.check(TokenKind.Comma)) {
-        this.advance();
-        const arg = this.parseExpression();
-        if (!arg) {
-          return null;
-        }
-        args.push(arg);
-      }
+    const parsed = this.parseArgumentList("Expected ')' after arguments");
+    if (parsed === null) {
+      return null;
     }
-
-    const rparen = this.expect(TokenKind.RParen, "Expected ')' after arguments");
-    const end = rparen?.span.end ?? this.peek().span.end;
 
     return {
       kind: "CallExpression",
       callee,
       typeArgs,
-      args,
-      span: { start, end },
+      args: parsed.args,
+      span: { start, end: parsed.end },
     };
+  }
+
+  /**
+   * Parse a comma-separated argument list ending at ')'.
+   * Supports positional expressions and named arguments (`name: expr`).
+   * Positional arguments must come before named arguments.
+   */
+  private parseArgumentList(
+    rparenMessage: string,
+  ): { args: CallArgument[]; end: { line: number; column: number; offset: number } } | null {
+    const args: CallArgument[] = [];
+    let sawNamed = false;
+
+    if (!this.check(TokenKind.RParen)) {
+      const first = this.parseCallArgument(sawNamed);
+      if (!first) {
+        return null;
+      }
+      if (first.kind === "NamedArgument") {
+        sawNamed = true;
+      }
+      args.push(first);
+
+      while (this.check(TokenKind.Comma)) {
+        this.advance();
+        const arg = this.parseCallArgument(sawNamed);
+        if (!arg) {
+          return null;
+        }
+        if (arg.kind === "NamedArgument") {
+          sawNamed = true;
+        }
+        args.push(arg);
+      }
+    }
+
+    const rparen = this.expect(TokenKind.RParen, rparenMessage);
+    const end = rparen?.span.end ?? this.peek().span.end;
+    return { args, end };
+  }
+
+  private parseCallArgument(sawNamed: boolean): CallArgument | null {
+    if (this.check(TokenKind.Identifier) && this.checkNext(TokenKind.Colon)) {
+      const nameToken = this.advance();
+      this.advance(); // ':'
+      const value = this.parseExpression();
+      if (!value) {
+        return null;
+      }
+      const name: Identifier = {
+        kind: "Identifier",
+        name: nameToken.lexeme,
+        span: nameToken.span,
+      };
+      return {
+        kind: "NamedArgument",
+        name,
+        value,
+        span: { start: name.span.start, end: value.span.end },
+      };
+    }
+
+    const expr = this.parseExpression();
+    if (!expr) {
+      return null;
+    }
+    if (sawNamed) {
+      this.diagnostics.error(
+        "Positional arguments must come before named arguments",
+        expr.span,
+        "E0102",
+      );
+      return null;
+    }
+    return expr;
   }
 
   private parseType(): TypeAnnotation | null {
@@ -3053,26 +3126,16 @@ export class Parser {
     // Optional call: typeof createPerson()
     if (this.check(TokenKind.LParen)) {
       this.advance();
-      const args: Expression[] = [];
-      if (!this.check(TokenKind.RParen)) {
-        do {
-          const arg = this.parseExpression();
-          if (!arg) {
-            return null;
-          }
-          args.push(arg);
-        } while (this.match(TokenKind.Comma));
-      }
-      const rparen = this.expect(TokenKind.RParen, "Expected ')' after typeof call arguments");
-      if (!rparen) {
+      const parsed = this.parseArgumentList("Expected ')' after typeof call arguments");
+      if (!parsed) {
         return null;
       }
       expr = {
         kind: "CallExpression",
         callee: expr as Identifier,
         typeArgs: [],
-        args,
-        span: { start: nameToken.span.start, end: rparen.span.end },
+        args: parsed.args,
+        span: { start: nameToken.span.start, end: parsed.end },
       };
     }
     return expr;

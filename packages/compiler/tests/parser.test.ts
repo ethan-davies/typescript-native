@@ -1001,4 +1001,131 @@ describe("Parser", () => {
       });
     }
   });
+
+  it("parses function types in aliases, returns, and let annotations", () => {
+    const { ast, diagnostics } = parse(`
+      type Operation = (i32, i32) => i32;
+      type Thunk = () => void;
+      function createDoubler(): (i32) => i32 {
+        return double;
+      }
+      function double(value: i32): i32 {
+        return value * 2;
+      }
+      function main(): void {
+        let op: Operation = add;
+        let none: () => void;
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+
+    expect(ast.body[0]).toMatchObject({ kind: "TypeAliasDeclaration" });
+    if (ast.body[0]?.kind === "TypeAliasDeclaration") {
+      expect(ast.body[0].type.kind).toBe("FunctionType");
+      if (ast.body[0].type.kind === "FunctionType") {
+        expect(ast.body[0].type.params).toHaveLength(2);
+        expect(ast.body[0].type.returnType).toMatchObject({
+          kind: "PrimitiveType",
+          name: "i32",
+        });
+      }
+    }
+
+    expect(ast.body[1]).toMatchObject({ kind: "TypeAliasDeclaration" });
+    if (ast.body[1]?.kind === "TypeAliasDeclaration") {
+      expect(ast.body[1].type.kind).toBe("FunctionType");
+      if (ast.body[1].type.kind === "FunctionType") {
+        expect(ast.body[1].type.params).toHaveLength(0);
+        expect(ast.body[1].type.returnType).toMatchObject({
+          kind: "PrimitiveType",
+          name: "void",
+        });
+      }
+    }
+
+    const createDoubler = functionAt(ast, 2);
+    expect(createDoubler.returnType.kind).toBe("FunctionType");
+    if (createDoubler.returnType.kind === "FunctionType") {
+      expect(createDoubler.returnType.params).toHaveLength(1);
+    }
+
+    const main = functionAt(ast, 4);
+    expect(main.body[0]?.kind).toBe("VariableDeclaration");
+    if (main.body[0]?.kind === "VariableDeclaration") {
+      expect(main.body[0].typeAnnotation?.kind).toBe("NamedType");
+    }
+    expect(main.body[1]?.kind).toBe("VariableDeclaration");
+    if (main.body[1]?.kind === "VariableDeclaration") {
+      expect(main.body[1].typeAnnotation?.kind).toBe("FunctionType");
+      if (main.body[1].typeAnnotation?.kind === "FunctionType") {
+        expect(main.body[1].typeAnnotation.params).toHaveLength(0);
+      }
+    }
+  });
+
+  it("parses parameter default values as expressions", () => {
+    const { ast, diagnostics } = parse(`
+      function greet(name: string, greeting: string = "Hello"): void {}
+      function test(x: i32 = 10 + 5): void {}
+      function callDefault(x: i32 = getDefault()): void {}
+      function main(): void {}
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+
+    const greet = functionAt(ast, 0);
+    expect(greet.params[0]?.defaultValue).toBeNull();
+    expect(greet.params[1]?.defaultValue?.kind).toBe("StringLiteral");
+    if (greet.params[1]?.defaultValue?.kind === "StringLiteral") {
+      expect(greet.params[1].defaultValue.value).toBe("Hello");
+    }
+
+    const test = functionAt(ast, 1);
+    expect(test.params[0]?.defaultValue?.kind).toBe("BinaryExpression");
+
+    const callDefault = functionAt(ast, 2);
+    expect(callDefault.params[0]?.defaultValue?.kind).toBe("CallExpression");
+  });
+
+  it("rejects required parameters after defaults", () => {
+    const { diagnostics } = parse(`
+      function bad(a: i32 = 10, b: i32): void {}
+      function main(): void {}
+    `);
+    expect(diagnostics.hasErrors).toBe(true);
+    expect(diagnostics.diagnostics.some((d) => d.message.includes("Required parameters"))).toBe(
+      true,
+    );
+  });
+
+  it("parses named call arguments and rejects positional after named", () => {
+    const ok = parse(`
+      function main(): void {
+        createPerson(name: "Ethan", age: 16);
+        createPerson("Ethan", age: 16);
+      }
+    `);
+    expect(ok.diagnostics.hasErrors).toBe(false);
+    const body = functionAt(ok.ast, 0).body;
+    expect(body[0]?.kind).toBe("ExpressionStatement");
+    if (body[0]?.kind === "ExpressionStatement" && body[0].expression.kind === "CallExpression") {
+      expect(body[0].expression.args[0]?.kind).toBe("NamedArgument");
+      expect(body[0].expression.args[1]?.kind).toBe("NamedArgument");
+    }
+    if (body[1]?.kind === "ExpressionStatement" && body[1].expression.kind === "CallExpression") {
+      expect(body[1].expression.args[0]?.kind).toBe("StringLiteral");
+      expect(body[1].expression.args[1]?.kind).toBe("NamedArgument");
+    }
+
+    const bad = parse(`
+      function main(): void {
+        createPerson(name: "Ethan", 16);
+      }
+    `);
+    expect(bad.diagnostics.hasErrors).toBe(true);
+    expect(
+      bad.diagnostics.diagnostics.some((d) =>
+        d.message.includes("Positional arguments must come before named arguments"),
+      ),
+    ).toBe(true);
+  });
 });

@@ -1,4 +1,5 @@
 import type {
+  CallArgument,
   ClassDeclaration,
   ClassMethod,
   ConstructorDeclaration,
@@ -6,6 +7,7 @@ import type {
   Expression,
   FunctionDeclaration,
   InterfaceDeclaration,
+  Parameter,
   PrimitiveTypeName,
   Program,
   Statement,
@@ -29,7 +31,7 @@ import {
   type GenericInterfaceTemplate,
   type GenericStructTemplate,
 } from "./generics/registry.js";
-import { buildSubst, specializeStructDecl, substituteAnnotation } from "./generics/substitute.js";
+import { buildSubst, specializeStructDecl, substituteAnnotation, substituteExpression } from "./generics/substitute.js";
 import type { TypecheckInstantiations } from "./generics/monomorphize.js";
 import { mangleSymbol } from "./modules/mangle.js";
 import type { ResolvedModule } from "./modules/resolve.js";
@@ -3218,22 +3220,36 @@ function checkGenericFunctionCall(
   allowVoidCall: boolean,
   expectedType: ValueType | null,
 ): ValueType | null {
-  const argTypes: ValueType[] = [];
-  for (const arg of expr.args) {
-    const t = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+  const mapped = mapCallArgumentsToSlots(
+    expr.args,
+    "function",
+    tpl.decl.name.name,
+    tpl.decl.params,
+    expr.span,
+    diagnostics,
+  );
+  if (!mapped) {
+    return null;
+  }
+
+  const providedAnns: TypeAnnotation[] = [];
+  const providedTypes: ValueType[] = [];
+  for (let i = 0; i < tpl.decl.params.length; i += 1) {
+    const slot = mapped.slots[i];
+    if (slot === undefined) {
+      continue;
+    }
+    const t = checkExpression(slot, scope, functions, structs, enums, diagnostics);
     if (!t) {
       return null;
     }
-    argTypes.push(t);
+    providedAnns.push(tpl.decl.params[i]!.typeAnnotation);
+    providedTypes.push(t);
   }
 
   let typeArgs = expr.typeArgs;
   if (typeArgs.length === 0) {
-    const inferred = inferTypeArgs(
-      tpl.decl.typeParams,
-      tpl.decl.params.map((p) => p.typeAnnotation),
-      argTypes,
-    );
+    const inferred = inferTypeArgs(tpl.decl.typeParams, providedAnns, providedTypes);
     if (!inferred && expectedType && tpl.decl.returnType.kind === "NamedType") {
       const fromReturn = inferTypeArgs(
         tpl.decl.typeParams,
@@ -3296,24 +3312,31 @@ function checkGenericFunctionCall(
   }
   const sub = (ann: TypeAnnotation): TypeAnnotation => substituteAnnotation(ann, subst);
 
-  if (expr.args.length !== tpl.decl.params.length) {
-    diagnostics.error(
-      `Function '${tpl.decl.name.name}' expects ${tpl.decl.params.length} argument(s), got ${expr.args.length}`,
-      expr.span,
-      "E0315",
-    );
-    return null;
-  }
-
-  for (let i = 0; i < expr.args.length; i += 1) {
-    const expected = resolveAnnotation(sub(tpl.decl.params[i]!.typeAnnotation), structs, enums, diagnostics);
+  const paramTypes: ValueType[] = [];
+  for (const param of tpl.decl.params) {
+    const expected = resolveAnnotation(sub(param.typeAnnotation), structs, enums, diagnostics);
     if (expected === null) {
       return null;
     }
-    if (!valueMatchesBinding(expr.args[i]!, argTypes[i]!, expected)) {
-      diagnostics.error(typeMismatchMessage(expected, argTypes[i]!), expr.args[i]!.span, "E0303");
-      return null;
-    }
+    paramTypes.push(expected);
+  }
+
+  if (
+    !checkDeclarationCallArgs(
+      expr,
+      "function",
+      tpl.decl.name.name,
+      tpl.decl.params,
+      paramTypes,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      (defaultExpr) => substituteExpression(defaultExpr, subst),
+    )
+  ) {
+    return null;
   }
 
   const returnType = resolveReturnType(sub(tpl.decl.returnType), structs, enums, diagnostics);
@@ -3366,6 +3389,25 @@ function checkFunction(
     });
   }
 
+  const paramTypes: ValueType[] = [];
+  for (const param of fn.params) {
+    const paramType = resolveAnnotation(param.typeAnnotation, structs, enums, diagnostics);
+    if (paramType) {
+      paramTypes.push(paramType);
+    }
+  }
+  if (paramTypes.length === fn.params.length) {
+    checkParameterDefaultValues(
+      fn.params,
+      paramTypes,
+      new Map(),
+      functions,
+      structs,
+      enums,
+      diagnostics,
+    );
+  }
+
   for (const stmt of fn.body) {
     checkStatement(stmt, scope, functions, structs, enums, returnType, diagnostics, 0);
   }
@@ -3409,6 +3451,15 @@ function checkStructMethods(
       }
       scope.set(param.name.name, { type: paramType, mutable: false });
     }
+    checkParameterDefaultValues(
+      method.decl.params,
+      method.params,
+      new Map(),
+      functions,
+      structs,
+      enums,
+      diagnostics,
+    );
     for (const stmt of method.decl.body) {
       checkStatement(stmt, scope, functions, structs, enums, method.returnType, diagnostics, 0);
     }
@@ -3475,6 +3526,15 @@ function checkClassMembers(
       }
       scope.set(param.name.name, { type: paramType, mutable: false });
     }
+    checkParameterDefaultValues(
+      def.constructorDecl.params,
+      def.constructorParams,
+      new Map(),
+      functions,
+      structs,
+      enums,
+      diagnostics,
+    );
 
     const body = def.constructorDecl.body;
     if (def.superclass) {
@@ -3539,6 +3599,15 @@ function checkClassMembers(
       }
       scope.set(param.name.name, { type: paramType, mutable: false });
     }
+    checkParameterDefaultValues(
+      method.decl.params,
+      method.params,
+      new Map(),
+      functions,
+      structs,
+      enums,
+      diagnostics,
+    );
     const body = method.decl.body ?? [];
     for (const stmt of body) {
       checkStatement(stmt, scope, functions, structs, enums, method.returnType, diagnostics, 0);
@@ -4508,26 +4577,21 @@ function checkNamespaceCall(
     return null;
   }
 
-  if (expr.args.length !== sig.params.length) {
-    diagnostics.error(
-      `Function '${nsName}.${sig.name}' expects ${sig.params.length} argument(s), got ${expr.args.length}`,
-      expr.span,
-      "E0315",
-    );
+  if (
+    !checkDeclarationCallArgs(
+      expr,
+      "function",
+      `${nsName}.${sig.name}`,
+      sig.decl.params,
+      sig.params,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+    )
+  ) {
     return null;
-  }
-
-  for (let i = 0; i < expr.args.length; i += 1) {
-    const arg = expr.args[i]!;
-    const expected = sig.params[i]!;
-    const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-    if (!argType) {
-      return null;
-    }
-    if (!valueMatchesBinding(arg, argType, expected)) {
-      diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
-      return null;
-    }
   }
 
   if (sig.returnType === "void") {
@@ -4542,6 +4606,287 @@ function checkNamespaceCall(
   }
 
   return sig.returnType;
+}
+
+type CalleeLabelKind = "function" | "method" | "constructor";
+
+interface MappedCallSlots {
+  readonly slots: (Expression | undefined)[];
+  readonly namedIndices: ReadonlySet<number>;
+  readonly providedCount: number;
+}
+
+function calleeLabel(kind: CalleeLabelKind, name: string): string {
+  if (kind === "function") {
+    return `Function '${name}'`;
+  }
+  if (kind === "method") {
+    return `Method '${name}'`;
+  }
+  return `Constructor of '${name}'`;
+}
+
+function mapCallArgumentsToSlots(
+  callArgs: readonly CallArgument[],
+  kind: CalleeLabelKind,
+  calleeName: string,
+  params: readonly Parameter[],
+  callSpan: SourceSpan,
+  diagnostics: DiagnosticCollector,
+): MappedCallSlots | null {
+  const n = params.length;
+  const slots: (Expression | undefined)[] = Array.from({ length: n }, () => undefined);
+  const namedIndices = new Set<number>();
+  let nextPositional = 0;
+  let sawNamed = false;
+  let providedCount = 0;
+
+  for (const arg of callArgs) {
+    if (arg.kind === "NamedArgument") {
+      sawNamed = true;
+      const idx = params.findIndex((p) => p.name.name === arg.name.name);
+      if (idx < 0) {
+        diagnostics.error(
+          `${calleeLabel(kind, calleeName)} has no parameter named '${arg.name.name}'.`,
+          arg.name.span,
+          "E0316",
+        );
+        return null;
+      }
+      if (slots[idx] !== undefined) {
+        diagnostics.error(
+          `Argument '${arg.name.name}' was provided more than once.`,
+          arg.name.span,
+          "E0317",
+        );
+        return null;
+      }
+      slots[idx] = arg.value;
+      namedIndices.add(idx);
+      providedCount += 1;
+      continue;
+    }
+
+    if (sawNamed) {
+      diagnostics.error(
+        "Positional arguments must come before named arguments",
+        arg.span,
+        "E0102",
+      );
+      return null;
+    }
+    if (nextPositional >= n) {
+      diagnostics.error(
+        `${calleeLabel(kind, calleeName)} expects ${n} argument(s), got ${callArgs.length}`,
+        callSpan,
+        "E0315",
+      );
+      return null;
+    }
+    const paramName = params[nextPositional]!.name.name;
+    if (slots[nextPositional] !== undefined) {
+      diagnostics.error(
+        `Argument '${paramName}' was provided more than once.`,
+        arg.span,
+        "E0317",
+      );
+      return null;
+    }
+    slots[nextPositional] = arg;
+    providedCount += 1;
+    nextPositional += 1;
+  }
+
+  return { slots, namedIndices, providedCount };
+}
+
+function fillDefaultArgumentSlots(
+  mapped: MappedCallSlots,
+  kind: CalleeLabelKind,
+  calleeName: string,
+  params: readonly Parameter[],
+  callSpan: SourceSpan,
+  diagnostics: DiagnosticCollector,
+  rewriteDefault?: (expr: Expression) => Expression,
+): Expression[] | null {
+  const resolved: Expression[] = [];
+  for (let i = 0; i < params.length; i += 1) {
+    const existing = mapped.slots[i];
+    if (existing !== undefined) {
+      resolved.push(existing);
+      continue;
+    }
+    const defaultValue = params[i]!.defaultValue;
+    if (defaultValue) {
+      resolved.push(rewriteDefault ? rewriteDefault(defaultValue) : defaultValue);
+      continue;
+    }
+    diagnostics.error(
+      `${calleeLabel(kind, calleeName)} expects ${params.length} argument(s), got ${mapped.providedCount}`,
+      callSpan,
+      "E0315",
+    );
+    return null;
+  }
+  return resolved;
+}
+
+function rewriteCallArgs(
+  target: { args: readonly CallArgument[] },
+  resolved: Expression[],
+): void {
+  (target as { args: CallArgument[] }).args = resolved;
+}
+
+/**
+ * Map named/positional args, fill defaults, typecheck, and rewrite to positional Expression[].
+ * Used when the callee resolves to a declaration with Parameter[].
+ */
+function checkDeclarationCallArgs(
+  target: { args: CallArgument[]; span: SourceSpan },
+  kind: CalleeLabelKind,
+  calleeName: string,
+  params: readonly Parameter[],
+  paramTypes: readonly ValueType[],
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  rewriteDefault?: (expr: Expression) => Expression,
+): boolean {
+  const mapped = mapCallArgumentsToSlots(
+    target.args,
+    kind,
+    calleeName,
+    params,
+    target.span,
+    diagnostics,
+  );
+  if (!mapped) {
+    return false;
+  }
+  const resolved = fillDefaultArgumentSlots(
+    mapped,
+    kind,
+    calleeName,
+    params,
+    target.span,
+    diagnostics,
+    rewriteDefault,
+  );
+  if (!resolved) {
+    return false;
+  }
+
+  for (let i = 0; i < resolved.length; i += 1) {
+    const arg = resolved[i]!;
+    const expected = paramTypes[i]!;
+    const argType = checkExpression(
+      arg,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      false,
+      expected,
+    );
+    if (!argType) {
+      return false;
+    }
+    if (!valueMatchesBinding(arg, argType, expected)) {
+      if (mapped.namedIndices.has(i)) {
+        diagnostics.error(
+          `Argument '${params[i]!.name.name}' expects ${typeToString(expected)}, got ${typeToString(argType)}.`,
+          arg.span,
+          "E0303",
+        );
+      } else {
+        diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+      }
+      return false;
+    }
+  }
+
+  rewriteCallArgs(target, resolved);
+  return true;
+}
+
+function checkParameterDefaultValues(
+  params: readonly Parameter[],
+  paramTypes: readonly ValueType[],
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+): void {
+  for (let i = 0; i < params.length; i += 1) {
+    const param = params[i]!;
+    if (!param.defaultValue) {
+      continue;
+    }
+    const expected = paramTypes[i];
+    if (!expected) {
+      continue;
+    }
+    const defaultType = checkExpression(
+      param.defaultValue,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      false,
+      expected,
+    );
+    if (!defaultType) {
+      continue;
+    }
+    if (!valueMatchesBinding(param.defaultValue, defaultType, expected)) {
+      diagnostics.error(
+        `Default value of type ${typeToString(defaultType)} is not assignable to parameter type ${typeToString(expected)}.`,
+        param.defaultValue.span,
+        "E0303",
+      );
+    }
+  }
+}
+
+function findInterfaceMethodParams(
+  def: InterfaceDef,
+  methodName: string,
+): Parameter[] | null {
+  for (const method of def.decl.methods) {
+    if (method.name.name === methodName) {
+      return method.params;
+    }
+  }
+  for (const base of def.bases) {
+    const found = findInterfaceMethodParams(base, methodName);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function rejectNamedArgsOnFunctionValue(
+  args: readonly CallArgument[],
+  diagnostics: DiagnosticCollector,
+): boolean {
+  for (const arg of args) {
+    if (arg.kind === "NamedArgument") {
+      diagnostics.error(
+        "Named arguments require a direct function reference",
+        arg.span,
+        "E0318",
+      );
+      return false;
+    }
+  }
+  return true;
 }
 
 function checkExpression(
@@ -5113,14 +5458,6 @@ function checkExpression(
         let typeArgs = expr.typeArgs;
         if (typeArgs.length === 0) {
           // Infer from constructor args.
-          const argTypes: ValueType[] = [];
-          for (const arg of expr.args) {
-            const t = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-            if (!t) {
-              return null;
-            }
-            argTypes.push(t);
-          }
           const ctor = classTpl.decl.members.find((m) => m.kind === "ConstructorDeclaration");
           if (!ctor || ctor.kind !== "ConstructorDeclaration") {
             diagnostics.error(
@@ -5130,10 +5467,35 @@ function checkExpression(
             );
             return null;
           }
+          const mapped = mapCallArgumentsToSlots(
+            expr.args,
+            "constructor",
+            expr.className.name,
+            ctor.params,
+            expr.span,
+            diagnostics,
+          );
+          if (!mapped) {
+            return null;
+          }
+          const providedAnns: TypeAnnotation[] = [];
+          const providedTypes: ValueType[] = [];
+          for (let i = 0; i < ctor.params.length; i += 1) {
+            const slot = mapped.slots[i];
+            if (slot === undefined) {
+              continue;
+            }
+            const t = checkExpression(slot, scope, functions, structs, enums, diagnostics);
+            if (!t) {
+              return null;
+            }
+            providedAnns.push(ctor.params[i]!.typeAnnotation);
+            providedTypes.push(t);
+          }
           const inferred = inferTypeArgs(
             classTpl.decl.typeParams,
-            ctor.params.map((p) => p.typeAnnotation),
-            argTypes,
+            providedAnns,
+            providedTypes,
           );
           if (!inferred) {
             diagnostics.error(
@@ -5164,24 +5526,22 @@ function checkExpression(
           if (!classDef) {
             return null;
           }
-          // Validate args against specialized constructor.
-          if (expr.args.length !== classDef.constructorParams.length) {
-            diagnostics.error(
-              `Constructor of '${classDef.localName}' expects ${classDef.constructorParams.length} argument(s), got ${expr.args.length}`,
-              expr.span,
-              "E0315",
-            );
+          const ctorParams = classDef.constructorDecl?.params ?? ctor.params;
+          if (
+            !checkDeclarationCallArgs(
+              expr,
+              "constructor",
+              classDef.localName,
+              ctorParams,
+              classDef.constructorParams,
+              scope,
+              functions,
+              structs,
+              enums,
+              diagnostics,
+            )
+          ) {
             return null;
-          }
-          for (let i = 0; i < expr.args.length; i += 1) {
-            if (!valueMatchesBinding(expr.args[i]!, argTypes[i]!, classDef.constructorParams[i]!)) {
-              diagnostics.error(
-                typeMismatchMessage(classDef.constructorParams[i]!, argTypes[i]!),
-                expr.args[i]!.span,
-                "E0303",
-              );
-              return null;
-            }
           }
           return { kind: "class", name: classDef.name };
         }
@@ -5230,24 +5590,47 @@ function checkExpression(
         );
         return null;
       }
-      if (expr.args.length !== classDef.constructorParams.length) {
-        diagnostics.error(
-          `Constructor of '${classDef.localName}' expects ${classDef.constructorParams.length} argument(s), got ${expr.args.length}`,
-          expr.span,
-          "E0315",
-        );
-        return null;
-      }
-      for (let i = 0; i < expr.args.length; i += 1) {
-        const arg = expr.args[i]!;
-        const expected = classDef.constructorParams[i]!;
-        const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-        if (!argType) {
+      const ctorParams = classDef.constructorDecl?.params ?? null;
+      if (ctorParams && ctorParams.length === classDef.constructorParams.length) {
+        if (
+          !checkDeclarationCallArgs(
+            expr,
+            "constructor",
+            classDef.localName,
+            ctorParams,
+            classDef.constructorParams,
+            scope,
+            functions,
+            structs,
+            enums,
+            diagnostics,
+          )
+        ) {
           return null;
         }
-        if (!valueMatchesBinding(arg, argType, expected)) {
-          diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+      } else {
+        if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
           return null;
+        }
+        if (expr.args.length !== classDef.constructorParams.length) {
+          diagnostics.error(
+            `Constructor of '${classDef.localName}' expects ${classDef.constructorParams.length} argument(s), got ${expr.args.length}`,
+            expr.span,
+            "E0315",
+          );
+          return null;
+        }
+        for (let i = 0; i < expr.args.length; i += 1) {
+          const arg = expr.args[i]! as Expression;
+          const expected = classDef.constructorParams[i]!;
+          const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+          if (!argType) {
+            return null;
+          }
+          if (!valueMatchesBinding(arg, argType, expected)) {
+            diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+            return null;
+          }
         }
       }
       return { kind: "class", name: classDef.name };
@@ -5427,33 +5810,56 @@ function checkExpression(
           return null;
         }
         const base = memberContext.enclosingClass.superclass;
-        if (expr.args.length !== base.constructorParams.length) {
-          diagnostics.error(
-            `super(...) expects ${base.constructorParams.length} argument(s), got ${expr.args.length}`,
-            expr.span,
-            "E0315",
-          );
-          return null;
-        }
-        for (let i = 0; i < expr.args.length; i += 1) {
-          const arg = expr.args[i]!;
-          const expected = base.constructorParams[i]!;
-          const argType = checkExpression(
-            arg,
-            scope,
-            functions,
-            structs,
-            enums,
-            diagnostics,
-            false,
-            expected,
-          );
-          if (!argType) {
+        const ctorParams = base.constructorDecl?.params ?? null;
+        if (ctorParams && ctorParams.length === base.constructorParams.length) {
+          if (
+            !checkDeclarationCallArgs(
+              expr,
+              "constructor",
+              base.localName,
+              ctorParams,
+              base.constructorParams,
+              scope,
+              functions,
+              structs,
+              enums,
+              diagnostics,
+            )
+          ) {
             return null;
           }
-          if (!valueMatchesBinding(arg, argType, expected)) {
-            diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+        } else {
+          if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
             return null;
+          }
+          if (expr.args.length !== base.constructorParams.length) {
+            diagnostics.error(
+              `super(...) expects ${base.constructorParams.length} argument(s), got ${expr.args.length}`,
+              expr.span,
+              "E0315",
+            );
+            return null;
+          }
+          for (let i = 0; i < expr.args.length; i += 1) {
+            const arg = expr.args[i]! as Expression;
+            const expected = base.constructorParams[i]!;
+            const argType = checkExpression(
+              arg,
+              scope,
+              functions,
+              structs,
+              enums,
+              diagnostics,
+              false,
+              expected,
+            );
+            if (!argType) {
+              return null;
+            }
+            if (!valueMatchesBinding(arg, argType, expected)) {
+              diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+              return null;
+            }
           }
         }
         if (!allowVoidCall) {
@@ -5488,6 +5894,14 @@ function checkExpression(
           return null;
         }
         for (const arg of expr.args) {
+          if (arg.kind === "NamedArgument") {
+            diagnostics.error(
+              "Named arguments are not supported for 'print'",
+              arg.span,
+              "E0318",
+            );
+            return null;
+          }
           const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
           if (!argType) {
             return null;
@@ -5567,35 +5981,21 @@ function checkExpression(
           );
         }
 
-        if (expr.args.length !== sig.params.length) {
-          diagnostics.error(
-            `Function '${sig.name}' expects ${sig.params.length} argument(s), got ${expr.args.length}`,
-            expr.span,
-            "E0315",
-          );
-          return null;
-        }
-
-        for (let i = 0; i < expr.args.length; i += 1) {
-          const arg = expr.args[i]!;
-          const expected = sig.params[i]!;
-          const argType = checkExpression(
-            arg,
+        if (
+          !checkDeclarationCallArgs(
+            expr,
+            "function",
+            sig.name,
+            sig.decl.params,
+            sig.params,
             scope,
             functions,
             structs,
             enums,
             diagnostics,
-            false,
-            expected,
-          );
-          if (!argType) {
-            return null;
-          }
-          if (!valueMatchesBinding(arg, argType, expected)) {
-            diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
-            return null;
-          }
+          )
+        ) {
+          return null;
         }
 
         if (sig.returnType === "void") {
@@ -5656,6 +6056,9 @@ function checkFunctionValueCall(
   diagnostics: DiagnosticCollector,
   allowVoidCall: boolean,
 ): ValueType | null {
+  if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
+    return null;
+  }
   if (expr.args.length !== fnType.params.length) {
     diagnostics.error(
       `Function value expects ${fnType.params.length} argument(s), got ${expr.args.length}`,
@@ -5665,7 +6068,7 @@ function checkFunctionValueCall(
     return null;
   }
   for (let i = 0; i < expr.args.length; i += 1) {
-    const arg = expr.args[i]!;
+    const arg = expr.args[i]! as Expression;
     const expected = fnType.params[i]! as ValueType;
     const argType = checkExpression(
       arg,
@@ -5914,7 +6317,13 @@ function collectLambdaCaptures(
       }
       case "CallExpression":
         walkExpr(e.callee);
-        for (const a of e.args) walkExpr(a);
+        for (const a of e.args) {
+          if (a.kind === "NamedArgument") {
+            walkExpr(a.value);
+          } else {
+            walkExpr(a);
+          }
+        }
         break;
       case "BinaryExpression":
         walkExpr(e.left);
@@ -5941,7 +6350,13 @@ function collectLambdaCaptures(
         for (const f of e.fields) walkExpr(f.value);
         break;
       case "NewExpression":
-        for (const a of e.args) walkExpr(a);
+        for (const a of e.args) {
+          if (a.kind === "NamedArgument") {
+            walkExpr(a.value);
+          } else {
+            walkExpr(a);
+          }
+        }
         break;
       default:
         break;
@@ -6062,6 +6477,7 @@ function checkMethodCall(
       return checkMethodArgs(
         method.name,
         method.params,
+        method.decl?.params ?? null,
         method.returnType,
         expr,
         scope,
@@ -6105,6 +6521,7 @@ function checkMethodCall(
     return checkMethodArgs(
       method.name,
       method.params,
+      method.decl.params,
       method.returnType,
       expr,
       scope,
@@ -6162,6 +6579,7 @@ function checkMethodCall(
     return checkMethodArgs(
       method.name,
       method.params,
+      method.decl?.params ?? null,
       method.returnType,
       expr,
       scope,
@@ -6191,6 +6609,7 @@ function checkMethodCall(
     return checkMethodArgs(
       method.name,
       method.params,
+      findInterfaceMethodParams(def, method.name),
       method.returnType,
       expr,
       scope,
@@ -6225,6 +6644,7 @@ function checkMethodCall(
         return checkMethodArgs(
           method.name,
           method.params,
+          findInterfaceMethodParams(def, method.name),
           method.returnType,
           expr,
           scope,
@@ -6258,6 +6678,9 @@ function checkMethodCall(
 
   switch (method) {
     case "push": {
+      if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
+        return null;
+      }
       if (expr.args.length !== 1) {
         diagnostics.error(
           `Method 'push' expects 1 argument, got ${expr.args.length}`,
@@ -6266,7 +6689,7 @@ function checkMethodCall(
         );
         return null;
       }
-      const arg = expr.args[0]!;
+      const arg = expr.args[0]! as Expression;
       const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
       if (!argType) {
         return null;
@@ -6292,6 +6715,9 @@ function checkMethodCall(
       return elementType;
     }
     case "includes": {
+      if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
+        return null;
+      }
       if (expr.args.length !== 1) {
         diagnostics.error(
           `Method 'includes' expects 1 argument, got ${expr.args.length}`,
@@ -6308,7 +6734,7 @@ function checkMethodCall(
         );
         return null;
       }
-      const arg = expr.args[0]!;
+      const arg = expr.args[0]! as Expression;
       const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
       if (!argType) {
         return null;
@@ -6320,6 +6746,9 @@ function checkMethodCall(
       return "bool";
     }
     case "indexOf": {
+      if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
+        return null;
+      }
       if (expr.args.length !== 1) {
         diagnostics.error(
           `Method 'indexOf' expects 1 argument, got ${expr.args.length}`,
@@ -6336,7 +6765,7 @@ function checkMethodCall(
         );
         return null;
       }
-      const arg = expr.args[0]!;
+      const arg = expr.args[0]! as Expression;
       const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
       if (!argType) {
         return null;
@@ -6364,22 +6793,36 @@ function checkGenericMethodCall(
   diagnostics: DiagnosticCollector,
   allowVoidCall: boolean,
 ): ValueType | null {
-  const argTypes: ValueType[] = [];
-  for (const arg of expr.args) {
-    const t = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+  const mapped = mapCallArgumentsToSlots(
+    expr.args,
+    "method",
+    method.name.name,
+    method.params,
+    expr.span,
+    diagnostics,
+  );
+  if (!mapped) {
+    return null;
+  }
+
+  const providedAnns: TypeAnnotation[] = [];
+  const providedTypes: ValueType[] = [];
+  for (let i = 0; i < method.params.length; i += 1) {
+    const slot = mapped.slots[i];
+    if (slot === undefined) {
+      continue;
+    }
+    const t = checkExpression(slot, scope, functions, structs, enums, diagnostics);
     if (!t) {
       return null;
     }
-    argTypes.push(t);
+    providedAnns.push(method.params[i]!.typeAnnotation);
+    providedTypes.push(t);
   }
 
   let typeArgs = expr.typeArgs;
   if (typeArgs.length === 0) {
-    const inferred = inferTypeArgs(
-      method.typeParams,
-      method.params.map((p) => p.typeAnnotation),
-      argTypes,
-    );
+    const inferred = inferTypeArgs(method.typeParams, providedAnns, providedTypes);
     if (!inferred) {
       diagnostics.error(
         `Cannot infer type arguments for method '${method.name.name}'`,
@@ -6424,24 +6867,33 @@ function checkGenericMethodCall(
   const subst = buildSubst(method.typeParams, typeArgs);
   const sub = (ann: TypeAnnotation): TypeAnnotation => substituteAnnotation(ann, subst);
 
-  if (expr.args.length !== method.params.length) {
-    diagnostics.error(
-      `Method '${method.name.name}' expects ${method.params.length} argument(s), got ${expr.args.length}`,
-      expr.span,
-      "E0315",
-    );
-    return null;
-  }
-  for (let i = 0; i < expr.args.length; i += 1) {
-    const expected = resolveAnnotation(sub(method.params[i]!.typeAnnotation), structs, enums, diagnostics);
+  const paramTypes: ValueType[] = [];
+  for (const param of method.params) {
+    const expected = resolveAnnotation(sub(param.typeAnnotation), structs, enums, diagnostics);
     if (expected === null) {
       return null;
     }
-    if (!valueMatchesBinding(expr.args[i]!, argTypes[i]!, expected)) {
-      diagnostics.error(typeMismatchMessage(expected, argTypes[i]!), expr.args[i]!.span, "E0303");
-      return null;
-    }
+    paramTypes.push(expected);
   }
+
+  if (
+    !checkDeclarationCallArgs(
+      expr,
+      "method",
+      method.name.name,
+      method.params,
+      paramTypes,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      (defaultExpr) => substituteExpression(defaultExpr, subst),
+    )
+  ) {
+    return null;
+  }
+
   const returnType = resolveReturnType(sub(method.returnType), structs, enums, diagnostics);
   if (returnType === undefined) {
     return null;
@@ -6462,6 +6914,7 @@ function checkGenericMethodCall(
 function checkMethodArgs(
   name: string,
   params: ValueType[],
+  paramDecls: readonly Parameter[] | null,
   returnType: ReturnType,
   expr: Extract<Expression, { kind: "CallExpression" }>,
   scope: Map<string, Binding>,
@@ -6471,24 +6924,46 @@ function checkMethodArgs(
   diagnostics: DiagnosticCollector,
   allowVoidCall: boolean,
 ): ValueType | null {
-  if (expr.args.length !== params.length) {
-    diagnostics.error(
-      `Method '${name}' expects ${params.length} argument(s), got ${expr.args.length}`,
-      expr.span,
-      "E0315",
-    );
-    return null;
-  }
-  for (let i = 0; i < expr.args.length; i += 1) {
-    const arg = expr.args[i]!;
-    const expected = params[i]!;
-    const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-    if (!argType) {
+  if (paramDecls && paramDecls.length === params.length) {
+    if (
+      !checkDeclarationCallArgs(
+        expr,
+        "method",
+        name,
+        paramDecls,
+        params,
+        scope,
+        functions,
+        structs,
+        enums,
+        diagnostics,
+      )
+    ) {
       return null;
     }
-    if (!valueMatchesBinding(arg, argType, expected)) {
-      diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+  } else {
+    if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
       return null;
+    }
+    if (expr.args.length !== params.length) {
+      diagnostics.error(
+        `Method '${name}' expects ${params.length} argument(s), got ${expr.args.length}`,
+        expr.span,
+        "E0315",
+      );
+      return null;
+    }
+    for (let i = 0; i < expr.args.length; i += 1) {
+      const arg = expr.args[i]! as Expression;
+      const expected = params[i]!;
+      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
+      if (!argType) {
+        return null;
+      }
+      if (!valueMatchesBinding(arg, argType, expected)) {
+        diagnostics.error(typeMismatchMessage(expected, argType), arg.span, "E0303");
+        return null;
+      }
     }
   }
   if (returnType === "void") {

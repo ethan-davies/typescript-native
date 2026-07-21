@@ -190,7 +190,11 @@ function rewriteExpression(expr: Expression, inst: TypecheckInstantiations): Exp
         ...expr,
         callee,
         typeArgs: [],
-        args: expr.args.map((a) => rewriteExpression(a, inst)),
+        args: expr.args.map((a) =>
+          a.kind === "NamedArgument"
+            ? { ...a, value: rewriteExpression(a.value, inst) }
+            : rewriteExpression(a, inst),
+        ),
       };
     }
     case "LambdaExpression":
@@ -222,7 +226,11 @@ function rewriteExpression(expr: Expression, inst: TypecheckInstantiations): Exp
         ...expr,
         className: rewrite ? { ...expr.className, name: rewrite } : expr.className,
         typeArgs: [],
-        args: expr.args.map((a) => rewriteExpression(a, inst)),
+        args: expr.args.map((a) =>
+          a.kind === "NamedArgument"
+            ? { ...a, value: rewriteExpression(a.value, inst) }
+            : rewriteExpression(a, inst),
+        ),
       };
     }
     case "StructLiteral": {

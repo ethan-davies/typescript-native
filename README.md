@@ -86,7 +86,10 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 - Reassignment for `let` only (`=`, `+=`, `-=`, `++`, `--` on numeric lets)
 - Arrays: literals `[1, 2, 3]`, indexing, element assignment, `.length`, `.push` / `.pop` / `.includes` / `.indexOf`
 - Tuples: fixed-length heterogeneous products `[string, i32]`, const/dynamic indexing (dynamic → union), `.length`, element assignment with constant indexes, destructuring with holes
-- Arrow lambdas `(a: i32, b: i32) => a + b` and block bodies; function types `(i32, i32) => i32`; contextual typing for parameters; first-class named functions; closures with capture-by-reference for `let` (heap boxes) and by-value for `const` (no generic lambdas yet)
+- Function types `(i32, i32) => i32`: annotate variables, parameters, and return types; use in `type` aliases; assign and pass named functions as first-class values; call through function-typed expressions
+- Default parameter values (`greeting: string = "Hello"`) evaluated at the call site when omitted; required parameters must precede defaults
+- Named call arguments (`createPerson(age: 16, name: "Ethan")`), any order, mixed with leading positionals; can skip middle defaults (`configure(host, secure: true)`). Defaults and named args apply only to direct function/method references — not through function-typed values
+- Arrow lambdas `(a: i32, b: i32) => a + b` and block bodies; contextual typing from an expected function type; closures with capture-by-reference for `let` (heap boxes) and by-value for `const` (no generic lambdas yet)
 - Literals: integers, floats, booleans, strings, chars, `null`
 - `print(...)` of printable values; multiple args are joined with spaces
 - String concatenation with `+`
@@ -122,7 +125,9 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 | [`examples/multi-constraints.tsn`](./examples/multi-constraints.tsn) | Multi-constraints (`T extends A & B`) |
 | [`examples/dictionaries.tsn`](./examples/dictionaries.tsn) | Index signatures as string-keyed maps |
 | [`examples/type-operators.tsn`](./examples/type-operators.tsn) | `keyof` / `typeof` / conditionals / mapped types / `T[K]` |
-| [`examples/lambdas.tsn`](./examples/lambdas.tsn) | Arrow lambdas, function types, contextual typing, closures |
+| [`examples/function-types.tsn`](./examples/function-types.tsn) | Function type annotations, aliases, named functions as values |
+| [`examples/default-named-args.tsn`](./examples/default-named-args.tsn) | Default parameters and named call arguments |
+| [`examples/lambdas.tsn`](./examples/lambdas.tsn) | Arrow lambdas, contextual typing, closures |
 
 ## Development
 
