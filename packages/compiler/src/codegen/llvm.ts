@@ -2277,9 +2277,10 @@ export class LlvmCodegen {
     if (!classInfo) {
       throw new Error(`Codegen: unknown class '${expr.className.name}'`);
     }
-    const size = classObjectByteSize(classInfo, this.structs);
     const obj = this.nextTemp();
-    lines.push(`  ${obj} = call ptr @tsn_alloc(i64 noundef ${size})`);
+    lines.push(
+      `  ${obj} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(`%${classInfo.name}`)})`,
+    );
     const vtPtr = this.nextTemp();
     lines.push(
       `  ${vtPtr} = getelementptr inbounds %${classInfo.name}, ptr ${obj}, i32 0, i32 0`,
@@ -2974,8 +2975,9 @@ export class LlvmCodegen {
       const boxHolder = `%v.${name}`;
       lines.push(`  ${boxHolder} = alloca ptr`);
       const heap = this.nextTemp();
-      const size = elementByteSize(type, this.structs);
-      lines.push(`  ${heap} = call ptr @tsn_alloc(i64 noundef ${size})`);
+      lines.push(
+        `  ${heap} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(llvmType)})`,
+      );
       lines.push(`  store ptr ${heap}, ptr ${boxHolder}`);
       this.locals.set(name, { ptr: boxHolder, type, boxed: true });
       if (stmt.initializer === null) {
@@ -4251,10 +4253,10 @@ export class LlvmCodegen {
 
     const length = elements.length;
     const capacity = Math.max(length, 4);
-    const elemSize = elementByteSize(elementType, this.structs);
+    const elemLlvm = toLlvmType(elementType);
     const header = this.nextTemp();
     lines.push(
-      `  ${header} = call ptr @tsn_array_new(i64 noundef ${length}, i64 noundef ${capacity}, i64 noundef ${elemSize})`,
+      `  ${header} = call ptr @tsn_array_new(i64 noundef ${length}, i64 noundef ${capacity}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
 
     const dataField = this.nextTemp();
@@ -4262,7 +4264,6 @@ export class LlvmCodegen {
     const data = this.nextTemp();
     lines.push(`  ${data} = load ptr, ptr ${dataField}`);
 
-    const elemLlvm = toLlvmType(elementType);
     for (let i = 0; i < elements.length; i += 1) {
       const value = this.emitExpression(elements[i]!, lines, elementType);
       const slot = this.nextTemp();
@@ -4783,26 +4784,24 @@ export class LlvmCodegen {
     lines: string[],
   ): void {
     this.needsTsnArray = true;
-    const elemSize = elementByteSize(elementType, this.structs);
     const elemLlvm = toLlvmType(elementType);
     const value = this.emitExpression(arg, lines, elementType);
     const valuePtr = this.nextTemp();
     lines.push(`  ${valuePtr} = alloca ${elemLlvm}`);
     lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${valuePtr}`);
     lines.push(
-      `  call void @tsn_array_push(ptr noundef ${header}, ptr noundef ${valuePtr}, i64 noundef ${elemSize})`,
+      `  call void @tsn_array_push(ptr noundef ${header}, ptr noundef ${valuePtr}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
   }
 
   private emitArrayPop(header: string, elementType: ValueType, lines: string[]): EmittedValue {
     this.needsTsnArray = true;
     this.needsAbort = true;
-    const elemSize = elementByteSize(elementType, this.structs);
     const elemLlvm = toLlvmType(elementType);
     const dest = this.nextTemp();
     lines.push(`  ${dest} = alloca ${elemLlvm}`);
     lines.push(
-      `  call void @tsn_array_pop(ptr noundef ${header}, ptr noundef ${dest}, i64 noundef ${elemSize})`,
+      `  call void @tsn_array_pop(ptr noundef ${header}, ptr noundef ${dest}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
     const loaded = this.nextTemp();
     lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${dest}`);
@@ -4829,7 +4828,6 @@ export class LlvmCodegen {
   ): EmittedValue {
     this.needsTsnArray = true;
     const needle = this.emitExpression(arg, lines, elementType);
-    const elemSize = elementByteSize(elementType, this.structs);
     const cmpKind = this.tsnCmpKindForType(elementType);
     const elemLlvm = toLlvmType(elementType);
     const needlePtr = this.nextTemp();
@@ -4837,7 +4835,7 @@ export class LlvmCodegen {
     lines.push(`  store ${elemLlvm} ${needle.llvm}, ptr ${needlePtr}`);
     const result = this.nextTemp();
     lines.push(
-      `  ${result} = call i32 @tsn_array_index_of(ptr noundef ${header}, ptr noundef ${needlePtr}, i64 noundef ${elemSize}, i32 noundef ${cmpKind})`,
+      `  ${result} = call i32 @tsn_array_index_of(ptr noundef ${header}, ptr noundef ${needlePtr}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${cmpKind})`,
     );
     return { llvm: result, type: "i32" };
   }
@@ -5407,9 +5405,10 @@ export class LlvmCodegen {
     let envPtr = "null";
     if (captures.length > 0) {
       const envTypeName = this.envTypeName(expr.span.start.offset, captures);
-      const envSize = this.envByteSize(captures);
       envPtr = this.nextTemp();
-      lines.push(`  ${envPtr} = call ptr @tsn_alloc(i64 noundef ${envSize})`);
+      lines.push(
+        `  ${envPtr} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(`%${envTypeName}`)})`,
+      );
       for (let i = 0; i < captures.length; i += 1) {
         const cap = captures[i]!;
         const fieldPtr = this.nextTemp();
@@ -5490,15 +5489,6 @@ export class LlvmCodegen {
       this.globalDefs.push(`%${name} = type { ${fields || "i8"} }`);
     }
     return name;
-  }
-
-  private envByteSize(captures: LambdaCaptureLowering[]): number {
-    let size = 0;
-    for (const c of captures) {
-      size = alignUp(size, 8);
-      size += c.mutable ? 8 : elementByteSize(c.type, this.structs);
-    }
-    return alignUp(size, 8) || 8;
   }
 
   private ensureLambdaFunction(
@@ -5670,11 +5660,11 @@ export class LlvmCodegen {
   private emitPrintValue(value: EmittedValue, lines: string[]): void {
     if (isArrayType(value.type)) {
       this.needsTsnFormat = true;
-      const elemSize = elementByteSize(value.type.element, this.structs);
+      const elemLlvm = toLlvmType(value.type.element);
       const fmtKind = this.tsnFmtKindForType(value.type.element);
       const arrayStr = this.nextTemp();
       lines.push(
-        `  ${arrayStr} = call ptr @tsn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${elemSize}, i32 noundef ${fmtKind})`,
+        `  ${arrayStr} = call ptr @tsn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${fmtKind})`,
       );
       lines.push(`  call void @tsn_print_str(ptr noundef ${arrayStr})`);
       return;
@@ -5768,6 +5758,14 @@ function comparisonPredicate(operator: string, type: ValueType): string {
     default:
       throw new Error(`Codegen: unexpected comparison '${operator}'`);
   }
+}
+
+/**
+ * Byte size of an LLVM type as a constant expression resolved by the target
+ * data layout (GEP-null sizeof), rather than a hardcoded TS integer.
+ */
+function llvmSizeofExpr(llvmType: string): string {
+  return `ptrtoint (ptr getelementptr (${llvmType}, ptr null, i32 1) to i64)`;
 }
 
 /**
@@ -5894,123 +5892,8 @@ function zeroInitializer(type: ValueType): string {
   }
 }
 
-function classObjectByteSize(
-  info: ClassInfo,
-  structs: Map<string, StructInfo>,
-): number {
-  let size = 8; // vtable ptr
-  for (const field of info.fields) {
-    const align = fieldAlign(field.type);
-    size = alignUp(size, align);
-    size += elementByteSize(field.type, structs);
-  }
-  return alignUp(size, 8);
-}
-
-function elementByteSize(type: ValueType, structs?: Map<string, StructInfo>): number {
-  if (typeof type === "object") {
-    if (type.kind === "struct") {
-      return structByteSize(type.name, structs);
-    }
-    if (type.kind === "tuple") {
-      let size = 0;
-      let maxAlign = 1;
-      for (const el of type.elements) {
-        const align = fieldAlign(el);
-        size = alignUp(size, align);
-        size += elementByteSize(el, structs);
-        maxAlign = Math.max(maxAlign, align);
-      }
-      return alignUp(size, maxAlign);
-    }
-    if (type.kind === "interface") {
-      return 16; // { ptr, ptr }
-    }
-    if (type.kind === "enum") {
-      return 4;
-    }
-    if (type.kind === "map") {
-      return 8;
-    }
-    if (type.kind === "function") {
-      return 16;
-    }
-    // class / array ptr
-    return 8;
-  }
-  switch (type) {
-    case "i32":
-      return 4;
-    case "i64":
-      return 8;
-    case "f32":
-      return 4;
-    case "f64":
-      return 8;
-    case "bool":
-      return 1;
-    case "char":
-      return 1;
-    case "string":
-      return 8;
-    case "null":
-      return 8;
-  }
-}
-
-function fieldAlign(type: ValueType): number {
-  if (typeof type === "object") {
-    if (type.kind === "interface") {
-      return 8;
-    }
-    if (type.kind === "struct") {
-      return 8;
-    }
-    if (type.kind === "tuple") {
-      return 8;
-    }
-    if (type.kind === "enum") {
-      return 4;
-    }
-    return 8;
-  }
-  switch (type) {
-    case "i32":
-    case "f32":
-      return 4;
-    case "i64":
-    case "f64":
-    case "string":
-    case "null":
-      return 8;
-    case "bool":
-    case "char":
-      return 1;
-  }
-}
-
 function itableGlobalName(classMangled: string, ifaceMangled: string): string {
   return `${classMangled}__${ifaceMangled}__itable`;
-}
-
-function alignUp(value: number, align: number): number {
-  return Math.ceil(value / align) * align;
-}
-
-function structByteSize(name: string, structs?: Map<string, StructInfo>): number {
-  const def = structs?.get(name);
-  if (!def) {
-    return 64;
-  }
-  let offset = 0;
-  let maxAlign = 1;
-  for (const field of def.fields) {
-    const align = fieldAlign(field.type);
-    maxAlign = Math.max(maxAlign, align);
-    offset = alignUp(offset, align);
-    offset += elementByteSize(field.type, structs);
-  }
-  return alignUp(offset, maxAlign);
 }
 
 function typedOne(type: ValueType): string {

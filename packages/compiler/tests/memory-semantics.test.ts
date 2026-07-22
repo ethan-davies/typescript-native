@@ -249,6 +249,104 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).toMatch(/store %PersonData .*, ptr %v\.b/);
   });
 
+  it("lays out nested structs inline with declaration-order fields", () => {
+    const result = compile(`
+      struct Point {
+        x: i32;
+        y: i32;
+      }
+      struct Rectangle {
+        topLeft: Point;
+        bottomRight: Point;
+      }
+      function main(): void {
+        let r = Rectangle {
+          topLeft: Point { x: 0, y: 0 },
+          bottomRight: Point { x: 10, y: 20 }
+        };
+        print(r.topLeft.x);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%Point = type { i32, i32 }");
+    expect(result.ir).toContain("%Rectangle = type { %Point, %Point }");
+    expect(result.ir).toContain("getelementptr inbounds %Rectangle");
+    expect(result.ir).toContain("getelementptr inbounds %Point");
+  });
+
+  it("preserves struct field declaration order in LLVM types", () => {
+    const result = compile(`
+      struct Example {
+        a: i32;
+        b: f64;
+        c: bool;
+      }
+      function main(): void {
+        let e = Example { a: 1, b: 2.0, c: true };
+        print(e.a);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%Example = type { i32, double, i1 }");
+  });
+
+  it("mutates struct fields via GEP + store", () => {
+    const result = compile(`
+      struct Point {
+        x: i32;
+        y: i32;
+      }
+      function main(): void {
+        let p = Point { x: 10, y: 20 };
+        p.x = 50;
+        print(p.x);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%Point = type { i32, i32 }");
+    expect(result.ir).toContain("getelementptr inbounds %Point");
+    expect(result.ir).toMatch(/store i32 50, ptr /);
+  });
+
+  it("stores structs inline as array elements with LLVM sizeof", () => {
+    const result = compile(`
+      struct Point {
+        x: i32;
+        y: i32;
+      }
+      function main(): void {
+        let points: Point[] = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];
+        print(points[0].x);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%Point = type { i32, i32 }");
+    expect(result.ir).toContain(
+      "ptrtoint (ptr getelementptr (%Point, ptr null, i32 1) to i64)",
+    );
+    expect(result.ir).toContain("getelementptr inbounds %Point, ptr");
+    expect(result.ir).toMatch(/store %Point .*, ptr /);
+  });
+
+  it("lays out structs that mix reference and value fields", () => {
+    const result = compile(`
+      struct PersonData {
+        name: string;
+        age: i32;
+      }
+      function main(): void {
+        let a = PersonData { name: "Ethan", age: 16 };
+        let b = a;
+        print(b.name);
+        print(b.age);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%PersonData = type { ptr, i32 }");
+    expect(result.ir).toMatch(/load %PersonData, ptr %v\.a/);
+    expect(result.ir).toMatch(/store %PersonData .*, ptr %v\.b/);
+  });
+
   it("copies function handles on assignment (shared identity)", () => {
     const result = compile(`
       function add(a: i32, b: i32): i32 {
