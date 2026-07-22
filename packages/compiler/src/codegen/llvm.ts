@@ -252,14 +252,14 @@ export class LlvmCodegen {
   private interfaces = new Map<string, InterfaceInfo>();
   private localInterfaces = new Map<string, InterfaceInfo>();
   private namespaces = new Map<string, NamespaceInfo>();
-  private needsPrintf = false;
-  private needsStringRuntime = false;
-  private needsArrayRuntime = false;
-  private needsClassRuntime = false;
+  private needsTsnAlloc = false;
+  private needsTsnString = false;
+  private needsTsnArray = false;
+  private needsTsnMap = false;
+  private needsTsnPrint = false;
+  private needsTsnFormat = false;
   private needsAbort = false;
-  private needsSprintf = false;
   private needsUnionRuntime = false;
-  private needsMapRuntime = false;
   private needsCallableRuntime = false;
   /** Synthetic tuple LLVM type name → element types. */
   private readonly registeredTuples = new Map<string, readonly ValueType[]>();
@@ -328,14 +328,14 @@ export class LlvmCodegen {
     this.interfaces.clear();
     this.localInterfaces.clear();
     this.namespaces.clear();
-    this.needsPrintf = false;
-    this.needsStringRuntime = false;
-    this.needsArrayRuntime = false;
-    this.needsClassRuntime = false;
+    this.needsTsnAlloc = false;
+    this.needsTsnString = false;
+    this.needsTsnArray = false;
+    this.needsTsnMap = false;
+    this.needsTsnPrint = false;
+    this.needsTsnFormat = false;
     this.needsAbort = false;
-    this.needsSprintf = false;
     this.needsUnionRuntime = false;
-    this.needsMapRuntime = false;
     this.registeredTuples.clear();
     this.typeAliases = new Map();
     this.genericTypeAliases = new Map();
@@ -686,42 +686,7 @@ export class LlvmCodegen {
       ...callableTypeLines,
     ];
     const globalLines = [...this.globalDefs, ...this.emitStringGlobals()];
-    const declares: string[] = [];
-    if (this.needsPrintf) {
-      declares.push("declare i32 @printf(ptr noundef, ...) nounwind");
-    }
-    if (
-      this.needsStringRuntime ||
-      this.needsArrayRuntime ||
-      this.needsClassRuntime ||
-      this.needsUnionRuntime ||
-      this.needsMapRuntime ||
-      this.needsCallableRuntime
-    ) {
-      declares.push("declare ptr @malloc(i64 noundef) nounwind");
-    }
-    if (this.needsStringRuntime) {
-      declares.push("declare i64 @strlen(ptr noundef) nounwind");
-      declares.push("declare ptr @strcpy(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare ptr @strcat(ptr noundef, ptr noundef) nounwind");
-    }
-    if (this.needsArrayRuntime || this.needsMapRuntime) {
-      declares.push("declare ptr @realloc(ptr noundef, i64 noundef) nounwind");
-    }
-    if (this.needsSprintf) {
-      declares.push("declare i32 @sprintf(ptr noundef, ptr noundef, ...) nounwind");
-    }
-    if (this.needsAbort) {
-      declares.push("declare void @abort() noreturn nounwind");
-    }
-    if (this.needsMapRuntime) {
-      declares.push(...this.emitMapRuntimeDecls());
-    }
-
-    const runtimeFns = [
-      ...(this.needsUnionRuntime ? this.emitUnionRuntimeFns() : []),
-      ...(this.needsMapRuntime ? this.emitMapRuntimeFns() : []),
-    ];
+    const declares = this.emitRuntimeDeclares();
 
     const ir = [
       "; ModuleID = 'typescript-native'",
@@ -733,8 +698,6 @@ export class LlvmCodegen {
       globalLines.length > 0 ? "" : null,
       ...declares,
       declares.length > 0 ? "" : null,
-      ...runtimeFns,
-      runtimeFns.length > 0 ? "" : null,
       ...this.functionBodies,
       "",
     ]
@@ -1811,7 +1774,7 @@ export class LlvmCodegen {
     // Store payload on heap
     const payloadSize = 8;
     const raw = this.nextTemp();
-    lines.push(`  ${raw} = call ptr @malloc(i64 ${payloadSize})`);
+    lines.push(`  ${raw} = call ptr @tsn_alloc(i64 ${payloadSize})`);
     if (value.type === "string" || (typeof value.type === "object" && (value.type.kind === "array" || value.type.kind === "class" || value.type.kind === "map"))) {
       lines.push(`  store ptr ${value.llvm}, ptr ${raw}`);
     } else if (value.type === "i32" || value.type === "bool" || value.type === "char" || (isLiteralType(value.type) && value.type.literalKind === "number")) {
@@ -1882,84 +1845,92 @@ export class LlvmCodegen {
     return { llvm: loaded, type: expected };
   }
 
-  private emitUnionRuntimeFns(): string[] {
-    // No separate helpers needed — boxing is inline
-    return [];
+  private emitRuntimeDeclares(): string[] {
+    const declares: string[] = [];
+    if (
+      this.needsTsnAlloc ||
+      this.needsUnionRuntime ||
+      this.needsCallableRuntime
+    ) {
+      declares.push("declare ptr @tsn_alloc(i64 noundef) nounwind");
+    }
+    if (this.needsTsnString) {
+      declares.push("declare i32 @tsn_str_len(ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_concat(ptr noundef, ptr noundef) nounwind");
+    }
+    if (this.needsTsnArray) {
+      declares.push("declare ptr @tsn_array_new(i64 noundef, i64 noundef, i64 noundef) nounwind");
+      declares.push("declare i32 @tsn_array_length(ptr noundef) nounwind");
+      declares.push(
+        "declare void @tsn_array_push(ptr noundef, ptr noundef, i64 noundef) nounwind",
+      );
+      declares.push(
+        "declare void @tsn_array_pop(ptr noundef, ptr noundef, i64 noundef) nounwind",
+      );
+      declares.push(
+        "declare i32 @tsn_array_index_of(ptr noundef, ptr noundef, i64 noundef, i32 noundef) nounwind",
+      );
+    }
+    if (this.needsTsnMap) {
+      declares.push("declare ptr @tsn_map_new() nounwind");
+      declares.push("declare void @tsn_map_set(ptr noundef, ptr noundef, ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_map_get(ptr noundef, ptr noundef) nounwind");
+    }
+    if (this.needsTsnPrint) {
+      declares.push("declare void @tsn_print_i32(i32 noundef) nounwind");
+      declares.push("declare void @tsn_print_i64(i64 noundef) nounwind");
+      declares.push("declare void @tsn_print_f32(float noundef) nounwind");
+      declares.push("declare void @tsn_print_f64(double noundef) nounwind");
+      declares.push("declare void @tsn_print_bool(i1 noundef) nounwind");
+      declares.push("declare void @tsn_print_char(i8 noundef) nounwind");
+      declares.push("declare void @tsn_print_str(ptr noundef) nounwind");
+      declares.push("declare void @tsn_print_space() nounwind");
+      declares.push("declare void @tsn_print_newline() nounwind");
+    }
+    if (this.needsTsnFormat) {
+      declares.push("declare ptr @tsn_i32_to_string(i32 noundef) nounwind");
+      declares.push("declare ptr @tsn_i64_to_string(i64 noundef) nounwind");
+      declares.push("declare ptr @tsn_f32_to_string(float noundef) nounwind");
+      declares.push("declare ptr @tsn_f64_to_string(double noundef) nounwind");
+      declares.push("declare ptr @tsn_bool_to_string(i1 noundef) nounwind");
+      declares.push("declare ptr @tsn_char_to_string(i8 noundef) nounwind");
+      declares.push(
+        "declare ptr @tsn_array_to_string(ptr noundef, i64 noundef, i32 noundef) nounwind",
+      );
+    }
+    if (this.needsAbort) {
+      declares.push("declare void @abort() noreturn nounwind");
+    }
+    return declares;
   }
 
-  private emitMapRuntimeDecls(): string[] {
-    return [];
+  private tsnCmpKindForType(elementType: ValueType): number {
+    if (elementType === "i32" || isEnumType(elementType)) {
+      return 0;
+    }
+    if (elementType === "i64") {
+      return 1;
+    }
+    if (elementType === "f32") {
+      return 2;
+    }
+    if (elementType === "f64") {
+      return 3;
+    }
+    if (elementType === "bool") {
+      return 4;
+    }
+    if (elementType === "char") {
+      return 5;
+    }
+    if (elementType === "string") {
+      return 6;
+    }
+    return 7;
   }
 
-  /** Simple open-addressing string→ptr map runtime (inline IR functions). */
-  private emitMapRuntimeFns(): string[] {
-    // Map header: { i64 len, i64 cap, ptr keys, ptr vals } — keys/vals are ptr arrays
-    return [
-      "define ptr @__tsn_map_new() {",
-      "entry:",
-      "  %m = call ptr @malloc(i64 32)",
-      "  %lp = getelementptr inbounds i64, ptr %m, i64 0",
-      "  store i64 0, ptr %lp",
-      "  %cp = getelementptr inbounds i64, ptr %m, i64 1",
-      "  store i64 8, ptr %cp",
-      "  %keys = call ptr @malloc(i64 64)",
-      "  %vals = call ptr @malloc(i64 64)",
-      "  %kp = getelementptr inbounds ptr, ptr %m, i64 2",
-      "  store ptr %keys, ptr %kp",
-      "  %vp = getelementptr inbounds ptr, ptr %m, i64 3",
-      "  store ptr %vals, ptr %vp",
-      "  ret ptr %m",
-      "}",
-      "",
-      "define void @__tsn_map_set(ptr %m, ptr %key, ptr %val) {",
-      "entry:",
-      "  %lp = getelementptr inbounds i64, ptr %m, i64 0",
-      "  %len = load i64, ptr %lp",
-      "  %kp = getelementptr inbounds ptr, ptr %m, i64 2",
-      "  %keys = load ptr, ptr %kp",
-      "  %vp = getelementptr inbounds ptr, ptr %m, i64 3",
-      "  %vals = load ptr, ptr %vp",
-      "  %slotk = getelementptr inbounds ptr, ptr %keys, i64 %len",
-      "  store ptr %key, ptr %slotk",
-      "  %slotv = getelementptr inbounds ptr, ptr %vals, i64 %len",
-      "  store ptr %val, ptr %slotv",
-      "  %nlen = add i64 %len, 1",
-      "  store i64 %nlen, ptr %lp",
-      "  ret void",
-      "}",
-      "",
-      "define ptr @__tsn_map_get(ptr %m, ptr %key) {",
-      "entry:",
-      "  %lp = getelementptr inbounds i64, ptr %m, i64 0",
-      "  %len = load i64, ptr %lp",
-      "  %kp = getelementptr inbounds ptr, ptr %m, i64 2",
-      "  %keys = load ptr, ptr %kp",
-      "  %vp = getelementptr inbounds ptr, ptr %m, i64 3",
-      "  %vals = load ptr, ptr %vp",
-      "  br label %loop",
-      "loop:",
-      "  %i = phi i64 [ 0, %entry ], [ %inext, %cont ]",
-      "  %cmp = icmp ult i64 %i, %len",
-      "  br i1 %cmp, label %body, label %miss",
-      "body:",
-      "  %sk = getelementptr inbounds ptr, ptr %keys, i64 %i",
-      "  %k = load ptr, ptr %sk",
-      "  %eq = call i32 @strcmp(ptr %k, ptr %key)",
-      "  %ok = icmp eq i32 %eq, 0",
-      "  br i1 %ok, label %hit, label %cont",
-      "hit:",
-      "  %sv = getelementptr inbounds ptr, ptr %vals, i64 %i",
-      "  %v = load ptr, ptr %sv",
-      "  ret ptr %v",
-      "cont:",
-      "  %inext = add i64 %i, 1",
-      "  br label %loop",
-      "miss:",
-      "  ret ptr null",
-      "}",
-      "",
-      "declare i32 @strcmp(ptr, ptr) nounwind",
-    ];
+  private tsnFmtKindForType(elementType: ValueType): number {
+    return this.tsnCmpKindForType(elementType);
   }
 
   private emitStructMethod(struct: StructInfo, method: StructMethodInfo): void {
@@ -2116,7 +2087,7 @@ export class LlvmCodegen {
   }
 
   private emitNewExpression(expr: NewExpression, lines: string[]): EmittedValue {
-    this.needsClassRuntime = true;
+    this.needsTsnAlloc = true;
     const classInfo = expr.namespace
       ? this.namespaces.get(expr.namespace.name)?.classes.get(expr.className.name)
       : this.localClasses.get(expr.className.name);
@@ -2125,7 +2096,7 @@ export class LlvmCodegen {
     }
     const size = classObjectByteSize(classInfo, this.structs);
     const obj = this.nextTemp();
-    lines.push(`  ${obj} = call ptr @malloc(i64 noundef ${size})`);
+    lines.push(`  ${obj} = call ptr @tsn_alloc(i64 noundef ${size})`);
     const vtPtr = this.nextTemp();
     lines.push(
       `  ${vtPtr} = getelementptr inbounds %${classInfo.name}, ptr ${obj}, i32 0, i32 0`,
@@ -2464,12 +2435,13 @@ export class LlvmCodegen {
     const shouldBox = mutable && this.boxedNames.has(name);
 
     if (shouldBox) {
+      this.needsTsnAlloc = true;
       this.needsCallableRuntime = true;
       const boxHolder = `%v.${name}`;
       lines.push(`  ${boxHolder} = alloca ptr`);
       const heap = this.nextTemp();
       const size = elementByteSize(type, this.structs);
-      lines.push(`  ${heap} = call ptr @malloc(i64 noundef ${size})`);
+      lines.push(`  ${heap} = call ptr @tsn_alloc(i64 noundef ${size})`);
       lines.push(`  store ptr ${heap}, ptr ${boxHolder}`);
       this.locals.set(name, { ptr: boxHolder, type, boxed: true });
       if (stmt.initializer === null) {
@@ -2594,7 +2566,7 @@ export class LlvmCodegen {
     // Index assignment
     const object = this.emitExpression(stmt.target.object, lines);
     if (isMapType(object.type) || (isObjectType(object.type) && object.type.indexType)) {
-      this.needsMapRuntime = true;
+      this.needsTsnMap = true;
       if (stmt.operator !== "=") {
         throw new Error("Codegen: compound assign on map element");
       }
@@ -2604,7 +2576,7 @@ export class LlvmCodegen {
       ) as ValueType;
       const value = this.emitExpression(stmt.value, lines, valueType);
       lines.push(
-        `  call void @__tsn_map_set(ptr ${object.llvm}, ptr ${index.llvm}, ptr ${value.llvm})`,
+        `  call void @tsn_map_set(ptr ${object.llvm}, ptr ${index.llvm}, ptr ${value.llvm})`,
       );
       return;
     }
@@ -3151,7 +3123,6 @@ export class LlvmCodegen {
         throw new Error("Codegen: super used as value");
       case "TypeofExpression": {
         const operand = this.emitExpression(expr.operand, lines);
-        this.needsStringRuntime = true;
         if (isUnionType(operand.type)) {
           if (isNullablePointerUnion(operand.type)) {
             const isNull = this.nextTemp();
@@ -3188,10 +3159,10 @@ export class LlvmCodegen {
       case "IndexExpression": {
         const object = this.emitExpression(expr.object, lines);
         if (isMapType(object.type) || (isObjectType(object.type) && object.type.indexType)) {
-          this.needsMapRuntime = true;
+          this.needsTsnMap = true;
           const index = this.emitExpression(expr.index, lines, "string");
           const result = this.nextTemp();
-          lines.push(`  ${result} = call ptr @__tsn_map_get(ptr ${object.llvm}, ptr ${index.llvm})`);
+          lines.push(`  ${result} = call ptr @tsn_map_get(ptr ${object.llvm}, ptr ${index.llvm})`);
           const valueType = isMapType(object.type)
             ? (object.type.valueType as ValueType)
             : (object.type.indexType as ValueType);
@@ -3290,7 +3261,7 @@ export class LlvmCodegen {
         // Prefer string length when object may be a union (post-narrowing)
         const object = this.emitExpression(expr.object, lines);
         if (object.type === "string" || isUnionType(object.type)) {
-          this.needsStringRuntime = true;
+          this.needsTsnString = true;
           let asString = object;
           if (isUnionType(object.type)) {
             if (isNullablePointerUnion(object.type)) {
@@ -3300,10 +3271,8 @@ export class LlvmCodegen {
               asString = this.unboxUnion(object, "string", lines);
             }
           }
-          const len64 = this.nextTemp();
-          lines.push(`  ${len64} = call i64 @strlen(ptr ${asString.llvm})`);
           const len32 = this.nextTemp();
-          lines.push(`  ${len32} = trunc i64 ${len64} to i32`);
+          lines.push(`  ${len32} = call i32 @tsn_str_len(ptr ${asString.llvm})`);
           return { llvm: len32, type: "i32" };
         }
         if (isTupleType(object.type)) {
@@ -3574,7 +3543,7 @@ export class LlvmCodegen {
     lines: string[],
     expected?: ValueType,
   ): EmittedValue {
-    this.needsArrayRuntime = true;
+    this.needsTsnArray = true;
 
     let elementType: ValueType;
     if (expected && isArrayType(expected)) {
@@ -3593,25 +3562,16 @@ export class LlvmCodegen {
 
     const length = elements.length;
     const capacity = Math.max(length, 4);
-    const header = this.nextTemp();
-    lines.push(`  ${header} = call ptr @malloc(i64 noundef ${ARRAY_HEADER_SIZE})`);
-
-    const lenPtr = this.nextTemp();
-    lines.push(`  ${lenPtr} = getelementptr inbounds i8, ptr ${header}, i64 0`);
-    lines.push(`  store i64 ${length}, ptr ${lenPtr}`);
-
-    const capPtr = this.nextTemp();
-    lines.push(`  ${capPtr} = getelementptr inbounds i8, ptr ${header}, i64 8`);
-    lines.push(`  store i64 ${capacity}, ptr ${capPtr}`);
-
     const elemSize = elementByteSize(elementType, this.structs);
-    const dataBytes = capacity * elemSize;
-    const data = this.nextTemp();
-    lines.push(`  ${data} = call ptr @malloc(i64 noundef ${dataBytes})`);
+    const header = this.nextTemp();
+    lines.push(
+      `  ${header} = call ptr @tsn_array_new(i64 noundef ${length}, i64 noundef ${capacity}, i64 noundef ${elemSize})`,
+    );
 
     const dataField = this.nextTemp();
     lines.push(`  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`);
-    lines.push(`  store ptr ${data}, ptr ${dataField}`);
+    const data = this.nextTemp();
+    lines.push(`  ${data} = load ptr, ptr ${dataField}`);
 
     const elemLlvm = toLlvmType(elementType);
     for (let i = 0; i < elements.length; i += 1) {
@@ -4020,102 +3980,30 @@ export class LlvmCodegen {
     elementType: ValueType,
     lines: string[],
   ): void {
-    this.needsArrayRuntime = true;
-    const id = this.labelCounter;
-    this.labelCounter += 1;
-    const growLabel = `arr.grow.${id}`;
-    const storeLabel = `arr.store.${id}`;
-
-    const lenPtr = this.nextTemp();
-    lines.push(`  ${lenPtr} = getelementptr inbounds i8, ptr ${header}, i64 0`);
-    const length = this.nextTemp();
-    lines.push(`  ${length} = load i64, ptr ${lenPtr}`);
-
-    const capPtr = this.nextTemp();
-    lines.push(`  ${capPtr} = getelementptr inbounds i8, ptr ${header}, i64 8`);
-    const capacity = this.nextTemp();
-    lines.push(`  ${capacity} = load i64, ptr ${capPtr}`);
-
-    const needGrow = this.nextTemp();
-    lines.push(`  ${needGrow} = icmp eq i64 ${length}, ${capacity}`);
-    lines.push(`  br i1 ${needGrow}, label %${growLabel}, label %${storeLabel}`);
-
-    lines.push(`${growLabel}:`);
-    const newCap = this.nextTemp();
-    // capacity == 0 → 4, else capacity * 2
-    const isZero = this.nextTemp();
-    lines.push(`  ${isZero} = icmp eq i64 ${capacity}, 0`);
-    const doubled = this.nextTemp();
-    lines.push(`  ${doubled} = mul i64 ${capacity}, 2`);
-    lines.push(`  ${newCap} = select i1 ${isZero}, i64 4, i64 ${doubled}`);
-    lines.push(`  store i64 ${newCap}, ptr ${capPtr}`);
-
-    const dataField = this.nextTemp();
-    lines.push(`  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`);
-    const oldData = this.nextTemp();
-    lines.push(`  ${oldData} = load ptr, ptr ${dataField}`);
+    this.needsTsnArray = true;
     const elemSize = elementByteSize(elementType, this.structs);
-    const bytes = this.nextTemp();
-    lines.push(`  ${bytes} = mul i64 ${newCap}, ${elemSize}`);
-    const newData = this.nextTemp();
-    lines.push(`  ${newData} = call ptr @realloc(ptr noundef ${oldData}, i64 noundef ${bytes})`);
-    lines.push(`  store ptr ${newData}, ptr ${dataField}`);
-    lines.push(`  br label %${storeLabel}`);
-
-    lines.push(`${storeLabel}:`);
-    const dataField2 = this.nextTemp();
-    lines.push(`  ${dataField2} = getelementptr inbounds i8, ptr ${header}, i64 16`);
-    const data = this.nextTemp();
-    lines.push(`  ${data} = load ptr, ptr ${dataField2}`);
-    const len2 = this.nextTemp();
-    lines.push(`  ${len2} = load i64, ptr ${lenPtr}`);
-    const slot = this.nextTemp();
     const elemLlvm = toLlvmType(elementType);
-    lines.push(
-      `  ${slot} = getelementptr inbounds ${elemLlvm}, ptr ${data}, i64 ${len2}`,
-    );
     const value = this.emitExpression(arg, lines, elementType);
-    lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${slot}`);
-    const newLen = this.nextTemp();
-    lines.push(`  ${newLen} = add i64 ${len2}, 1`);
-    lines.push(`  store i64 ${newLen}, ptr ${lenPtr}`);
+    const valuePtr = this.nextTemp();
+    lines.push(`  ${valuePtr} = alloca ${elemLlvm}`);
+    lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${valuePtr}`);
+    lines.push(
+      `  call void @tsn_array_push(ptr noundef ${header}, ptr noundef ${valuePtr}, i64 noundef ${elemSize})`,
+    );
   }
 
   private emitArrayPop(header: string, elementType: ValueType, lines: string[]): EmittedValue {
+    this.needsTsnArray = true;
     this.needsAbort = true;
-    const id = this.labelCounter;
-    this.labelCounter += 1;
-    const emptyLabel = `arr.pop.empty.${id}`;
-    const okLabel = `arr.pop.ok.${id}`;
-
-    const lenPtr = this.nextTemp();
-    lines.push(`  ${lenPtr} = getelementptr inbounds i8, ptr ${header}, i64 0`);
-    const length = this.nextTemp();
-    lines.push(`  ${length} = load i64, ptr ${lenPtr}`);
-    const isEmpty = this.nextTemp();
-    lines.push(`  ${isEmpty} = icmp eq i64 ${length}, 0`);
-    lines.push(`  br i1 ${isEmpty}, label %${emptyLabel}, label %${okLabel}`);
-
-    lines.push(`${emptyLabel}:`);
-    lines.push(`  call void @abort()`);
-    lines.push(`  unreachable`);
-
-    lines.push(`${okLabel}:`);
-    const newLen = this.nextTemp();
-    lines.push(`  ${newLen} = sub i64 ${length}, 1`);
-    lines.push(`  store i64 ${newLen}, ptr ${lenPtr}`);
-
-    const dataField = this.nextTemp();
-    lines.push(`  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`);
-    const data = this.nextTemp();
-    lines.push(`  ${data} = load ptr, ptr ${dataField}`);
-    const slot = this.nextTemp();
+    const elemSize = elementByteSize(elementType, this.structs);
     const elemLlvm = toLlvmType(elementType);
+    const dest = this.nextTemp();
+    lines.push(`  ${dest} = alloca ${elemLlvm}`);
     lines.push(
-      `  ${slot} = getelementptr inbounds ${elemLlvm}, ptr ${data}, i64 ${newLen}`,
+      `  call void @tsn_array_pop(ptr noundef ${header}, ptr noundef ${dest}, i64 noundef ${elemSize})`,
     );
     const loaded = this.nextTemp();
-    lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${slot}`);
+    lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${dest}`);
     return { llvm: loaded, type: elementType };
   }
 
@@ -4137,57 +4025,18 @@ export class LlvmCodegen {
     elementType: ValueType,
     lines: string[],
   ): EmittedValue {
-    const id = this.labelCounter;
-    this.labelCounter += 1;
-    const condLabel = `arr.idx.cond.${id}`;
-    const bodyLabel = `arr.idx.body.${id}`;
-    const foundLabel = `arr.idx.found.${id}`;
-    const latchLabel = `arr.idx.latch.${id}`;
-    const exitLabel = `arr.idx.exit.${id}`;
-
+    this.needsTsnArray = true;
     const needle = this.emitExpression(arg, lines, elementType);
-    const length = this.emitArrayLength(header, lines);
-
-    const idxPtr = `%arr.scan.idx.${id}`;
-    const resultPtr = `%arr.scan.res.${id}`;
-    lines.push(`  ${idxPtr} = alloca i32`);
-    lines.push(`  ${resultPtr} = alloca i32`);
-    lines.push(`  store i32 0, ptr ${idxPtr}`);
-    lines.push(`  store i32 -1, ptr ${resultPtr}`);
-    lines.push(`  br label %${condLabel}`);
-
-    lines.push(`${condLabel}:`);
-    const idx = this.nextTemp();
-    lines.push(`  ${idx} = load i32, ptr ${idxPtr}`);
-    const cmp = this.nextTemp();
-    lines.push(`  ${cmp} = icmp slt i32 ${idx}, ${length}`);
-    lines.push(`  br i1 ${cmp}, label %${bodyLabel}, label %${exitLabel}`);
-
-    lines.push(`${bodyLabel}:`);
-    const elem = this.emitArrayIndexLoad(header, idx, elementType, lines);
-    const eq = this.nextTemp();
-    const llvmType = toLlvmType(elementType);
-    const isFloat = elementType === "f32" || elementType === "f64";
-    const pred = isFloat ? "oeq" : "eq";
-    const cmpOp = isFloat ? "fcmp" : "icmp";
-    lines.push(
-      `  ${eq} = ${cmpOp} ${pred} ${llvmType} ${elem.llvm}, ${needle.llvm}`,
-    );
-    lines.push(`  br i1 ${eq}, label %${foundLabel}, label %${latchLabel}`);
-
-    lines.push(`${foundLabel}:`);
-    lines.push(`  store i32 ${idx}, ptr ${resultPtr}`);
-    lines.push(`  br label %${exitLabel}`);
-
-    lines.push(`${latchLabel}:`);
-    const next = this.nextTemp();
-    lines.push(`  ${next} = add i32 ${idx}, 1`);
-    lines.push(`  store i32 ${next}, ptr ${idxPtr}`);
-    lines.push(`  br label %${condLabel}`);
-
-    lines.push(`${exitLabel}:`);
+    const elemSize = elementByteSize(elementType, this.structs);
+    const cmpKind = this.tsnCmpKindForType(elementType);
+    const elemLlvm = toLlvmType(elementType);
+    const needlePtr = this.nextTemp();
+    lines.push(`  ${needlePtr} = alloca ${elemLlvm}`);
+    lines.push(`  store ${elemLlvm} ${needle.llvm}, ptr ${needlePtr}`);
     const result = this.nextTemp();
-    lines.push(`  ${result} = load i32, ptr ${resultPtr}`);
+    lines.push(
+      `  ${result} = call i32 @tsn_array_index_of(ptr noundef ${header}, ptr noundef ${needlePtr}, i64 noundef ${elemSize}, i32 noundef ${cmpKind})`,
+    );
     return { llvm: result, type: "i32" };
   }
 
@@ -4491,31 +4340,20 @@ export class LlvmCodegen {
       return { llvm: tmp, type: "string" };
     }
 
-    this.needsStringRuntime = true;
+    this.needsTsnString = true;
     const left = this.emitExpression(expr.left, lines);
     const right = this.emitExpression(expr.right, lines);
-
-    const leftLen = this.nextTemp();
-    const rightLen = this.nextTemp();
-    const total = this.nextTemp();
     const buf = this.nextTemp();
-
-    lines.push(`  ${leftLen} = call i64 @strlen(ptr noundef ${left.llvm})`);
-    lines.push(`  ${rightLen} = call i64 @strlen(ptr noundef ${right.llvm})`);
-    lines.push(`  ${total} = add i64 ${leftLen}, ${rightLen}`);
-    const totalPlus = this.nextTemp();
-    lines.push(`  ${totalPlus} = add i64 ${total}, 1`);
-    lines.push(`  ${buf} = call ptr @malloc(i64 noundef ${totalPlus})`);
-    lines.push(`  call ptr @strcpy(ptr noundef ${buf}, ptr noundef ${left.llvm})`);
-    lines.push(`  call ptr @strcat(ptr noundef ${buf}, ptr noundef ${right.llvm})`);
-
+    lines.push(
+      `  ${buf} = call ptr @tsn_str_concat(ptr noundef ${left.llvm}, ptr noundef ${right.llvm})`,
+    );
     return { llvm: buf, type: "string" };
   }
 
   private emitCreateMap(lines: string[], expected?: ValueType): EmittedValue {
-    this.needsMapRuntime = true;
+    this.needsTsnMap = true;
     const tmp = this.nextTemp();
-    lines.push(`  ${tmp} = call ptr @__tsn_map_new()`);
+    lines.push(`  ${tmp} = call ptr @tsn_map_new()`);
     if (expected && isMapType(expected)) {
       return { llvm: tmp, type: expected };
     }
@@ -4634,6 +4472,7 @@ export class LlvmCodegen {
   }
 
   private emitNamedFunctionRef(sig: FunctionSig, lines: string[]): EmittedValue {
+    this.needsTsnAlloc = true;
     this.needsCallableRuntime = true;
     const trampoline = this.ensureTrampoline(sig);
     return this.emitCallableValue(`@${trampoline}`, "null", {
@@ -4679,6 +4518,7 @@ export class LlvmCodegen {
     type: FunctionValueType,
     lines: string[],
   ): EmittedValue {
+    this.needsTsnAlloc = true;
     this.needsCallableRuntime = true;
     const alloca = this.nextTemp();
     lines.push(`  ${alloca} = alloca %__Callable`);
@@ -4700,6 +4540,7 @@ export class LlvmCodegen {
     lines: string[],
     asStatement: boolean,
   ): EmittedValue {
+    this.needsTsnAlloc = true;
     this.needsCallableRuntime = true;
     const tmpAlloca = this.nextTemp();
     lines.push(`  ${tmpAlloca} = alloca %__Callable`);
@@ -4740,6 +4581,7 @@ export class LlvmCodegen {
     lines: string[],
     expected?: ValueType,
   ): EmittedValue {
+    this.needsTsnAlloc = true;
     this.needsCallableRuntime = true;
     const fnType = this.inferExpressionType(expr, expected) as FunctionValueType;
     const capRecords = this.lambdaCaptures.get(expr.span.start.offset) ?? [];
@@ -4759,7 +4601,7 @@ export class LlvmCodegen {
       const envTypeName = this.envTypeName(expr.span.start.offset, captures);
       const envSize = this.envByteSize(captures);
       envPtr = this.nextTemp();
-      lines.push(`  ${envPtr} = call ptr @malloc(i64 noundef ${envSize})`);
+      lines.push(`  ${envPtr} = call ptr @tsn_alloc(i64 noundef ${envSize})`);
       for (let i = 0; i < captures.length; i += 1) {
         const cap = captures[i]!;
         const fieldPtr = this.nextTemp();
@@ -5005,286 +4847,67 @@ export class LlvmCodegen {
   }
 
   private emitPrintCall(call: CallExpression, lines: string[]): void {
-    this.needsPrintf = true;
-
-    const emittedArgs: EmittedValue[] = [];
-    const formatParts: string[] = [];
-
-    for (const arg of asExpressions(call.args)) {
-      const value = this.emitExpression(arg, lines);
-      if (value.type === "bool") {
-        const boolStr = this.emitBoolToString(value.llvm, lines);
-        emittedArgs.push({ llvm: boolStr, type: "string" });
-        formatParts.push("%s");
-      } else if (isArrayType(value.type)) {
-        const arrayStr = this.emitArrayToString(value.llvm, value.type.element, lines);
-        emittedArgs.push({ llvm: arrayStr, type: "string" });
-        formatParts.push("%s");
-      } else {
-        emittedArgs.push(value);
-        formatParts.push(printfSpecifier(value.type));
+    this.needsTsnPrint = true;
+    const args = asExpressions(call.args);
+    for (let i = 0; i < args.length; i += 1) {
+      const value = this.emitExpression(args[i]!, lines);
+      this.emitPrintValue(value, lines);
+      if (i < args.length - 1) {
+        lines.push("  call void @tsn_print_space()");
       }
     }
-
-    const format = `${formatParts.join(" ")}\n`;
-    const formatGlobal = this.internString(format);
-    const formatPtr = this.nextTemp();
-    lines.push(
-      `  ${formatPtr} = getelementptr inbounds [${formatGlobal.length} x i8], ptr @${formatGlobal.name}, i64 0, i64 0`,
-    );
-
-    const argList = emittedArgs
-      .map((arg) => {
-        if (arg.type === "f32") {
-          const widened = this.nextTemp();
-          lines.push(`  ${widened} = fpext float ${arg.llvm} to double`);
-          return `double ${widened}`;
-        }
-        return `${printfArgType(arg.type)} ${arg.llvm}`;
-      })
-      .join(", ");
-
-    lines.push(
-      `  call i32 (ptr, ...) @printf(ptr noundef ${formatPtr}${argList ? `, ${argList}` : ""})`,
-    );
+    lines.push("  call void @tsn_print_newline()");
   }
 
-  /** Build a heap string like `[1, 2, 3]` (recursive for nested arrays). */
-  private emitArrayToString(header: string, elementType: ValueType, lines: string[]): string {
-    this.needsStringRuntime = true;
-    this.needsArrayRuntime = true;
-
-    const id = this.labelCounter;
-    this.labelCounter += 1;
-    const condLabel = `arr.str.cond.${id}`;
-    const bodyLabel = `arr.str.body.${id}`;
-    const latchLabel = `arr.str.latch.${id}`;
-    const exitLabel = `arr.str.exit.${id}`;
-
-    const bufPtr = `%arr.str.buf.${id}`;
-    const capPtr = `%arr.str.cap.${id}`;
-    const lenPtr = `%arr.str.len.${id}`;
-    const idxPtr = `%arr.str.idx.${id}`;
-
-    lines.push(`  ${bufPtr} = alloca ptr`);
-    lines.push(`  ${capPtr} = alloca i64`);
-    lines.push(`  ${lenPtr} = alloca i64`);
-    lines.push(`  ${idxPtr} = alloca i32`);
-
-    const initial = this.nextTemp();
-    lines.push(`  ${initial} = call ptr @malloc(i64 noundef 64)`);
-    lines.push(`  store i8 0, ptr ${initial}`);
-    lines.push(`  store ptr ${initial}, ptr ${bufPtr}`);
-    lines.push(`  store i64 64, ptr ${capPtr}`);
-    lines.push(`  store i64 0, ptr ${lenPtr}`);
-    lines.push(`  store i32 0, ptr ${idxPtr}`);
-
-    this.emitAppendLiteral(bufPtr, capPtr, lenPtr, "[", lines);
-
-    const length = this.emitArrayLength(header, lines);
-    lines.push(`  br label %${condLabel}`);
-
-    lines.push(`${condLabel}:`);
-    const idx = this.nextTemp();
-    lines.push(`  ${idx} = load i32, ptr ${idxPtr}`);
-    const cmp = this.nextTemp();
-    lines.push(`  ${cmp} = icmp slt i32 ${idx}, ${length}`);
-    lines.push(`  br i1 ${cmp}, label %${bodyLabel}, label %${exitLabel}`);
-
-    lines.push(`${bodyLabel}:`);
-    const sepLabel = `arr.str.sep.${id}`;
-    const elemLabel = `arr.str.elem.${id}`;
-    const isFirst = this.nextTemp();
-    lines.push(`  ${isFirst} = icmp eq i32 ${idx}, 0`);
-    lines.push(`  br i1 ${isFirst}, label %${elemLabel}, label %${sepLabel}`);
-
-    lines.push(`${sepLabel}:`);
-    this.emitAppendLiteral(bufPtr, capPtr, lenPtr, ", ", lines);
-    lines.push(`  br label %${elemLabel}`);
-
-    lines.push(`${elemLabel}:`);
-    const elem = this.emitArrayIndexLoad(header, idx, elementType, lines);
-    const elemStr = this.emitValueToString(elem, lines);
-    this.emitAppendString(bufPtr, capPtr, lenPtr, elemStr, lines);
-    lines.push(`  br label %${latchLabel}`);
-
-    lines.push(`${latchLabel}:`);
-    const next = this.nextTemp();
-    lines.push(`  ${next} = add i32 ${idx}, 1`);
-    lines.push(`  store i32 ${next}, ptr ${idxPtr}`);
-    lines.push(`  br label %${condLabel}`);
-
-    lines.push(`${exitLabel}:`);
-    this.emitAppendLiteral(bufPtr, capPtr, lenPtr, "]", lines);
-
-    const result = this.nextTemp();
-    lines.push(`  ${result} = load ptr, ptr ${bufPtr}`);
-    return result;
-  }
-
-  private emitValueToString(value: EmittedValue, lines: string[]): string {
+  private emitPrintValue(value: EmittedValue, lines: string[]): void {
     if (isArrayType(value.type)) {
-      return this.emitArrayToString(value.llvm, value.type.element, lines);
+      this.needsTsnFormat = true;
+      const elemSize = elementByteSize(value.type.element, this.structs);
+      const fmtKind = this.tsnFmtKindForType(value.type.element);
+      const arrayStr = this.nextTemp();
+      lines.push(
+        `  ${arrayStr} = call ptr @tsn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${elemSize}, i32 noundef ${fmtKind})`,
+      );
+      lines.push(`  call void @tsn_print_str(ptr noundef ${arrayStr})`);
+      return;
     }
     if (value.type === "bool") {
-      return this.emitBoolToString(value.llvm, lines);
+      lines.push(`  call void @tsn_print_bool(i1 ${value.llvm})`);
+      return;
     }
     if (value.type === "string") {
-      return value.llvm;
+      lines.push(`  call void @tsn_print_str(ptr noundef ${value.llvm})`);
+      return;
     }
-
-    this.needsSprintf = true;
-    const tmp = this.nextTemp();
-    lines.push(`  ${tmp} = alloca [64 x i8]`);
-    const tmpPtr = this.nextTemp();
-    lines.push(
-      `  ${tmpPtr} = getelementptr inbounds [64 x i8], ptr ${tmp}, i64 0, i64 0`,
-    );
-
-    if (value.type === "i32") {
-      const fmt = this.internString("%d");
-      const fmtPtr = this.nextTemp();
-      lines.push(
-        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
-      );
-      lines.push(
-        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, i32 ${value.llvm})`,
-      );
-    } else if (value.type === "i64") {
-      const fmt = this.internString("%lld");
-      const fmtPtr = this.nextTemp();
-      lines.push(
-        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
-      );
-      lines.push(
-        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, i64 ${value.llvm})`,
-      );
-    } else if (value.type === "f32") {
-      const fmt = this.internString("%g");
-      const fmtPtr = this.nextTemp();
-      lines.push(
-        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
-      );
-      const widened = this.nextTemp();
-      lines.push(`  ${widened} = fpext float ${value.llvm} to double`);
-      lines.push(
-        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, double ${widened})`,
-      );
-    } else if (value.type === "f64") {
-      const fmt = this.internString("%g");
-      const fmtPtr = this.nextTemp();
-      lines.push(
-        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
-      );
-      lines.push(
-        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, double ${value.llvm})`,
-      );
-    } else if (value.type === "char") {
-      const fmt = this.internString("%c");
-      const fmtPtr = this.nextTemp();
-      lines.push(
-        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
-      );
-      lines.push(
-        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, i8 ${value.llvm})`,
-      );
-    } else if (isEnumType(value.type)) {
-      const fmt = this.internString("%d");
-      const fmtPtr = this.nextTemp();
-      lines.push(
-        `  ${fmtPtr} = getelementptr inbounds [${fmt.length} x i8], ptr @${fmt.name}, i64 0, i64 0`,
-      );
-      lines.push(
-        `  call i32 (ptr, ptr, ...) @sprintf(ptr noundef ${tmpPtr}, ptr noundef ${fmtPtr}, i32 ${value.llvm})`,
-      );
-    } else {
-      throw new Error(`Codegen: cannot stringify type for array print`);
+    if (value.type === "i32" || isEnumType(value.type)) {
+      lines.push(`  call void @tsn_print_i32(i32 ${value.llvm})`);
+      return;
     }
-
-    return tmpPtr;
-  }
-
-  private emitAppendLiteral(
-    bufPtr: string,
-    capPtr: string,
-    lenPtr: string,
-    literal: string,
-    lines: string[],
-  ): void {
-    const global = this.internString(literal);
-    const ptr = this.nextTemp();
-    lines.push(
-      `  ${ptr} = getelementptr inbounds [${global.length} x i8], ptr @${global.name}, i64 0, i64 0`,
-    );
-    this.emitAppendString(bufPtr, capPtr, lenPtr, ptr, lines);
-  }
-
-  private emitAppendString(
-    bufPtr: string,
-    capPtr: string,
-    lenPtr: string,
-    suffix: string,
-    lines: string[],
-  ): void {
-    this.needsStringRuntime = true;
-    this.needsArrayRuntime = true;
-
-    const id = this.labelCounter;
-    this.labelCounter += 1;
-    const growLabel = `arr.append.grow.${id}`;
-    const joinLabel = `arr.append.join.${id}`;
-
-    const suffixLen = this.nextTemp();
-    lines.push(`  ${suffixLen} = call i64 @strlen(ptr noundef ${suffix})`);
-    const curLen = this.nextTemp();
-    lines.push(`  ${curLen} = load i64, ptr ${lenPtr}`);
-    const needed = this.nextTemp();
-    lines.push(`  ${needed} = add i64 ${curLen}, ${suffixLen}`);
-    const neededPlus = this.nextTemp();
-    lines.push(`  ${neededPlus} = add i64 ${needed}, 1`);
-    const capacity = this.nextTemp();
-    lines.push(`  ${capacity} = load i64, ptr ${capPtr}`);
-    const fits = this.nextTemp();
-    lines.push(`  ${fits} = icmp ule i64 ${neededPlus}, ${capacity}`);
-    lines.push(`  br i1 ${fits}, label %${joinLabel}, label %${growLabel}`);
-
-    lines.push(`${growLabel}:`);
-    const doubled = this.nextTemp();
-    lines.push(`  ${doubled} = mul i64 ${capacity}, 2`);
-    const newCap = this.nextTemp();
-    const needMore = this.nextTemp();
-    lines.push(`  ${needMore} = icmp ugt i64 ${neededPlus}, ${doubled}`);
-    lines.push(`  ${newCap} = select i1 ${needMore}, i64 ${neededPlus}, i64 ${doubled}`);
-    lines.push(`  store i64 ${newCap}, ptr ${capPtr}`);
-    const oldBuf = this.nextTemp();
-    lines.push(`  ${oldBuf} = load ptr, ptr ${bufPtr}`);
-    const grown = this.nextTemp();
-    lines.push(`  ${grown} = call ptr @realloc(ptr noundef ${oldBuf}, i64 noundef ${newCap})`);
-    lines.push(`  store ptr ${grown}, ptr ${bufPtr}`);
-    lines.push(`  br label %${joinLabel}`);
-
-    lines.push(`${joinLabel}:`);
-    const buf = this.nextTemp();
-    lines.push(`  ${buf} = load ptr, ptr ${bufPtr}`);
-    lines.push(`  call ptr @strcat(ptr noundef ${buf}, ptr noundef ${suffix})`);
-    lines.push(`  store i64 ${needed}, ptr ${lenPtr}`);
-  }
-
-  private emitBoolToString(boolValue: string, lines: string[]): string {
-    const trueGlobal = this.internString("true");
-    const falseGlobal = this.internString("false");
-    const truePtr = this.nextTemp();
-    const falsePtr = this.nextTemp();
-    const selected = this.nextTemp();
-
-    lines.push(
-      `  ${truePtr} = getelementptr inbounds [${trueGlobal.length} x i8], ptr @${trueGlobal.name}, i64 0, i64 0`,
-    );
-    lines.push(
-      `  ${falsePtr} = getelementptr inbounds [${falseGlobal.length} x i8], ptr @${falseGlobal.name}, i64 0, i64 0`,
-    );
-    lines.push(`  ${selected} = select i1 ${boolValue}, ptr ${truePtr}, ptr ${falsePtr}`);
-    return selected;
+    if (value.type === "i64") {
+      lines.push(`  call void @tsn_print_i64(i64 ${value.llvm})`);
+      return;
+    }
+    if (value.type === "f32") {
+      lines.push(`  call void @tsn_print_f32(float ${value.llvm})`);
+      return;
+    }
+    if (value.type === "f64") {
+      lines.push(`  call void @tsn_print_f64(double ${value.llvm})`);
+      return;
+    }
+    if (value.type === "char") {
+      lines.push(`  call void @tsn_print_char(i8 ${value.llvm})`);
+      return;
+    }
+    if (isLiteralType(value.type)) {
+      if (value.type.literalKind === "string") {
+        lines.push(`  call void @tsn_print_str(ptr noundef ${value.llvm})`);
+        return;
+      }
+      lines.push(`  call void @tsn_print_i32(i32 ${value.llvm})`);
+      return;
+    }
+    throw new Error(`Codegen: cannot print type '${typeof value.type === "object" ? value.type.kind : value.type}'`);
   }
 
   private nextTemp(): string {
@@ -5590,79 +5213,6 @@ function typedOne(type: ValueType): string {
       return "1.000000e+00";
     default:
       throw new Error(`Codegen: cannot increment type '${type}'`);
-  }
-}
-
-function printfSpecifier(type: ValueType): string {
-  if (typeof type === "object") {
-    if (type.kind === "enum") {
-      return "%d";
-    }
-    if (type.kind === "literal") {
-      return type.literalKind === "string" ? "%s" : "%d";
-    }
-    if (type.kind === "union") {
-      if (type.arms.every((a) => isLiteralType(a) && a.literalKind === "string")) {
-        return "%s";
-      }
-      if (type.arms.every((a) => isLiteralType(a) && a.literalKind === "number")) {
-        return "%d";
-      }
-    }
-    throw new Error(`Codegen: cannot print ${type.kind}`);
-  }
-  switch (type) {
-    case "i32":
-      return "%d";
-    case "i64":
-      return "%lld";
-    case "f32":
-    case "f64":
-      return "%g";
-    case "bool":
-      return "%s";
-    case "char":
-      return "%c";
-    case "string":
-      return "%s";
-    case "null":
-      return "%s";
-  }
-}
-
-function printfArgType(type: ValueType): string {
-  if (typeof type === "object") {
-    if (type.kind === "enum") {
-      return "i32";
-    }
-    if (type.kind === "literal") {
-      return type.literalKind === "string" ? "ptr" : "i32";
-    }
-    if (type.kind === "union") {
-      if (type.arms.every((a) => isLiteralType(a) && a.literalKind === "string")) {
-        return "ptr";
-      }
-      if (type.arms.every((a) => isLiteralType(a) && a.literalKind === "number")) {
-        return "i32";
-      }
-    }
-    throw new Error(`Codegen: cannot print ${type.kind}`);
-  }
-  switch (type) {
-    case "i32":
-      return "i32";
-    case "i64":
-      return "i64";
-    case "f32":
-    case "f64":
-      return "double";
-    case "bool":
-      return "i1";
-    case "char":
-      return "i8";
-    case "string":
-    case "null":
-      return "ptr";
   }
 }
 

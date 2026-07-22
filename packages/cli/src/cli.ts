@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { Command } from "commander";
 import { compileFile, formatDiagnostics } from "@typescript-native/compiler";
+import { getRuntimeLibraryPath } from "@typescript-native/runtime";
 
 const program = new Command();
 
@@ -93,6 +94,15 @@ function runFile(inputPath: string): number {
     return 1;
   }
 
+  let runtimeLibrary: string;
+  try {
+    runtimeLibrary = getRuntimeLibraryPath();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`error: ${message}`);
+    return 1;
+  }
+
   const dir = mkdtempSync(join(tmpdir(), "tsn-"));
   const llPath = join(dir, "program.ll");
   const binPath = join(dir, "program");
@@ -102,7 +112,7 @@ function runFile(inputPath: string): number {
 
     const clang = spawnSync(
       "clang",
-      [llPath, "-o", binPath, "-Wno-override-module"],
+      [llPath, runtimeLibrary, "-o", binPath, "-Wno-override-module"],
       { encoding: "utf8" },
     );
 

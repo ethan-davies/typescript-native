@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@typescript-native/compiler": "workspace:*",
+    "@typescript-native/runtime": "workspace:*",
     "commander": "^14.0.3"
   },
   "devDependencies": {

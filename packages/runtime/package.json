@@ -1,0 +1,30 @@
+{
+  "name": "@typescript-native/runtime",
+  "version": "0.0.0",
+  "description": "C runtime library for typescript-native programs",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "include"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && make",
+    "clean": "rm -rf dist && make clean",
+    "test": "make test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3"
+  }
+}

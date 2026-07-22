@@ -22,6 +22,7 @@ This repository is a pnpm workspace:
 | Package | Name | Role |
 | --- | --- | --- |
 | [`packages/compiler`](./packages/compiler) | `@typescript-native/compiler` | Lexer, parser, validation, typecheck, LLVM codegen |
+| [`packages/runtime`](./packages/runtime) | `@typescript-native/runtime` | C runtime (`libtsn_runtime.a`) for print, strings, arrays, maps |
 | [`packages/cli`](./packages/cli) | `@typescript-native/cli` | `tsn` command-line tool |
 
 ## Requirements
@@ -99,7 +100,7 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 - Control flow: `if` / `elseif` / `else`, `while`, C-style `for`, element `for (i in arr)`, `break`, `continue`
 - `//` line comments and `/* */` block comments
 
-`print` is a builtin. It is lowered to libc `printf` in the generated LLVM IR.
+`print` is a builtin. It is lowered to `tsn_print_*` runtime calls in the generated LLVM IR, and `tsn run` links `libtsn_runtime.a` when building the native binary.
 `createMap()` is a builtin that allocates an empty string-keyed map (for index-signature types).
 
 ### Examples
