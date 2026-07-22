@@ -1,0 +1,334 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "TypeScript Native",
+  "scopeName": "source.tsn",
+  "fileTypes": ["tsn"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#numbers" },
+    { "include": "#imports" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#primitives" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.tsn",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.tsn",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.tsn",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.tsn",
+          "match": "\\\\[ntr\\\\\"'0]"
+        }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.tsn",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.tsn",
+          "match": "\\\\[ntr\\\\\"'0]"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.tsn",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.tsn",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "imports": {
+      "patterns": [
+        {
+          "name": "meta.import.tsn",
+          "begin": "\\b(import)\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.import.tsn" }
+          },
+          "end": "(?=;|$)",
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            {
+              "match": "\\b(from|as)\\b",
+              "name": "keyword.control.import.tsn"
+            },
+            {
+              "match": "\\*",
+              "name": "constant.language.import-export-all.tsn"
+            },
+            {
+              "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
+              "name": "variable.other.readwrite.tsn"
+            },
+            {
+              "match": "[{},]",
+              "name": "punctuation.definition.block.tsn"
+            }
+          ]
+        },
+        {
+          "match": "\\b(export)\\b",
+          "name": "keyword.control.export.tsn"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.type.function.tsn" },
+            "2": { "name": "entity.name.function.tsn" }
+          }
+        },
+        {
+          "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.type.struct.tsn" },
+            "2": { "name": "entity.name.type.struct.tsn" }
+          }
+        },
+        {
+          "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.type.enum.tsn" },
+            "2": { "name": "entity.name.type.enum.tsn" }
+          }
+        },
+        {
+          "match": "\\b(abstract)\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.modifier.tsn" },
+            "2": { "name": "storage.type.class.tsn" },
+            "3": { "name": "entity.name.type.class.tsn" }
+          }
+        },
+        {
+          "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.type.class.tsn" },
+            "2": { "name": "entity.name.type.class.tsn" }
+          }
+        },
+        {
+          "match": "\\b(interface)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.type.interface.tsn" },
+            "2": { "name": "entity.name.type.interface.tsn" }
+          }
+        },
+        {
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.type.alias.tsn" },
+            "2": { "name": "entity.name.type.alias.tsn" }
+          }
+        },
+        {
+          "match": "\\b(constructor)\\b",
+          "name": "storage.type.constructor.tsn"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(if|elseif|else|while|for|switch|case|default|break|continue|return|throw|try|catch|finally)\\b",
+          "name": "keyword.control.tsn"
+        },
+        {
+          "match": "\\b(let|const)\\b",
+          "name": "storage.type.tsn"
+        },
+        {
+          "match": "\\b(abstract|public|private|readonly|static)\\b",
+          "name": "storage.modifier.tsn"
+        },
+        {
+          "match": "\\b(extends|implements|in)\\b",
+          "name": "keyword.control.inheritance.tsn"
+        },
+        {
+          "match": "\\b(new|typeof|keyof|is|as)\\b",
+          "name": "keyword.operator.expression.tsn"
+        },
+        {
+          "match": "\\b(this|super)\\b",
+          "name": "variable.language.tsn"
+        },
+        {
+          "match": "\\b(function|struct|enum|class|interface|type)\\b",
+          "name": "storage.type.tsn"
+        },
+        {
+          "match": "\\b(from)\\b",
+          "name": "keyword.control.import.tsn"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.tsn"
+        },
+        {
+          "match": "\\b(null)\\b",
+          "name": "constant.language.null.tsn"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "match": "\\b(print|createMap)\\b(?=\\s*\\()",
+          "name": "support.function.builtin.tsn"
+        },
+        {
+          "match": "\\b(Error)\\b",
+          "name": "support.class.builtin.tsn"
+        }
+      ]
+    },
+    "primitives": {
+      "match": "\\b(i32|i64|f32|f64|bool|string|char|void)\\b",
+      "name": "support.type.primitive.tsn"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "(\\+\\+|\\-\\-|\\+\\=|\\-\\=)",
+          "name": "keyword.operator.assignment.compound.tsn"
+        },
+        {
+          "match": "(=\\=|!=|<=|>=|<|>)",
+          "name": "keyword.operator.comparison.tsn"
+        },
+        {
+          "match": "(&&|\\|\\|)",
+          "name": "keyword.operator.logical.tsn"
+        },
+        {
+          "match": "(\\?\\?)",
+          "name": "keyword.operator.nullish.tsn"
+        },
+        {
+          "match": "(\\?\\.)",
+          "name": "keyword.operator.optional.tsn"
+        },
+        {
+          "match": "(=>)",
+          "name": "storage.type.function.arrow.tsn"
+        },
+        {
+          "match": "(\\?\\[)",
+          "name": "keyword.operator.optional.tsn"
+        },
+        {
+          "match": "([+\\-*/%])",
+          "name": "keyword.operator.arithmetic.tsn"
+        },
+        {
+          "match": "(=)",
+          "name": "keyword.operator.assignment.tsn"
+        },
+        {
+          "match": "(!)",
+          "name": "keyword.operator.logical.tsn"
+        },
+        {
+          "match": "(\\?)",
+          "name": "keyword.operator.ternary.tsn"
+        },
+        {
+          "match": "(&)",
+          "name": "keyword.operator.bitwise.tsn"
+        },
+        {
+          "match": "(\\|)",
+          "name": "keyword.operator.bitwise.tsn"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}]",
+          "name": "punctuation.definition.block.tsn"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.definition.bracket.tsn"
+        },
+        {
+          "match": "[()]",
+          "name": "punctuation.definition.parameters.tsn"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.statement.tsn"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.tsn"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.colon.tsn"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.tsn"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.tsn" }
+          }
+        },
+        {
+          "match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
+          "name": "entity.name.type.tsn"
+        },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "name": "variable.other.readwrite.tsn"
+        }
+      ]
+    }
+  }
+}
