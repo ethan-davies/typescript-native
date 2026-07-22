@@ -14,6 +14,8 @@ C runtime library linked into every `tsn run` binary.
 
 `type_id` on class instances indexes runtime `TypeInfo` (class IDs start at `TSN_TYPEID_CLASS_BASE` = 256). Builtin IDs 1–5 cover string/array/map/closure/env. Arrays, maps, and strings do **not** embed `type_id` in their current ABI; see `tsn_typeinfo_get` / `MEMORY_MODEL.md`.
 
+Canonical TSN heap API: `tsn_alloc` / `tsn_realloc` / `tsn_free`. Higher-level helpers (`tsn_array_new`, `tsn_map_new`, `tsn_str_concat`, …) allocate through that API; generated code must not call libc `malloc` for TSN-managed objects.
+
 ## Build
 
 ```bash

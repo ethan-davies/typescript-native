@@ -178,7 +178,7 @@ Rules:
 - **Inheritance** flattens superclass fields after the header, then subclass fields (so a `Dog*` can be treated as an `Animal*` for field offsets).
 - Class fields that are reference types (string, class, array, …) are pointers. Struct fields are stored **inline** in the object.
 - `new Person()` allocates with `tsn_alloc(sizeof(Person))`, initializes the object header (`type_id` + vtable), then runs the constructor.
-- `type_id` indexes runtime `TypeInfo` (see [§17](#17-runtime-typeinfo--object-layouts)). Class IDs start at **256**; IDs **1–5** are reserved for builtins.
+- `type_id` indexes runtime `TypeInfo` (see [§18](#18-runtime-typeinfo--object-layouts)). Class IDs start at **256**; IDs **1–5** are reserved for builtins.
 
 ### Common heap object header
 
@@ -499,7 +499,50 @@ The compiler and runtime handle allocation and reclamation.
 
 ---
 
-## 12. Memory management
+## 12. Allocation ownership
+
+Raw heap memory for TSN-managed objects goes through one canonical API:
+
+```text
+void* tsn_alloc(size);
+void* tsn_realloc(ptr, size);
+void  tsn_free(ptr);
+```
+
+**Compiler** chooses object size and layout, then initializes fields. **Runtime** owns the bytes.
+
+```text
+TSN compiler
+     │
+     │  "I need N bytes for this layout"
+     ▼
+tsn_alloc(N)   (or a helper that calls it)
+     │
+     ▼
+Runtime heap memory
+     │
+     ▼
+Compiler initializes object / header
+     │
+     ▼
+Return reference
+```
+
+Call graph today (ABIs unchanged):
+
+| Kind | Compiler emits | Runtime allocates with |
+| --- | --- | --- |
+| Class instance | `tsn_alloc(sizeof(Class))` + ObjectHeader init | `tsn_alloc` |
+| Array | `tsn_array_new(...)` | `tsn_alloc` (header + data); grow via `tsn_realloc` |
+| String (dynamic) | `tsn_str_concat` / `to_string` helpers | `tsn_alloc` |
+| Map | `tsn_map_new` / `tsn_map_set` | `tsn_alloc` / `tsn_realloc` |
+| Closure environment | `tsn_alloc(sizeof(env))` | `tsn_alloc` |
+
+Generated IR must not call libc `malloc` / `calloc` / `realloc` / `free` for TSN-managed objects. Those stay inside `alloc.c` as the current implementation of `tsn_alloc` / `tsn_realloc` / `tsn_free`. A future GC can replace that file without changing codegen call sites.
+
+---
+
+## 13. Memory management
 
 TSN uses **automatic garbage collection**.
 
@@ -509,7 +552,7 @@ TSN uses **automatic garbage collection**.
 
 ---
 
-## 13. GC strategy
+## 14. GC strategy
 
 **First implementation:** tracing GC, specifically a simple **mark-and-sweep** collector.
 
@@ -535,7 +578,7 @@ The collector follows references from roots; unreachable objects are freed. Gene
 
 ---
 
-## 14. References
+## 15. References
 
 **Implicit references** for normal programming:
 
@@ -552,7 +595,7 @@ Explicit references/pointers may be added later for low-level work; they are not
 
 ---
 
-## 15. Pointers
+## 16. Pointers
 
 Explicit pointers are **out of the initial memory model**.
 
@@ -570,7 +613,7 @@ let x: *i32 = ...
 
 ---
 
-## 16. Summary table
+## 17. Summary table
 
 | Type         | Category         | Default storage            |
 | ------------ | ---------------- | -------------------------- |
@@ -631,7 +674,7 @@ person ─────────────→ Person object
 
 ---
 
-## 17. Runtime TypeInfo & object layouts
+## 18. Runtime TypeInfo & object layouts
 
 The runtime keeps a `TypeInfo` registry so every heap kind can be described for a future GC — which slots hold references, element/key/value classifications, and object size.
 

@@ -84,7 +84,7 @@ function main(): void {
 
 ### Codegen (`packages/compiler/src/codegen/`)
 - [x] LLVM IR emission with stack locals (`alloca`)
-- [x] `printf` for `print`; string concat via fold or `strlen`/`malloc`/`strcpy`/`strcat`
+- [x] `printf` for `print`; string concat via `tsn_str_concat` (`tsn_alloc`)
 - [x] Private string globals (`c"...\00"`) with proper escaping
 
 ### CLI (`packages/cli`)
@@ -128,7 +128,7 @@ Add features one at a time (implement end-to-end when adding — no stubs):
 | Language | No comparisons or control flow (`if` / `while`) yet |
 | Types | No implicit numeric conversions beyond int/float literal width annotations |
 | Native binary | `tsn run` needs `clang` on `PATH` |
-| Strings | Concat allocates via `malloc` (no free) |
+| Strings | Concat allocates via `tsn_alloc` (no automatic free yet) |
 
 ---
 

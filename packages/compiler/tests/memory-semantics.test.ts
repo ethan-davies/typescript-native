@@ -447,3 +447,86 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).toMatch(/store %__Callable .*, ptr %v\.b/);
   });
 });
+
+describe("heap allocation contract (tsn_alloc)", () => {
+  it("allocates class instances via tsn_alloc(sizeof) and initializes ObjectHeader", () => {
+    const result = compile(`
+      class Person {
+        name: string;
+        age: i32;
+        constructor(name: string, age: i32) {
+          this.name = name;
+          this.age = age;
+        }
+      }
+      function main(): void {
+        let p = new Person("A", 20);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain(
+      "call ptr @tsn_alloc(i64 noundef ptrtoint (ptr getelementptr (%Person, ptr null, i32 1) to i64))",
+    );
+    expect(result.ir).toMatch(/store i32 \d+, ptr %/);
+    expect(result.ir).toContain("store ptr @Person__vtable");
+    expect(result.ir).not.toContain("@malloc");
+    expect(result.ir).not.toContain("@free");
+  });
+
+  it("creates arrays via tsn_array_new (not direct malloc)", () => {
+    const result = compile(`
+      function main(): void {
+        let a: i32[] = [1, 2];
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call ptr @tsn_array_new");
+    expect(result.ir).not.toMatch(/call ptr @tsn_alloc/);
+    expect(result.ir).not.toContain("@malloc");
+  });
+
+  it("creates maps via tsn_map_new", () => {
+    const result = compile(`
+      interface Dictionary {
+        [key: string]: i32;
+      }
+      function main(): void {
+        let m: Dictionary = createMap();
+        m["name"] = 1;
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call ptr @tsn_map_new");
+    expect(result.ir).toContain("tsn_map_set");
+    expect(result.ir).not.toContain("@malloc");
+  });
+
+  it("concatenates strings via tsn_str_concat", () => {
+    const result = compile(`
+      function main(): void {
+        let a: string = "hello";
+        let b: string = " world";
+        let s = a + b;
+        print(s);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call ptr @tsn_str_concat");
+    expect(result.ir).not.toContain("@malloc");
+  });
+
+  it("allocates closure environments via tsn_alloc(sizeof(env))", () => {
+    const result = compile(`
+      function main(): void {
+        let x: i32 = 10;
+        let f = () => x;
+        print(f());
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toMatch(
+      /call ptr @tsn_alloc\(i64 noundef ptrtoint \(ptr getelementptr \(%__env_[^,]+, ptr null, i32 1\) to i64\)\)/,
+    );
+    expect(result.ir).not.toContain("@malloc");
+  });
+});

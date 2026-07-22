@@ -1,8 +1,28 @@
 #include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "tsn/runtime.h"
+
+static void test_alloc(void) {
+  assert(sizeof(TsnArray) == TSN_ARRAY_HEADER_SIZE);
+  assert(sizeof(TsnMap) == TSN_MAP_HEADER_SIZE);
+  /* LP64: i32 type_id, 4-byte pad, then vtable pointer → 16 bytes */
+  assert(sizeof(TsnObjectHeader) == 16);
+  assert(offsetof(TsnObjectHeader, type_id) == 0);
+  assert(offsetof(TsnObjectHeader, vtable) == 8);
+
+  int32_t *buf = (int32_t *)tsn_alloc((int64_t)sizeof(int32_t) * 4);
+  assert(buf != NULL);
+  buf[0] = 42;
+  buf = (int32_t *)tsn_realloc(buf, (int64_t)sizeof(int32_t) * 8);
+  assert(buf != NULL);
+  assert(buf[0] == 42);
+  buf[7] = 99;
+  assert(buf[7] == 99);
+  tsn_free(buf);
+}
 
 static void test_strings(void) {
   char *joined = tsn_str_concat("Hello", " world");
@@ -122,6 +142,7 @@ static void test_typeinfo(void) {
 }
 
 int main(void) {
+  test_alloc();
   test_strings();
   test_arrays();
   test_maps();
