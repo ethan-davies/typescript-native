@@ -1066,6 +1066,28 @@ function collectEnums(
   return enums;
 }
 
+/** Minimal ClassDef so resolveAnnotation can see same-module class names early. */
+function classNamePlaceholder(moduleId: string, decl: ClassDeclaration): ClassDef {
+  const mangled = mangleSymbol(moduleId, decl.name.name);
+  return {
+    name: mangled,
+    localName: decl.name.name,
+    isAbstract: decl.isAbstract,
+    superclass: null,
+    implementedInterfaces: [],
+    instanceFields: [],
+    staticFields: [],
+    instanceMethods: [],
+    staticMethods: [],
+    constructorParams: [],
+    constructorDecl: null,
+    constructorMangledName: mangleSymbol(moduleId, `${decl.name.name}__constructor`),
+    vtableGlobalName: `${mangled}__vtable`,
+    decl,
+    exported: decl.exported,
+  };
+}
+
 function collectStructs(
   program: Program,
   moduleId: string,
@@ -1137,6 +1159,17 @@ function collectStructs(
       exported: decl.exported,
     });
   }
+
+  // Struct fields may be reference types (e.g. class); expose same-module class names
+  // before collectClasses runs so field annotations resolve correctly.
+  const prevClasses = activeClasses;
+  const classPlaceholders = new Map(activeClasses);
+  for (const decl of program.body) {
+    if (decl.kind === "ClassDeclaration") {
+      classPlaceholders.set(decl.name.name, classNamePlaceholder(moduleId, decl));
+    }
+  }
+  activeClasses = classPlaceholders;
 
   for (const decl of declarations) {
     const fields: StructFieldDef[] = [];
@@ -1231,6 +1264,7 @@ function collectStructs(
     }
   }
 
+  activeClasses = prevClasses;
   return structs;
 }
 

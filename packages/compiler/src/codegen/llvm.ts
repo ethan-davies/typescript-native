@@ -70,20 +70,22 @@ import {
   stripNull,
   typeofTagForType,
 } from "../typecheck-advanced.js";
+import { isReferenceCategory } from "../types/category.js";
 import { substituteAnnotation } from "../generics/substitute.js";
 
 /** Filled during emit so free `toLlvmType` can register synthetic tuple aggregates. */
 let activeTupleRegistry: Map<string, readonly ValueType[]> | null = null;
 
-/** Types lowered as a single LLVM `ptr`. */
-function isSinglePtrType(type: ValueType): boolean {
-  if (type === "string") {
-    return true;
+/**
+ * Reference types whose LLVM payload is a bare `ptr` (not `%__Callable`).
+ * Driven by TypeCategory: class/array/map/string/null are single-ptr references;
+ * function/closure references lower as `%__Callable` handles instead.
+ */
+function isSinglePtrReference(type: ValueType): boolean {
+  if (!isReferenceCategory(type)) {
+    return false;
   }
-  if (typeof type === "object") {
-    return type.kind === "class" || type.kind === "array" || type.kind === "map";
-  }
-  return false;
+  return typeof type !== "object" || type.kind !== "function";
 }
 
 /** `T | null` where every non-null arm is a single ptr — lower as bare `ptr`. */
@@ -96,7 +98,7 @@ function isNullablePointerUnion(type: ValueType): boolean {
     return false;
   }
   const nonNull = arms.filter((a) => a !== "null");
-  return nonNull.length > 0 && nonNull.every((a) => isSinglePtrType(a as ValueType));
+  return nonNull.length > 0 && nonNull.every((a) => isSinglePtrReference(a as ValueType));
 }
 
 /** Typecheck rewrites named/default args to a positional Expression[] before codegen. */
@@ -1637,6 +1639,7 @@ export class LlvmCodegen {
     }
   }
 
+  /** Struct layout: each field lowered by its own TypeCategory (value inline, refs as ptr). */
   private emitStructTypeDefs(): string[] {
     const lines: string[] = [];
     for (const info of this.structs.values()) {
@@ -2341,6 +2344,10 @@ export class LlvmCodegen {
     this.boxedNames = new Set();
   }
 
+  /**
+   * Function ABI: value types pass/return as first-class LLVM values (copied);
+   * single-ptr references pass/return as `ptr` (shared identity).
+   */
   private emitFunctionHeader(fn: FunctionDeclaration): string {
     const sig = this.localFunctions.get(fn.name.name)!;
     const ret = sig.returnType === "void" ? "void" : toLlvmType(sig.returnType);
@@ -2348,6 +2355,7 @@ export class LlvmCodegen {
     return `define ${ret} @${sig.mangledName}(${params}) {`;
   }
 
+  /** Spill incoming arg: value params copy the aggregate; reference params copy the ptr. */
   private emitParameter(param: Parameter, index: number, lines: string[]): void {
     const type = this.resolveAnnotation(param.typeAnnotation);
     if (!type) {
@@ -2944,6 +2952,10 @@ export class LlvmCodegen {
     return bothTerminated;
   }
 
+  /**
+   * Locals: value types alloca the aggregate and store a copy; reference types
+   * alloca a `ptr` and store the shared reference.
+   */
   private emitVariableDeclaration(stmt: VariableDeclaration, lines: string[]): void {
     if (stmt.binding.kind === "ArrayBindingPattern") {
       this.emitDestructuringDeclaration(stmt, lines);
@@ -3023,6 +3035,10 @@ export class LlvmCodegen {
     }
   }
 
+  /**
+   * Assignment copies by TypeCategory: value → store aggregate/scalar;
+   * reference → store ptr (alias). Struct copies are shallow (nested refs shared).
+   */
   private emitAssignment(stmt: AssignmentStatement, lines: string[]): void {
     if (stmt.target.kind === "Identifier") {
       const local = this.locals.get(stmt.target.name);
@@ -3205,6 +3221,7 @@ export class LlvmCodegen {
     lines.push(`  store ${llvmType} ${result}, ptr ${storePtr}`);
   }
 
+  /** Returns copy value aggregates / scalars; reference returns copy the ptr. */
   private emitReturn(stmt: ReturnStatement, lines: string[]): void {
     const tryCtx = this.enclosingTryWithFinally();
     if (stmt.value === null) {
@@ -3295,13 +3312,7 @@ export class LlvmCodegen {
       lines.push(`  ${tmp} = add i1 true, false`);
       return tmp;
     }
-    if (
-      isNullablePointerUnion(value.type) ||
-      isSinglePtrType(value.type) ||
-      value.type === "string" ||
-      (typeof value.type === "object" &&
-        (value.type.kind === "class" || value.type.kind === "array" || value.type.kind === "map"))
-    ) {
+    if (isNullablePointerUnion(value.type) || isSinglePtrReference(value.type)) {
       lines.push(`  ${tmp} = icmp eq ptr ${value.llvm}, null`);
       return tmp;
     }
@@ -4875,7 +4886,11 @@ export class LlvmCodegen {
     const tmp = this.nextTemp();
 
     if (targetType === "null") {
-      if (isNullablePointerUnion(value.type) || isSinglePtrType(value.type) || value.type === "null") {
+      if (
+        isNullablePointerUnion(value.type) ||
+        isSinglePtrReference(value.type) ||
+        value.type === "null"
+      ) {
         lines.push(`  ${tmp} = icmp eq ptr ${value.llvm}, null`);
         return { llvm: tmp, type: "bool" };
       }
@@ -5032,14 +5047,7 @@ export class LlvmCodegen {
       const nonNullExpr = expr.left.kind === "NullLiteral" ? expr.right : expr.left;
       const value = this.emitExpression(nonNullExpr, lines);
       const tmp = this.nextTemp();
-      if (
-        isNullablePointerUnion(value.type) ||
-        isSinglePtrType(value.type) ||
-        value.type === "null" ||
-        value.type === "string" ||
-        (typeof value.type === "object" &&
-          (value.type.kind === "class" || value.type.kind === "array" || value.type.kind === "map"))
-      ) {
+      if (isNullablePointerUnion(value.type) || isSinglePtrReference(value.type)) {
         const pred = expr.operator === "==" ? "eq" : "ne";
         lines.push(`  ${tmp} = icmp ${pred} ptr ${value.llvm}, null`);
         return { llvm: tmp, type: "bool" };
@@ -5762,6 +5770,13 @@ function comparisonPredicate(operator: string, type: ValueType): string {
   }
 }
 
+/**
+ * LLVM ABI type for a semantic ValueType (aligned with TypeCategory):
+ * - Value (primitives, enum, struct, tuple) → first-class scalar/aggregate (copied)
+ * - Reference (class, array, map, string) → bare `ptr` (shared identity)
+ * - Reference (function) → `%__Callable` handle (shallow copy of fn+env ptrs)
+ * - Struct fields use this per-field, so value structs may embed reference ptrs
+ */
 function toLlvmType(type: ValueType | "void"): string {
   if (type === "void") {
     return "void";
@@ -5805,7 +5820,7 @@ function toLlvmType(type: ValueType | "void"): string {
       }
       return "ptr";
     }
-    // class and array are pointers
+    // class and array: reference → ptr
     return "ptr";
   }
   switch (type) {
