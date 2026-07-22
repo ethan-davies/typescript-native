@@ -1,7 +1,7 @@
 {
   "name": "typescript-native-vscode",
   "displayName": "TypeScript Native",
-  "description": "Language support for TypeScript Native (.tsn) — TextMate grammar and editor configuration",
+  "description": "Language support for TypeScript Native (.tsn) — grammar, editor config, and language server",
   "version": "0.0.0",
   "license": "MIT",
   "author": "Ethan Davies",
@@ -25,7 +25,12 @@
   "keywords": [
     "tsn",
     "typescript-native",
+    "lsp",
     "textmate"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:tsn"
   ],
   "contributes": {
     "languages": [
@@ -51,17 +56,25 @@
   },
   "files": [
     "LICENSE",
+    "dist",
     "language-configuration.json",
     "syntaxes",
     "README.md"
   ],
   "scripts": {
-    "build": "node --check tests/grammar.test.mjs && node -e \"JSON.parse(require('fs').readFileSync('syntaxes/tsn.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); console.log('ok')\"",
-    "clean": "rm -rf node_modules/.cache",
-    "typecheck": "node -e \"console.log('no TypeScript in typescript-native-vscode')\"",
+    "build": "tsc -p tsconfig.build.json && node --check tests/grammar.test.mjs && node -e \"JSON.parse(require('fs').readFileSync('syntaxes/tsn.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); console.log('ok')\"",
+    "clean": "rm -rf dist node_modules/.cache",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test tests/grammar.test.mjs"
   },
+  "dependencies": {
+    "@typescript-native/lsp": "workspace:*",
+    "vscode-languageclient": "^9.0.1"
+  },
   "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.8.3",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.2.0"
   }

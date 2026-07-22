@@ -1,5 +1,24 @@
-# TypeScript Native
+# TypeScript Native — VS Code / Cursor
 
-VS Code / Cursor language support for **TypeScript Native** (`.tsn`).
+Language support for **TypeScript Native** (`.tsn`).
 
-Provides syntax highlighting (TextMate grammar, `source.tsn`) and editor language configuration — comments, brackets, and auto-closing pairs — for the TypeScript Native programming language.
+## Features
+
+- Syntax highlighting (TextMate grammar, `source.tsn`)
+- Editor language configuration (comments, brackets, auto-closing pairs)
+- Language server (diagnostics, hover, go-to-definition, completion, document symbols)
+
+## Development
+
+From the monorepo root:
+
+```bash
+pnpm install
+pnpm --filter @typescript-native/compiler build
+pnpm --filter @typescript-native/lsp build
+pnpm --filter typescript-native-vscode build
+```
+
+Then use **Launch TSN Extension** in `.vscode/launch.json` (F5) to open an Extension Development Host with the examples folder.
+
+The extension starts `@typescript-native/lsp` over stdio and analyzes open `.tsn` files with the compiler’s `analyzeFile` pipeline (no LLVM codegen).
