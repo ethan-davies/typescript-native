@@ -270,6 +270,253 @@ static void test_gc_string_literal_root(void) {
   tsn_gc_root_pop(1);
 }
 
+/* User { header, profile: Profile { name: string } } via nested AGG TypeInfo. */
+static void test_gc_nested_struct_in_class(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo profile_fields[] = {
+      {.offset = 0, .size = 8, .ref_class = TSN_REF_PTR, .type_id = TSN_TYPEID_STRING},
+  };
+  static const TsnTypeInfo profile_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 20,
+      .kind = TSN_KIND_STRUCT,
+      .size = 8,
+      .field_count = 1,
+      .fields = profile_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  static const TsnFieldInfo user_fields[] = {
+      {.offset = 16, .size = 8, .ref_class = TSN_REF_AGG, .type_id = TSN_TYPEID_CLASS_BASE + 20},
+  };
+  static const TsnTypeInfo user_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 21,
+      .kind = TSN_KIND_CLASS,
+      .size = 24,
+      .field_count = 1,
+      .fields = user_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&profile_ti);
+  tsn_typeinfo_register(&user_ti);
+
+  void *user = NULL;
+  tsn_gc_root_push(&user);
+  user = tsn_alloc(24);
+  tsn_gc_set_type(user, TSN_TYPEID_CLASS_BASE + 21);
+  ((TsnObjectHeader *)user)->type_id = TSN_TYPEID_CLASS_BASE + 21;
+  ((TsnObjectHeader *)user)->vtable = NULL;
+
+  char *name = (char *)tsn_alloc(6);
+  memcpy(name, "hello", 6);
+  tsn_gc_set_type(name, TSN_TYPEID_STRING);
+  *(char **)((char *)user + 16) = name;
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+  assert(strcmp(*(char **)((char *)user + 16), "hello") == 0);
+
+  user = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
+/* PersonData { name: string }[] scanned as AGG elements. */
+static void test_gc_agg_array_elements(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo pdata_fields[] = {
+      {.offset = 0, .size = 8, .ref_class = TSN_REF_PTR, .type_id = TSN_TYPEID_STRING},
+  };
+  static const TsnTypeInfo pdata_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 22,
+      .kind = TSN_KIND_STRUCT,
+      .size = 8,
+      .field_count = 1,
+      .fields = pdata_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&pdata_ti);
+
+  void *arr = NULL;
+  tsn_gc_root_push(&arr);
+  arr = tsn_array_new(0, 2, 8);
+  tsn_gc_set_array_meta(arr, TSN_REF_AGG, TSN_TYPEID_CLASS_BASE + 22, 8);
+
+  char *name = (char *)tsn_alloc(4);
+  memcpy(name, "ab", 3);
+  tsn_gc_set_type(name, TSN_TYPEID_STRING);
+
+  char elem_buf[8];
+  *(char **)elem_buf = name;
+  tsn_array_push(arr, elem_buf, 8);
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+  TsnArray *header = (TsnArray *)arr;
+  assert(strcmp(*(char **)header->data, "ab") == 0);
+
+  arr = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
+static void test_gc_map_keeps_entries(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  void *map = NULL;
+  tsn_gc_root_push(&map);
+  map = tsn_map_new();
+  tsn_gc_set_map_meta(map, TSN_REF_PTR, TSN_TYPEID_STRING, TSN_REF_PTR, 0);
+
+  char *key = (char *)tsn_alloc(4);
+  memcpy(key, "k", 2);
+  tsn_gc_set_type(key, TSN_TYPEID_STRING);
+
+  void *val = tsn_alloc(16);
+  tsn_gc_set_type(val, 0);
+  tsn_map_set(map, key, val);
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+  assert(tsn_map_get(map, "k") == val);
+
+  map = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
+/* Closure env with PTR to Person keeps Person alive. */
+static void test_gc_closure_env_keeps_capture(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo person_fields[] = {
+      {.offset = 16, .size = 8, .ref_class = TSN_REF_PTR, .type_id = TSN_TYPEID_STRING},
+  };
+  static const TsnTypeInfo person_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 23,
+      .kind = TSN_KIND_CLASS,
+      .size = 24,
+      .field_count = 1,
+      .fields = person_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  static const TsnFieldInfo env_fields[] = {
+      {.offset = 0, .size = 8, .ref_class = TSN_REF_PTR, .type_id = TSN_TYPEID_CLASS_BASE + 23},
+  };
+  static const TsnTypeInfo env_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 24,
+      .kind = TSN_KIND_ENV,
+      .size = 8,
+      .field_count = 1,
+      .fields = env_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&person_ti);
+  tsn_typeinfo_register(&env_ti);
+
+  void *env = NULL;
+  tsn_gc_root_push(&env);
+  env = tsn_alloc(8);
+  tsn_gc_set_type(env, TSN_TYPEID_CLASS_BASE + 24);
+
+  void *person = tsn_alloc(24);
+  tsn_gc_set_type(person, TSN_TYPEID_CLASS_BASE + 23);
+  ((TsnObjectHeader *)person)->type_id = TSN_TYPEID_CLASS_BASE + 23;
+  ((TsnObjectHeader *)person)->vtable = NULL;
+  char *name = (char *)tsn_alloc(3);
+  memcpy(name, "p", 2);
+  tsn_gc_set_type(name, TSN_TYPEID_STRING);
+  *(char **)((char *)person + 16) = name;
+  *(void **)env = person;
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+
+  env = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
+/* Mutable capture box: TypeInfo scans interior Person*. */
+static void test_gc_mutable_box_scans_interior(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo box_fields[] = {
+      {.offset = 0, .size = 8, .ref_class = TSN_REF_PTR, .type_id = 0},
+  };
+  static const TsnTypeInfo box_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 25,
+      .kind = TSN_KIND_STRUCT,
+      .size = 8,
+      .field_count = 1,
+      .fields = box_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&box_ti);
+
+  void *box = NULL;
+  tsn_gc_root_push(&box);
+  box = tsn_alloc(8);
+  tsn_gc_set_type(box, TSN_TYPEID_CLASS_BASE + 25);
+
+  void *person = tsn_alloc(24);
+  tsn_gc_set_type(person, 0);
+  *(void **)box = person;
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+  assert(*(void **)box == person);
+
+  box = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
 int main(void) {
   test_alloc();
   test_strings();
@@ -283,5 +530,10 @@ int main(void) {
   test_gc_array_keeps_elements();
   test_gc_threshold();
   test_gc_string_literal_root();
+  test_gc_nested_struct_in_class();
+  test_gc_agg_array_elements();
+  test_gc_map_keeps_entries();
+  test_gc_closure_env_keeps_capture();
+  test_gc_mutable_box_scans_interior();
   return 0;
 }

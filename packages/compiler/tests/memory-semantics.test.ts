@@ -578,6 +578,104 @@ describe("GC root registration and type hooks", () => {
     expect(result.ir).toContain("call void @tsn_gc_set_array_meta");
   });
 
+  it("emits AGG TypeInfo for nested ref-struct class fields", () => {
+    const result = compile(`
+      struct Profile {
+        name: string;
+        age: i32;
+      }
+      class User {
+        profile: Profile;
+        constructor(profile: Profile) {
+          this.profile = profile;
+        }
+      }
+      function main(): void {
+        let u = new User(Profile { name: "A", age: 1 });
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("@__agg_Profile__typeinfo");
+    // AGG ref_class = 2 pointing at nested Profile TypeInfo
+    expect(result.ir).toMatch(/i32 2, i32 \d+\s*\}/);
+    expect(result.ir).toContain("tsn_typeinfo_register(ptr noundef @__agg_Profile__typeinfo)");
+  });
+
+  it("emits env TypeInfo and tsn_gc_set_type for closure environments", () => {
+    const result = compile(`
+      class Box {
+        value: i32;
+        constructor(value: i32) {
+          this.value = value;
+        }
+      }
+      function main(): void {
+        let b = new Box(1);
+        let f = () => b.value;
+        print(f());
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toMatch(/@__env_.*__typeinfo/);
+    expect(result.ir).toMatch(
+      /call void @tsn_gc_set_type\(ptr noundef %.*, i32 noundef \d+\)/,
+    );
+  });
+
+  it("types mutable capture boxes that hold references", () => {
+    const result = compile(`
+      class Box {
+        value: i32;
+        constructor(value: i32) {
+          this.value = value;
+        }
+      }
+      function main(): void {
+        let b = new Box(1);
+        let f = (): i32 => {
+          b = new Box(2);
+          return b.value;
+        };
+        print(f());
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("@__box_ptr_");
+    // Box type_id must be non-zero (≥ CLASS_BASE)
+    expect(result.ir).toMatch(/call void @tsn_gc_set_type\(ptr noundef %.*, i32 noundef (2\d{2}|[3-9]\d{2}|\d{4,})\)/);
+  });
+
+  it("emits tsn_gc_set_map_meta after createMap", () => {
+    const result = compile(`
+      interface Dictionary {
+        [key: string]: string;
+      }
+      function main(): void {
+        let m: Dictionary = createMap();
+        m["name"] = "Ethan";
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call void @tsn_gc_set_map_meta");
+  });
+
+  it("emits AGG array meta for struct elements with references", () => {
+    const result = compile(`
+      struct PersonData {
+        name: string;
+      }
+      function main(): void {
+        let a: PersonData[] = [PersonData { name: "A" }];
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("@__agg_PersonData__typeinfo");
+    // elem_ref_class AGG = 2
+    expect(result.ir).toMatch(
+      /call void @tsn_gc_set_array_meta\(ptr noundef %.*, i32 noundef 2,/,
+    );
+  });
+
   it("roots function parameters that are references", () => {
     const result = compile(`
       class Item {

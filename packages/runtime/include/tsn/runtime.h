@@ -58,6 +58,7 @@ typedef enum TsnTypeKind {
   TSN_KIND_MAP = 4,
   TSN_KIND_CLOSURE = 5, /* %__Callable handle shape (not always heap) */
   TSN_KIND_ENV = 6,     /* closure environment blob */
+  TSN_KIND_STRUCT = 7,  /* value aggregate / box layout (not a heap class) */
 } TsnTypeKind;
 
 typedef enum TsnRefClass {
@@ -105,6 +106,8 @@ void tsn_typeinfo_register(const TsnTypeInfo *info);
 
 void tsn_gc_set_type(void *ptr, int32_t type_id);
 void tsn_gc_set_array_meta(void *arr, int32_t elem_ref_class, int32_t elem_type_id, int64_t elem_size);
+void tsn_gc_set_map_meta(void *map, int32_t key_ref_class, int32_t key_type_id, int32_t value_ref_class,
+                         int32_t value_type_id);
 void tsn_gc_root_push(void **slot);
 void tsn_gc_root_pop(int32_t n);
 void tsn_gc_add_global_root(void **slot);

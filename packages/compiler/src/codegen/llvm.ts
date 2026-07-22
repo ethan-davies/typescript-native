@@ -266,6 +266,7 @@ const TSN_TYPEID_CLASS_BASE = 256;
 
 const TSN_KIND_CLASS = 1;
 const TSN_KIND_ENV = 6;
+const TSN_KIND_STRUCT = 7;
 const TSN_REF_VALUE = 0;
 const TSN_REF_PTR = 1;
 const TSN_REF_AGG = 2;
@@ -274,7 +275,9 @@ interface EnvTypeInfoPending {
   readonly globalName: string;
   readonly typeId: number;
   readonly llvmType: string;
-  readonly fields: TypeInfoFieldConst[];
+  fields: TypeInfoFieldConst[];
+  /** TSN_KIND_ENV or TSN_KIND_STRUCT */
+  readonly kind: number;
 }
 
 /** Must match TsnFieldInfo / TsnTypeInfo in runtime.h */
@@ -1892,7 +1895,7 @@ export class LlvmCodegen {
       const fieldsPtr = env.fields.length === 0 ? "ptr null" : `ptr @${fieldsGlobal}`;
       const sizeExpr = llvmSizeofI32Expr(env.llvmType);
       this.globalDefs.push(
-        `@${env.globalName}__typeinfo = private unnamed_addr constant ${TSN_TYPE_INFO_TYPE} { i32 ${env.typeId}, i32 ${TSN_KIND_ENV}, i32 ${sizeExpr}, i32 ${env.fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0 }`,
+        `@${env.globalName}__typeinfo = private unnamed_addr constant ${TSN_TYPE_INFO_TYPE} { i32 ${env.typeId}, i32 ${env.kind}, i32 ${sizeExpr}, i32 ${env.fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0 }`,
       );
     }
 
@@ -1957,7 +1960,8 @@ export class LlvmCodegen {
 
   /**
    * Collect TypeInfo field entries for `type` at `indexPath` within `aggregateLlvm`.
-   * Structs/tuples that contain refs are flattened to leaf VALUE/PTR/AGG entries.
+   * Structs/tuples that contain refs become a single AGG entry with nested TypeInfo
+   * (not flattened across struct boundaries).
    */
   private collectTypeInfoFields(
     aggregateLlvm: string,
@@ -2009,13 +2013,14 @@ export class LlvmCodegen {
           },
         ];
       }
-      const out: TypeInfoFieldConst[] = [];
-      for (let i = 0; i < info.fields.length; i += 1) {
-        out.push(
-          ...this.collectTypeInfoFields(aggregateLlvm, [...indexPath, i], info.fields[i]!.type),
-        );
-      }
-      return out;
+      return [
+        {
+          offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+          sizeExpr: llvmSizeofI32Expr(`%${info.name}`),
+          refClass: TSN_REF_AGG,
+          typeId: this.ensureAggregateTypeInfo(type),
+        },
+      ];
     }
 
     if (typeof type === "object" && type.kind === "tuple") {
@@ -2029,17 +2034,14 @@ export class LlvmCodegen {
           },
         ];
       }
-      const out: TypeInfoFieldConst[] = [];
-      for (let i = 0; i < type.elements.length; i += 1) {
-        out.push(
-          ...this.collectTypeInfoFields(
-            aggregateLlvm,
-            [...indexPath, i],
-            type.elements[i]!,
-          ),
-        );
-      }
-      return out;
+      return [
+        {
+          offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+          sizeExpr: llvmSizeofI32Expr(toLlvmType(type)),
+          refClass: TSN_REF_AGG,
+          typeId: this.ensureAggregateTypeInfo(type),
+        },
+      ];
     }
 
     return [
@@ -2235,9 +2237,10 @@ export class LlvmCodegen {
     const payloadSize = 8;
     const raw = this.nextTemp();
     lines.push(`  ${raw} = call ptr @tsn_alloc(i64 ${payloadSize})`);
-    this.rootHeapPtr(raw, lines);
+      this.rootHeapPtr(raw, lines);
     this.needsGc = true;
-    lines.push(`  call void @tsn_gc_set_type(ptr noundef ${raw}, i32 noundef 0)`);
+    const boxTypeId = this.ensureBoxTypeInfo(value.type);
+    lines.push(`  call void @tsn_gc_set_type(ptr noundef ${raw}, i32 noundef ${boxTypeId})`);
     if (value.type === "string" || (typeof value.type === "object" && (value.type.kind === "array" || value.type.kind === "class" || value.type.kind === "map"))) {
       lines.push(`  store ptr ${value.llvm}, ptr ${raw}`);
     } else if (value.type === "i32" || value.type === "bool" || value.type === "char" || (isLiteralType(value.type) && value.type.literalKind === "number")) {
@@ -2489,7 +2492,10 @@ export class LlvmCodegen {
     return this.ensureAggregateTypeInfo(elementType);
   }
 
-  /** Register TypeInfo for a value aggregate that contains refs (array AGG elements). */
+  /**
+   * Register TypeInfo for a value aggregate that contains refs (class AGG fields,
+   * array AGG elements, typed boxes). Direct fields only — nested ref-structs are AGG.
+   */
   private ensureAggregateTypeInfo(type: ValueType): number {
     if (typeof type === "object" && type.kind === "struct") {
       const globalName = `__agg_${type.name}`;
@@ -2502,16 +2508,21 @@ export class LlvmCodegen {
         return 0;
       }
       const typeId = this.allocateTypeId();
-      const fields: TypeInfoFieldConst[] = [];
-      for (let i = 0; i < info.fields.length; i += 1) {
-        fields.push(...this.collectTypeInfoFields(`%${info.name}`, [i], info.fields[i]!.type));
-      }
-      this.pendingEnvTypeInfos.push({
+      const pending: EnvTypeInfoPending = {
         globalName,
         typeId,
         llvmType: `%${info.name}`,
-        fields,
-      });
+        fields: [],
+        kind: TSN_KIND_STRUCT,
+      };
+      /* Push before collecting fields so recursive aggregates reuse this type_id. */
+      this.pendingEnvTypeInfos.push(pending);
+      for (let i = 0; i < info.fields.length; i += 1) {
+        pending.fields.push(
+          ...this.collectTypeInfoFields(`%${info.name}`, [i], info.fields[i]!.type),
+        );
+      }
+      this.needsTypeInfo = true;
       return typeId;
     }
     if (typeof type === "object" && type.kind === "tuple") {
@@ -2522,19 +2533,61 @@ export class LlvmCodegen {
         return existing.typeId;
       }
       const typeId = this.allocateTypeId();
-      const fields: TypeInfoFieldConst[] = [];
-      for (let i = 0; i < type.elements.length; i += 1) {
-        fields.push(...this.collectTypeInfoFields(`%${name}`, [i], type.elements[i]!));
-      }
-      this.pendingEnvTypeInfos.push({
+      const pending: EnvTypeInfoPending = {
         globalName,
         typeId,
         llvmType: `%${name}`,
-        fields,
-      });
+        fields: [],
+        kind: TSN_KIND_STRUCT,
+      };
+      this.pendingEnvTypeInfos.push(pending);
+      for (let i = 0; i < type.elements.length; i += 1) {
+        pending.fields.push(...this.collectTypeInfoFields(`%${name}`, [i], type.elements[i]!));
+      }
+      this.needsTypeInfo = true;
       return typeId;
     }
     return 0;
+  }
+
+  /**
+   * TypeInfo for a heap box that stores `type` inline (mutable captures, union payloads).
+   * Returns 0 when the boxed value has no references (opaque leaf).
+   */
+  private ensureBoxTypeInfo(type: ValueType): number {
+    if (!this.typeContainsRefs(type)) {
+      return 0;
+    }
+    if (isSinglePtrReference(type) || type === "null") {
+      const related = this.relatedTypeId(type);
+      const globalName = `__box_ptr_${related}`;
+      const existing = this.pendingEnvTypeInfos.find((e) => e.globalName === globalName);
+      if (existing) {
+        return existing.typeId;
+      }
+      const typeId = this.allocateTypeId();
+      this.pendingEnvTypeInfos.push({
+        globalName,
+        typeId,
+        llvmType: "ptr",
+        fields: [
+          {
+            offsetExpr: "0",
+            sizeExpr: llvmSizeofI32Expr("ptr"),
+            refClass: TSN_REF_PTR,
+            typeId: related,
+          },
+        ],
+        kind: TSN_KIND_STRUCT,
+      });
+      this.needsTypeInfo = true;
+      return typeId;
+    }
+    if (isFunctionType(type)) {
+      this.needsCallableRuntime = true;
+      return TSN_TYPEID_CLOSURE;
+    }
+    return this.ensureAggregateTypeInfo(type);
   }
 
   private ensureEnvTypeInfo(envTypeName: string, captures: LambdaCaptureLowering[]): number {
@@ -2551,7 +2604,7 @@ export class LlvmCodegen {
           offsetExpr: llvmOffsetOfExpr(`%${envTypeName}`, [i]),
           sizeExpr: llvmSizeofI32Expr("ptr"),
           refClass: TSN_REF_PTR,
-          typeId: 0,
+          typeId: this.ensureBoxTypeInfo(cap.type),
         });
       } else {
         fields.push(...this.collectTypeInfoFields(`%${envTypeName}`, [i], cap.type));
@@ -2562,6 +2615,7 @@ export class LlvmCodegen {
       typeId,
       llvmType: `%${envTypeName}`,
       fields,
+      kind: TSN_KIND_ENV,
     });
     this.needsTypeInfo = true;
     return typeId;
@@ -2576,6 +2630,9 @@ export class LlvmCodegen {
       declares.push("declare void @tsn_gc_set_type(ptr noundef, i32 noundef) nounwind");
       declares.push(
         "declare void @tsn_gc_set_array_meta(ptr noundef, i32 noundef, i32 noundef, i64 noundef) nounwind",
+      );
+      declares.push(
+        "declare void @tsn_gc_set_map_meta(ptr noundef, i32 noundef, i32 noundef, i32 noundef, i32 noundef) nounwind",
       );
       declares.push("declare void @tsn_gc_root_push(ptr noundef) nounwind");
       declares.push("declare void @tsn_gc_root_pop(i32 noundef) nounwind");
@@ -3587,7 +3644,8 @@ export class LlvmCodegen {
       );
       this.rootHeapPtr(heap, lines);
       this.needsGc = true;
-      lines.push(`  call void @tsn_gc_set_type(ptr noundef ${heap}, i32 noundef 0)`);
+      const boxTypeId = this.ensureBoxTypeInfo(type);
+      lines.push(`  call void @tsn_gc_set_type(ptr noundef ${heap}, i32 noundef ${boxTypeId})`);
       lines.push(`  store ptr ${heap}, ptr ${boxHolder}`);
       this.locals.set(name, { ptr: boxHolder, type, boxed: true });
       if (stmt.initializer === null) {
@@ -5762,13 +5820,30 @@ export class LlvmCodegen {
     const tmp = this.nextTemp();
     lines.push(`  ${tmp} = call ptr @tsn_map_new()`);
     this.rootHeapPtr(tmp, lines);
+
+    let valueType: ValueType = "string";
+    let resultType: ValueType = { kind: "map", valueType: "string" };
     if (expected && isMapType(expected)) {
-      return { llvm: tmp, type: expected };
+      valueType = expected.valueType as ValueType;
+      resultType = expected;
+    } else if (expected && isObjectType(expected) && expected.indexType) {
+      valueType = expected.indexType as ValueType;
+      resultType = { kind: "map", valueType };
     }
-    if (expected && isObjectType(expected) && expected.indexType) {
-      return { llvm: tmp, type: { kind: "map", valueType: expected.indexType } };
-    }
-    return { llvm: tmp, type: { kind: "map", valueType: "string" } };
+
+    const valueRef = this.refClassForElement(valueType);
+    const valueTypeId =
+      valueRef === TSN_REF_VALUE
+        ? 0
+        : valueRef === TSN_REF_PTR
+          ? this.relatedTypeId(valueType)
+          : isFunctionType(valueType)
+            ? TSN_TYPEID_CLOSURE
+            : this.ensureAggregateTypeInfo(valueType);
+    lines.push(
+      `  call void @tsn_gc_set_map_meta(ptr noundef ${tmp}, i32 noundef ${TSN_REF_PTR}, i32 noundef ${TSN_TYPEID_STRING}, i32 noundef ${valueRef}, i32 noundef ${valueTypeId})`,
+    );
+    return { llvm: tmp, type: resultType };
   }
 
   private emitUserCall(

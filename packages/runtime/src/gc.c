@@ -19,6 +19,11 @@ typedef struct TsnGcObject {
   int32_t elem_ref_class;
   int32_t elem_type_id;
   int64_t elem_size;
+  /* Map scan metadata (valid when type_id == TSN_TYPEID_MAP). */
+  int32_t key_ref_class;
+  int32_t key_type_id;
+  int32_t value_ref_class;
+  int32_t value_type_id;
 } TsnGcObject;
 
 static TsnGcObject *heap = NULL;
@@ -85,6 +90,11 @@ void tsn_gc_register(void *ptr, int64_t size) {
   heap[heap_len].elem_ref_class = TSN_REF_VALUE;
   heap[heap_len].elem_type_id = 0;
   heap[heap_len].elem_size = 0;
+  /* Default map ABI: string keys + pointer values. */
+  heap[heap_len].key_ref_class = TSN_REF_PTR;
+  heap[heap_len].key_type_id = TSN_TYPEID_STRING;
+  heap[heap_len].value_ref_class = TSN_REF_PTR;
+  heap[heap_len].value_type_id = 0;
   heap_len += 1;
   bytes_allocated += size;
 }
@@ -136,6 +146,19 @@ void tsn_gc_set_array_meta(void *arr, int32_t elem_ref_class, int32_t elem_type_
   obj->elem_ref_class = elem_ref_class;
   obj->elem_type_id = elem_type_id;
   obj->elem_size = elem_size;
+}
+
+void tsn_gc_set_map_meta(void *map, int32_t key_ref_class, int32_t key_type_id, int32_t value_ref_class,
+                         int32_t value_type_id) {
+  TsnGcObject *obj = heap_get(map);
+  if (obj == NULL) {
+    return;
+  }
+  obj->type_id = TSN_TYPEID_MAP;
+  obj->key_ref_class = key_ref_class;
+  obj->key_type_id = key_type_id;
+  obj->value_ref_class = value_ref_class;
+  obj->value_type_id = value_type_id;
 }
 
 void tsn_gc_root_push(void **slot) {
@@ -236,6 +259,15 @@ static void mark_array(TsnGcObject *obj) {
   }
 }
 
+static void mark_map_slot(char *slot, int32_t ref_class, int32_t type_id) {
+  if (ref_class == TSN_REF_PTR) {
+    mark_object(*(void **)slot);
+  } else if (ref_class == TSN_REF_AGG) {
+    const TsnTypeInfo *ti = tsn_typeinfo_get(type_id);
+    mark_fields_at(slot, ti);
+  }
+}
+
 static void mark_map(TsnGcObject *obj) {
   TsnMap *map = (TsnMap *)obj->ptr;
   if (map->keys != NULL) {
@@ -246,10 +278,10 @@ static void mark_map(TsnGcObject *obj) {
   }
   for (int64_t i = 0; i < map->len; i += 1) {
     if (map->keys != NULL) {
-      mark_object(map->keys[i]);
+      mark_map_slot((char *)&map->keys[i], obj->key_ref_class, obj->key_type_id);
     }
     if (map->vals != NULL) {
-      mark_object(map->vals[i]);
+      mark_map_slot((char *)&map->vals[i], obj->value_ref_class, obj->value_type_id);
     }
   }
 }
@@ -294,8 +326,7 @@ static void mark_object(void *ptr) {
   switch (info->kind) {
     case TSN_KIND_CLASS:
     case TSN_KIND_ENV:
-      mark_fields_at((char *)ptr, info);
-      break;
+    case TSN_KIND_STRUCT:
     case TSN_KIND_CLOSURE:
       mark_fields_at((char *)ptr, info);
       break;

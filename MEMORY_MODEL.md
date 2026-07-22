@@ -245,7 +245,7 @@ Person[]                         Point[]
 └────────┘                       └────────┘
 ```
 
-Runtime APIs (`tsn_array_new`, `tsn_array_push`, `tsn_array_pop`, `tsn_array_index_of`) operate on this header. Per-instantiation `TypeInfo` records whether elements are `VALUE`, `PTR`, or `AGG` (inline aggregate that itself contains references) so a future GC can scan the data buffer correctly.
+Runtime APIs (`tsn_array_new`, `tsn_array_push`, `tsn_array_pop`, `tsn_array_index_of`) operate on this header. Per-instantiation scan metadata (`tsn_gc_set_array_meta`) records whether elements are `VALUE`, `PTR`, or `AGG` (inline aggregate that itself contains references) so the GC can scan the data buffer correctly.
 
 ---
 
@@ -332,7 +332,7 @@ Behavior (existing runtime):
 - `tsn_map_set` — insert or **overwrite** value for an existing key (linear `strcmp` search); grows by doubling when full
 - `tsn_map_get` — lookup; returns `null` if missing
 
-Today keys are strings and values are pointer-sized. `TypeInfo` records key/value reference classification so a future GC can scan entries (e.g. `Map<string, Person>` → key `PTR`, value `PTR`; value-typed payloads would be classified accordingly once boxed or inlined).
+Today keys are strings and values are pointer-sized. Side-table map metadata (`tsn_gc_set_map_meta`) records key/value reference classification so the GC can scan entries (e.g. `Map<string, Person>` → key `PTR`, value `PTR`; pure value payloads use `VALUE` and are not followed).
 
 ---
 
@@ -365,6 +365,7 @@ function createCounter() {
 - The **handle** `{ code, env }` is a language-level reference payload (shallow-copied on assign/pass). It is not itself a heap object with an object header.
 - The **environment** (and any mutable capture boxes) live on the heap via `tsn_alloc`.
 - Captures follow the same value/reference rules as fields: primitives/structs stored by value (or via a mutable box); reference captures stored as pointers.
+- Each environment layout gets a registered `TypeInfo` (`TSN_KIND_ENV`). Mutable capture boxes that hold references get their own `TypeInfo` (`TSN_KIND_STRUCT`) so the GC scans the boxed pointer/aggregate.
 
 ```text
 () => person.name
@@ -538,7 +539,7 @@ Call graph today (ABIs unchanged):
 | Map | `tsn_map_new` / `tsn_map_set` | `tsn_alloc` / `tsn_realloc` |
 | Closure environment | `tsn_alloc(sizeof(env))` | `tsn_alloc` |
 
-A future GC can replace the allocator implementation without changing most codegen call sites; root registration and `tsn_gc_set_type` / `tsn_gc_set_array_meta` are the additional compiler/runtime hooks for the collector.
+Root registration and `tsn_gc_set_type` / `tsn_gc_set_array_meta` / `tsn_gc_set_map_meta` are the compiler/runtime hooks for the collector; a future allocator swap can keep those call sites.
 
 ---
 
@@ -567,7 +568,7 @@ Heap (side table)
 
 ### Allocation tracking
 
-Every `tsn_alloc` / `tsn_realloc` registers the payload pointer in a runtime side table (`ptr`, `size`, `type_id`, mark bit, array scan meta). Object byte layouts are unchanged — arrays/maps/strings still do not embed `type_id` in-object; the side table carries type identity instead.
+Every `tsn_alloc` / `tsn_realloc` registers the payload pointer in a runtime side table (`ptr`, `size`, `type_id`, mark bit, array/map scan meta). Object byte layouts are unchanged — arrays/maps/strings still do not embed `type_id` in-object; the side table carries type identity instead.
 
 GC-internal structures (the side table, root stack, TypeInfo registry growth) use system `malloc`, never `tsn_alloc`, to avoid reentrancy.
 
@@ -592,10 +593,29 @@ Rule: anything reachable from a GC root stays alive.
 ### Mark and sweep
 
 1. Clear marks
-2. Mark every object reachable from roots, following TypeInfo field/`elem_*`/`key_*`/`value_*` metadata (including nested structs via `AGG`)
+2. Mark every object reachable from roots, following TypeInfo field/`elem_*`/`key_*`/`value_*` metadata (including nested structs via `AGG`, closure envs, and typed boxes)
 3. Free unmarked objects and remove them from the side table; clear marks on survivors
 
-Cycles are handled naturally (no root → neither object is marked → both swept).
+Cycles are handled naturally (marked check stops re-entry; no root → neither object is marked → both swept).
+
+### Reference scanning
+
+The collector walks the full object graph:
+
+```text
+Root → Closure env → User → profile (AGG) → String
+                  ↘ Friend (PTR) → Person
+```
+
+| Container | How refs are found |
+| --- | --- |
+| Class | `TypeInfo.fields` — `PTR` / nested `AGG` |
+| Struct-with-refs (inline) | Nested `TSN_KIND_STRUCT` TypeInfo via `AGG` |
+| Array | Side-table `elem_ref_class` / `elem_type_id` (`tsn_gc_set_array_meta`) |
+| Map | Side-table key/value meta (`tsn_gc_set_map_meta`) |
+| Closure handle | Builtin CLOSURE fields → env `PTR` |
+| Closure env | Per-env `TSN_KIND_ENV` TypeInfo |
+| Mutable / union box | Per-layout `TSN_KIND_STRUCT` TypeInfo |
 
 ### When GC runs
 
@@ -703,14 +723,14 @@ person ─────────────→ Person object
 
 ## 18. Runtime TypeInfo & object layouts
 
-The runtime keeps a `TypeInfo` registry so every heap kind can be described for a future GC — which slots hold references, element/key/value classifications, and object size.
+The runtime keeps a `TypeInfo` registry so every heap kind can be described for GC — which slots hold references, element/key/value classifications, and object size.
 
 ### TypeInfo shape
 
 ```text
 TypeInfo
 ├── type_id
-├── kind          (class | array | string | map | closure | env)
+├── kind          (class | array | string | map | closure | env | struct)
 ├── size          (fixed byte size, or -1 if variable)
 ├── fields[]      (offset, size, ref_class, nested type_id)
 ├── elem_*        (arrays: element type_id + ref_class)
@@ -735,8 +755,9 @@ class Person { name: string; age: i32; }
 class Player { position: Point; }   // Point is a pure value struct
 → position : VALUE
 
-class Game { player: Player; }
-→ player : PTR
+class User { profile: Profile; }    // Profile { name: string; age: i32 }
+→ profile : AGG → TypeInfo(Profile)
+                   └── name : PTR
 
 Person[]  → elem_ref_class = PTR
 Point[]   → elem_ref_class = VALUE
@@ -762,13 +783,14 @@ Class `type_id`s start at **256**. Lookup: `tsn_typeinfo_get(type_id)`. The comp
 Runtime TypeInfo
 │
 ├── Class     — size + reference fields (type_id in ObjectHeader)
+├── Struct    — nested AGG layouts / typed boxes (`TSN_KIND_STRUCT`)
 ├── Array     — element type + elem_ref_class (header has no type_id yet)
 ├── String    — character data (no type_id in buffer yet)
-├── Map       — key/value type classification
+├── Map       — key/value type classification (side-table meta)
 └── Closure   — handle shape + environment / capture layout
 ```
 
-Identification today: class instances via `ObjectHeader.type_id` and the GC side table; other kinds via reserved builtin `TypeInfo` entries plus `tsn_gc_set_type` / `tsn_gc_set_array_meta` at allocation time. A future ABI bump may also embed `type_id` on every heap object.
+Identification today: class instances via `ObjectHeader.type_id` and the GC side table; other kinds via reserved builtin `TypeInfo` entries plus `tsn_gc_set_type` / `tsn_gc_set_array_meta` / `tsn_gc_set_map_meta` at allocation time. A future ABI bump may also embed `type_id` on every heap object.
 
 ### Design decisions (canonical)
 
