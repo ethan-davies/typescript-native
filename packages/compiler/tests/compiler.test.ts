@@ -16,14 +16,15 @@ function main(): void {
 
 describe("compile pipeline", () => {
   describe("successful compilation", () => {
-    it("compiles hello world to LLVM IR with printf", () => {
+    it("compiles hello world to LLVM IR with runtime print", () => {
       const result = compile(helloSource);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare i32 @printf");
+      expect(result.ir).toContain("declare void @tsn_print_str");
+      expect(result.ir).toContain("declare void @tsn_print_newline");
       expect(result.ir).toContain("define i32 @main()");
-      expect(result.ir).toContain("call i32 (ptr, ...) @printf");
+      expect(result.ir).toContain("call void @tsn_print_str");
+      expect(result.ir).toContain("call void @tsn_print_newline");
       expect(result.ir).toContain(encodeLlvmString("Hello, world!"));
-      expect(result.ir).toContain("%s\\0A");
       expect(result.ast.body[0]?.kind).toBe("FunctionDeclaration");
       if (result.ast.body[0]?.kind === "FunctionDeclaration") {
         expect(result.ast.body[0].name.name).toBe("main");
@@ -41,7 +42,7 @@ describe("compile pipeline", () => {
       expect(result.ir).not.toContain(encodeLlvmString("Hello, world!"));
     });
 
-    it("emits multiple printf calls for multiple prints", () => {
+    it("emits runtime print calls for multiple prints", () => {
       const result = compile(`
         function main(): void {
           print("a");
@@ -49,7 +50,7 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      const calls = result.ir?.match(/call i32 \(ptr, \.\.\.\) @printf/g) ?? [];
+      const calls = result.ir?.match(/call void @tsn_print_newline/g) ?? [];
       expect(calls).toHaveLength(2);
     });
 
@@ -105,7 +106,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("%v.c = alloca i8");
       expect(result.ir).toContain("%v.s = alloca ptr");
       expect(result.ir).toContain(encodeLlvmString("Hello world"));
-      expect(result.ir).toContain("%s %s\\0A");
+      expect(result.ir).toContain("call void @tsn_print_space");
     });
 
     it("compiles f32 annotations and float arithmetic", () => {
@@ -155,10 +156,8 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare i64 @strlen");
-      expect(result.ir).toContain("call ptr @malloc");
-      expect(result.ir).toContain("call ptr @strcpy");
-      expect(result.ir).toContain("call ptr @strcat");
+      expect(result.ir).toContain("declare ptr @tsn_str_concat");
+      expect(result.ir).toContain("call ptr @tsn_str_concat");
     });
 
     it("compiles user-defined functions with parameters and calls", () => {
@@ -236,9 +235,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("xor i1");
       expect(result.ir).toContain("and i1");
       expect(result.ir).toContain("or i1");
-      expect(result.ir).toContain(encodeLlvmString("true"));
-      expect(result.ir).toContain(encodeLlvmString("false"));
-      expect(result.ir).toContain("select i1");
+      expect(result.ir).toContain("call void @tsn_print_bool");
     });
 
     it("compiles if / elseif / else branches", () => {
@@ -461,7 +458,7 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("call ptr @malloc");
+      expect(result.ir).toContain("call ptr @tsn_alloc");
       expect(result.ir).toContain("@Counter__vtable");
       expect(result.ir).toContain("define void @Counter__constructor");
       expect(result.ir).toContain("define void @Counter__bump");
@@ -712,12 +709,12 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare ptr @malloc");
-      expect(result.ir).toContain("declare ptr @realloc");
+      expect(result.ir).toContain("declare ptr @tsn_array_new");
+      expect(result.ir).toContain("declare void @tsn_array_push");
       expect(result.ir).toContain("%v.numbers = alloca ptr");
       expect(result.ir).toContain("forin.cond.");
       expect(result.ir).toContain("forin.body.");
-      expect(result.ir).toContain("arr.grow.");
+      expect(result.ir).toContain("call void @tsn_array_push");
     });
 
     it("allows mutating const array elements and push", () => {
@@ -1115,10 +1112,8 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare i32 @sprintf");
-      expect(result.ir).toContain(encodeLlvmString("["));
-      expect(result.ir).toContain(encodeLlvmString(", "));
-      expect(result.ir).toContain(encodeLlvmString("]"));
+      expect(result.ir).toContain("declare ptr @tsn_array_to_string");
+      expect(result.ir).toContain("call ptr @tsn_array_to_string");
     });
 
     it("infers heterogeneous literals as tuples", () => {
@@ -1541,9 +1536,9 @@ describe("type aliases and advanced types", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("__tsn_map_new");
-    expect(result.ir).toContain("__tsn_map_set");
-    expect(result.ir).toContain("__tsn_map_get");
+    expect(result.ir).toContain("tsn_map_new");
+    expect(result.ir).toContain("tsn_map_set");
+    expect(result.ir).toContain("tsn_map_get");
   });
 
   it("expands keyof and conditional types", () => {
@@ -1895,7 +1890,7 @@ describe("lambdas and closures", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @malloc");
+    expect(result.ir).toContain("call ptr @tsn_alloc");
   });
 
   it("compiles mutable captures with heap boxes", () => {
@@ -1913,7 +1908,7 @@ describe("lambdas and closures", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @malloc");
+    expect(result.ir).toContain("call ptr @tsn_alloc");
   });
 
   it("promotes named functions to callable values", () => {
