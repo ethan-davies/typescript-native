@@ -257,6 +257,22 @@ const OBJECT_HEADER_TYPE = "%ObjectHeader";
 /** Must match TSN_EH_FRAME_SIZE in packages/runtime/include/tsn/runtime.h */
 const TSN_EH_FRAME_SIZE = 256;
 
+/** Reserved builtin type_ids — must match TSN_TYPEID_* in runtime.h */
+const TSN_TYPEID_STRING = 1;
+const TSN_TYPEID_ARRAY = 2;
+const TSN_TYPEID_MAP = 3;
+const TSN_TYPEID_CLOSURE = 4;
+const TSN_TYPEID_CLASS_BASE = 256;
+
+const TSN_KIND_CLASS = 1;
+const TSN_REF_VALUE = 0;
+const TSN_REF_PTR = 1;
+const TSN_REF_AGG = 2;
+
+/** Must match TsnFieldInfo / TsnTypeInfo in runtime.h */
+const TSN_FIELD_INFO_TYPE = "%TsnFieldInfo";
+const TSN_TYPE_INFO_TYPE = "%TsnTypeInfo";
+
 /**
  * Lowers a validated, type-checked AST to LLVM IR text.
  */
@@ -279,8 +295,9 @@ export class LlvmCodegen {
   private interfaces = new Map<string, InterfaceInfo>();
   private localInterfaces = new Map<string, InterfaceInfo>();
   private namespaces = new Map<string, NamespaceInfo>();
-  /** Next monotonic type_id for class ObjectHeaders (starts at 1). */
-  private nextTypeId = 1;
+  /** Next monotonic type_id for class ObjectHeaders (starts at TSN_TYPEID_CLASS_BASE). */
+  private nextTypeId = TSN_TYPEID_CLASS_BASE;
+  private needsTypeInfo = false;
   private needsTsnAlloc = false;
   private needsTsnString = false;
   private needsTsnArray = false;
@@ -364,6 +381,8 @@ export class LlvmCodegen {
     this.interfaces.clear();
     this.localInterfaces.clear();
     this.namespaces.clear();
+    this.nextTypeId = TSN_TYPEID_CLASS_BASE;
+    this.needsTypeInfo = false;
     this.needsTsnAlloc = false;
     this.needsTsnString = false;
     this.needsTsnArray = false;
@@ -803,6 +822,7 @@ export class LlvmCodegen {
     }
 
     this.emitClassGlobals();
+    this.emitTypeInfoGlobals();
 
     const structTypeLines = this.emitStructTypeDefs();
     const tupleTypeLines = this.emitTupleTypeDefs();
@@ -810,12 +830,19 @@ export class LlvmCodegen {
     const classTypeLines = this.emitClassTypeDefs();
     const objectHeaderLines =
       classTypeLines.length > 0 ? [`${OBJECT_HEADER_TYPE} = type { i32, ptr }`] : [];
+    const typeInfoTypeLines = this.needsTypeInfo
+      ? [
+          `${TSN_FIELD_INFO_TYPE} = type { i32, i32, i32, i32 }`,
+          `${TSN_TYPE_INFO_TYPE} = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32 }`,
+        ]
+      : [];
     const unionTypeLines = this.needsUnionRuntime ? ["%__Union = type { i32, ptr }"] : [];
     const callableTypeLines = this.needsCallableRuntime
       ? ["%__Callable = type { ptr, ptr }"]
       : [];
     const typeLines = [
       ...objectHeaderLines,
+      ...typeInfoTypeLines,
       ...structTypeLines,
       ...tupleTypeLines,
       ...interfaceTypeLines,
@@ -1795,6 +1822,195 @@ export class LlvmCodegen {
     }
   }
 
+  /**
+   * Emit per-class TypeInfo constants and `@tsn_init_typeinfo`, which registers
+   * them with the runtime. Does not change object byte layouts.
+   */
+  private emitTypeInfoGlobals(): void {
+    if (this.classes.size === 0) {
+      return;
+    }
+    this.needsTypeInfo = true;
+
+    for (const info of this.classes.values()) {
+      const fields: TypeInfoFieldConst[] = [];
+      for (const field of info.fields) {
+        fields.push(
+          ...this.collectTypeInfoFields(`%${info.name}`, [field.fieldIndex], field.type),
+        );
+      }
+
+      const fieldsGlobal = `${info.name}__typeinfo_fields`;
+      if (fields.length > 0) {
+        const elems = fields
+          .map(
+            (f) =>
+              `${TSN_FIELD_INFO_TYPE} { i32 ${f.offsetExpr}, i32 ${f.sizeExpr}, i32 ${f.refClass}, i32 ${f.typeId} }`,
+          )
+          .join(", ");
+        this.globalDefs.push(
+          `@${fieldsGlobal} = private unnamed_addr constant [${fields.length} x ${TSN_FIELD_INFO_TYPE}] [${elems}]`,
+        );
+      }
+
+      const fieldsPtr = fields.length === 0 ? "ptr null" : `ptr @${fieldsGlobal}`;
+      const sizeExpr = llvmSizeofI32Expr(`%${info.name}`);
+      this.globalDefs.push(
+        `@${info.name}__typeinfo = private unnamed_addr constant ${TSN_TYPE_INFO_TYPE} { i32 ${info.typeId}, i32 ${TSN_KIND_CLASS}, i32 ${sizeExpr}, i32 ${fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0 }`,
+      );
+    }
+
+    const initLines: string[] = ["define void @tsn_init_typeinfo() {", "entry:"];
+    for (const info of this.classes.values()) {
+      initLines.push(
+        `  call void @tsn_typeinfo_register(ptr noundef @${info.name}__typeinfo)`,
+      );
+    }
+    initLines.push("  ret void", "}", "");
+    this.functionBodies.push(...initLines);
+  }
+
+  /** Whether a value type transitively contains heap references. */
+  private typeContainsRefs(type: ValueType): boolean {
+    if (isReferenceCategory(type)) {
+      return true;
+    }
+    if (typeof type === "object" && type.kind === "struct") {
+      const info = this.structs.get(type.name);
+      if (!info) {
+        return false;
+      }
+      return info.fields.some((f) => this.typeContainsRefs(f.type));
+    }
+    if (typeof type === "object" && type.kind === "tuple") {
+      return type.elements.some((el) => this.typeContainsRefs(el));
+    }
+    if (typeof type === "object" && type.kind === "object") {
+      return type.fields.some((f) => this.typeContainsRefs(f.type as ValueType));
+    }
+    return false;
+  }
+
+  private relatedTypeId(type: ValueType): number {
+    if (type === "string") {
+      return TSN_TYPEID_STRING;
+    }
+    if (typeof type !== "object") {
+      return 0;
+    }
+    switch (type.kind) {
+      case "array":
+        return TSN_TYPEID_ARRAY;
+      case "map":
+        return TSN_TYPEID_MAP;
+      case "function":
+        return TSN_TYPEID_CLOSURE;
+      case "class": {
+        const info = this.classes.get(type.name);
+        return info?.typeId ?? 0;
+      }
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * Collect TypeInfo field entries for `type` at `indexPath` within `aggregateLlvm`.
+   * Structs/tuples that contain refs are flattened to leaf VALUE/PTR/AGG entries.
+   */
+  private collectTypeInfoFields(
+    aggregateLlvm: string,
+    indexPath: number[],
+    type: ValueType,
+  ): TypeInfoFieldConst[] {
+    if (typeof type === "object" && type.kind === "function") {
+      this.needsCallableRuntime = true;
+      return [
+        {
+          offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+          sizeExpr: llvmSizeofI32Expr("%__Callable"),
+          refClass: TSN_REF_AGG,
+          typeId: TSN_TYPEID_CLOSURE,
+        },
+      ];
+    }
+
+    if (isSinglePtrReference(type)) {
+      return [
+        {
+          offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+          sizeExpr: llvmSizeofI32Expr("ptr"),
+          refClass: TSN_REF_PTR,
+          typeId: this.relatedTypeId(type),
+        },
+      ];
+    }
+
+    if (typeof type === "object" && type.kind === "struct") {
+      const info = this.structs.get(type.name);
+      if (!info) {
+        return [
+          {
+            offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+            sizeExpr: llvmSizeofI32Expr(`%${type.name}`),
+            refClass: TSN_REF_VALUE,
+            typeId: 0,
+          },
+        ];
+      }
+      if (!this.typeContainsRefs(type)) {
+        return [
+          {
+            offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+            sizeExpr: llvmSizeofI32Expr(`%${info.name}`),
+            refClass: TSN_REF_VALUE,
+            typeId: 0,
+          },
+        ];
+      }
+      const out: TypeInfoFieldConst[] = [];
+      for (let i = 0; i < info.fields.length; i += 1) {
+        out.push(
+          ...this.collectTypeInfoFields(aggregateLlvm, [...indexPath, i], info.fields[i]!.type),
+        );
+      }
+      return out;
+    }
+
+    if (typeof type === "object" && type.kind === "tuple") {
+      if (!this.typeContainsRefs(type)) {
+        return [
+          {
+            offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+            sizeExpr: llvmSizeofI32Expr(toLlvmType(type)),
+            refClass: TSN_REF_VALUE,
+            typeId: 0,
+          },
+        ];
+      }
+      const out: TypeInfoFieldConst[] = [];
+      for (let i = 0; i < type.elements.length; i += 1) {
+        out.push(
+          ...this.collectTypeInfoFields(
+            aggregateLlvm,
+            [...indexPath, i],
+            type.elements[i]!,
+          ),
+        );
+      }
+      return out;
+    }
+
+    return [
+      {
+        offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
+        sizeExpr: llvmSizeofI32Expr(toLlvmType(type)),
+        refClass: TSN_REF_VALUE,
+        typeId: 0,
+      },
+    ];
+  }
+
   /** Mangled interface names satisfied by this class via implements (incl. transitive bases + superclass). */
   private interfacesSatisfiedByClass(info: ClassInfo): string[] {
     const result = new Set<string>();
@@ -2050,6 +2266,9 @@ export class LlvmCodegen {
 
   private emitRuntimeDeclares(): string[] {
     const declares: string[] = [];
+    if (this.needsTypeInfo) {
+      declares.push("declare void @tsn_typeinfo_register(ptr noundef) nounwind");
+    }
     if (
       this.needsTsnAlloc ||
       this.needsUnionRuntime ||
@@ -2366,6 +2585,10 @@ export class LlvmCodegen {
 
     lines.push(header);
     lines.push("entry:");
+
+    if (isMain && this.classes.size > 0) {
+      lines.push("  call void @tsn_init_typeinfo()");
+    }
 
     if (!isMain) {
       for (let i = 0; i < fn.params.length; i += 1) {
@@ -5807,6 +6030,24 @@ function comparisonPredicate(operator: string, type: ValueType): string {
  */
 function llvmSizeofExpr(llvmType: string): string {
   return `ptrtoint (ptr getelementptr (${llvmType}, ptr null, i32 1) to i64)`;
+}
+
+/** `sizeof` truncated to i32 for TypeInfo constants. */
+function llvmSizeofI32Expr(llvmType: string): string {
+  return `trunc (i64 ${llvmSizeofExpr(llvmType)} to i32)`;
+}
+
+/** `offsetof` via GEP-null, truncated to i32 for TypeInfo field offsets. */
+function llvmOffsetOfExpr(aggregateTy: string, indices: readonly number[]): string {
+  const idxList = ["i32 0", ...indices.map((i) => `i32 ${i}`)].join(", ");
+  return `trunc (i64 ptrtoint (ptr getelementptr inbounds (${aggregateTy}, ptr null, ${idxList}) to i64) to i32)`;
+}
+
+interface TypeInfoFieldConst {
+  readonly offsetExpr: string;
+  readonly sizeExpr: string;
+  readonly refClass: number;
+  readonly typeId: number;
 }
 
 /**

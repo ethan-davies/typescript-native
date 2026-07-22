@@ -46,6 +46,35 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).toContain("call ptr @tsn_alloc");
     expect(result.ir).toMatch(/store i32 \d+, ptr %/);
     expect(result.ir).toContain("store ptr @Person__vtable");
+    expect(result.ir).toContain("call void @tsn_init_typeinfo()");
+    expect(result.ir).toContain("@Person__typeinfo");
+    expect(result.ir).toContain("tsn_typeinfo_register");
+    const typeIdStore = result.ir!.match(/store i32 (\d+), ptr %/);
+    expect(typeIdStore).not.toBeNull();
+    expect(Number(typeIdStore![1])).toBeGreaterThanOrEqual(256);
+  });
+
+  it("emits TypeInfo with PTR for string fields and VALUE for i32", () => {
+    const result = compile(`
+      class Person {
+        name: string;
+        age: i32;
+        constructor(name: string, age: i32) {
+          this.name = name;
+          this.age = age;
+        }
+      }
+      function main(): void {
+        let p = new Person("A", 20);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%TsnTypeInfo = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32 }");
+    expect(result.ir).toContain("@Person__typeinfo_fields");
+    // string → PTR (ref_class 1), related type_id 1 (TSN_TYPEID_STRING)
+    expect(result.ir).toMatch(/i32 1, i32 1\s*\}/);
+    // i32 → VALUE (ref_class 0)
+    expect(result.ir).toMatch(/i32 0, i32 0\s*\}/);
   });
 
   it("lays out class instances with ObjectHeader before fields", () => {

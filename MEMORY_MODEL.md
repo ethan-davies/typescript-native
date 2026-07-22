@@ -177,7 +177,20 @@ Rules:
 - Methods are **not** stored in the object. Instance methods live in a per-class vtable; the object header holds a pointer to that table. A call is conceptually `greet(person)`.
 - **Inheritance** flattens superclass fields after the header, then subclass fields (so a `Dog*` can be treated as an `Animal*` for field offsets).
 - Class fields that are reference types (string, class, array, …) are pointers. Struct fields are stored **inline** in the object.
-- `new Person()` allocates with `tsn_alloc(sizeof(Person))`, initializes the object header (`type_id` + vtable), then runs the constructor. Richer type metadata and GC scanning of the header come later.
+- `new Person()` allocates with `tsn_alloc(sizeof(Person))`, initializes the object header (`type_id` + vtable), then runs the constructor.
+- `type_id` indexes runtime `TypeInfo` (see [§17](#17-runtime-typeinfo--object-layouts)). Class IDs start at **256**; IDs **1–5** are reserved for builtins.
+
+### Common heap object header
+
+Every heap-backed value is eventually identified by a `type_id`. Today only **class instances** embed that id in-object:
+
+```text
+ObjectHeader (classes today)
+├── type_id : i32   → TypeInfo
+└── vtable  : ptr
+```
+
+Arrays, maps, strings, and closure environments use the layouts below **without** an embedded `type_id` yet. Their kinds are described by reserved builtin `TypeInfo` entries. A future ABI bump may prefix those objects with `type_id` so a single scanner can identify any heap pointer.
 
 ---
 
@@ -204,6 +217,36 @@ b ─────┘
 
 `a` sees the change. This matches TypeScript.
 
+### Array physical layout
+
+Canonical header (24 bytes — `TSN_ARRAY_HEADER_SIZE`):
+
+```text
+TsnArray                         separate data buffer
+┌──────────────────────┐         ┌─────────────────────┐
+│ length   : i64       │         │ elem[0] … elem[n)   │
+│ capacity : i64       │───────→ │ size = sizeof(T)    │
+│ data     : ptr       │         └─────────────────────┘
+└──────────────────────┘
+```
+
+Element storage depends on `T`:
+
+| Element type | Storage |
+| --- | --- |
+| `i32`, `Point` (value) | Inline values in the data buffer |
+| `Person`, `string` (reference) | Pointers in the data buffer |
+
+```text
+Person[]                         Point[]
+┌ header ┐                       ┌ header ┐
+│ data ──┼→ Person*              │ data ──┼→ Point { x, y }
+│        │  Person*              │        │  Point { x, y }
+└────────┘                       └────────┘
+```
+
+Runtime APIs (`tsn_array_new`, `tsn_array_push`, `tsn_array_pop`, `tsn_array_index_of`) operate on this header. Per-instantiation `TypeInfo` records whether elements are `VALUE`, `PTR`, or `AGG` (inline aggregate that itself contains references) so a future GC can scan the data buffer correctly.
+
 ---
 
 ## 5. Strings → reference types
@@ -225,6 +268,25 @@ b ─────┘
 ```
 
 You cannot modify characters in place. Operations such as `toUpper()` or `concat()` produce a new string. The runtime APIs (`tsn_str_len`, `tsn_str_concat`, etc.) fit this model.
+
+### String physical layout (current ABI)
+
+```text
+string ref (ptr) ──→  [ bytes …, '\0' ]
+```
+
+- Reference type, immutable, heap-allocated (literals may live in read-only data).
+- `tsn_str_concat` allocates a **new** buffer; it never mutates its inputs.
+- Length is computed with `tsn_str_len` / `strlen` (no length prefix yet).
+
+**Target layout** (future ABI bump, not implemented):
+
+```text
+String object
+├── type_id : i32
+├── length  : i64
+└── data    → characters (optionally still NUL-terminated for C interop)
+```
 
 ---
 
@@ -250,11 +312,33 @@ a ─────┐
 b ─────┘
 ```
 
+### Map physical layout
+
+Canonical header (32 bytes — `TSN_MAP_HEADER_SIZE`):
+
+```text
+TsnMap
+┌──────────────────────┐
+│ len  : i64           │
+│ cap  : i64           │
+│ keys : char**        │──→ parallel array of string key pointers
+│ vals : void**        │──→ parallel array of value pointers
+└──────────────────────┘
+```
+
+Behavior (existing runtime):
+
+- `tsn_map_new` — empty map with initial capacity 8
+- `tsn_map_set` — insert or **overwrite** value for an existing key (linear `strcmp` search); grows by doubling when full
+- `tsn_map_get` — lookup; returns `null` if missing
+
+Today keys are strings and values are pointer-sized. `TypeInfo` records key/value reference classification so a future GC can scan entries (e.g. `Map<string, Person>` → key `PTR`, value `PTR`; value-typed payloads would be classified accordingly once boxed or inlined).
+
 ---
 
 ## 7. Closures → reference types
 
-Closures need an environment for captured variables. That environment must outlive the function that created it, so closures are heap-allocated and automatically managed.
+Closures need an environment for captured variables. That environment must outlive the function that created it, so environments are heap-allocated and automatically managed.
 
 ```ts
 function createCounter() {
@@ -267,22 +351,30 @@ function createCounter() {
 }
 ```
 
-```text
-Closure
-├── function code
-└── environment
-      └── count = 0
-```
+### Closure physical layout
 
 ```text
-createCounter()
-    │
-    ▼
-Closure object
-    │
-    └── Environment
-           └── count
+%__Callable (handle, copied by value)     Environment (heap)
+┌─────────────────────┐                   ┌──────────────────┐
+│ code : ptr          │                   │ capture₀         │
+│ env  : ptr          │──────────────────→│ capture₁         │
+└─────────────────────┘                   │ …                │
+                                          └──────────────────┘
 ```
+
+- The **handle** `{ code, env }` is a language-level reference payload (shallow-copied on assign/pass). It is not itself a heap object with an object header.
+- The **environment** (and any mutable capture boxes) live on the heap via `tsn_alloc`.
+- Captures follow the same value/reference rules as fields: primitives/structs stored by value (or via a mutable box); reference captures stored as pointers.
+
+```text
+() => person.name
+
+Closure handle
+└── env ──→ Environment
+              └── person : Person* ──→ Person object
+```
+
+The environment must remain reachable as long as the closure handle is reachable — critical for GC.
 
 ---
 
@@ -537,6 +629,77 @@ person ─────────────→ Person object
                     Automatic GC
 ```
 
+---
+
+## 17. Runtime TypeInfo & object layouts
+
+The runtime keeps a `TypeInfo` registry so every heap kind can be described for a future GC — which slots hold references, element/key/value classifications, and object size.
+
+### TypeInfo shape
+
+```text
+TypeInfo
+├── type_id
+├── kind          (class | array | string | map | closure | env)
+├── size          (fixed byte size, or -1 if variable)
+├── fields[]      (offset, size, ref_class, nested type_id)
+├── elem_*        (arrays: element type_id + ref_class)
+└── key_* / value_* (maps)
+```
+
+### Reference classification (`ref_class`)
+
+| `ref_class` | Meaning |
+| --- | --- |
+| `VALUE` | No GC scan (primitive or pure value aggregate) |
+| `PTR` | Field/element is a heap pointer |
+| `AGG` | Inline aggregate; scan via nested `type_id` |
+
+Examples:
+
+```text
+class Person { name: string; age: i32; }
+→ field 0 name : PTR
+→ field 1 age  : VALUE
+
+class Player { position: Point; }   // Point is a pure value struct
+→ position : VALUE
+
+class Game { player: Player; }
+→ player : PTR
+
+Person[]  → elem_ref_class = PTR
+Point[]   → elem_ref_class = VALUE
+struct WithName { name: string; }[]
+          → elem_ref_class = AGG
+```
+
+### Reserved builtin type IDs
+
+| ID | Kind |
+| --- | --- |
+| 1 | String (NUL-terminated buffer today) |
+| 2 | Array header (`TsnArray`) |
+| 3 | Map header (`TsnMap`) |
+| 4 | Closure handle shape (`{ code*, env* }`) |
+| 5 | Generic env / capture-box placeholder |
+
+Class `type_id`s start at **256**. Lookup: `tsn_typeinfo_get(type_id)`. The compiler registers per-class `TypeInfo` (field layouts) at program start via `tsn_typeinfo_register`.
+
+### Unified model
+
+```text
+Runtime TypeInfo
+│
+├── Class     — size + reference fields (type_id in ObjectHeader)
+├── Array     — element type + elem_ref_class (header has no type_id yet)
+├── String    — character data (no type_id in buffer yet)
+├── Map       — key/value type classification
+└── Closure   — handle shape + environment / capture layout
+```
+
+Identification today: class instances via `ObjectHeader.type_id`; other kinds via reserved builtin `TypeInfo` entries until an ABI bump embeds `type_id` on every heap object.
+
 ### Design decisions (canonical)
 
 | Concern | Decision |
@@ -546,6 +709,8 @@ person ─────────────→ Person object
 | Interfaces | Compile-time abstractions; runtime dispatch only when necessary |
 | Storage | Compiler chooses stack/register vs heap |
 | Memory management | Automatic tracing GC (initially mark-and-sweep) |
+| Object header | Classes: `{ type_id, vtable }`; arrays/maps/strings: layout as above (type_id prefix later) |
+| Type metadata | `TypeInfo` registry (`tsn_typeinfo_get` / `tsn_typeinfo_register`) |
 | References | Implicit for reference types |
 | Pointers | Optional future low-level feature |
 | Manual `free` | Not part of normal TSN programming |

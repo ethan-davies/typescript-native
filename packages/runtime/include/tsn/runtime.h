@@ -26,24 +26,80 @@ void tsn_throw(void *error);
 void *tsn_eh_caught_exception(void);
 void tsn_uncaught_exception(void *error);
 
-/* Shared header on every class instance. Must match %ObjectHeader in llvm.ts. */
+/* Shared header on every class instance. Must match %ObjectHeader in llvm.ts.
+ * type_id indexes TypeInfo (class IDs start at TSN_TYPEID_CLASS_BASE).
+ * Arrays/maps/strings do not embed type_id yet — see reserved TSN_TYPEID_*. */
 typedef struct TsnObjectHeader {
   int32_t type_id;
   void *vtable;
 } TsnObjectHeader;
 
+/* Canonical 24-byte array header. Must match ARRAY_HEADER_SIZE in llvm.ts. */
 typedef struct TsnArray {
   int64_t length;
   int64_t capacity;
   void *data;
 } TsnArray;
 
+/* Canonical 32-byte map header. String keys + pointer-sized values today. */
 typedef struct TsnMap {
   int64_t len;
   int64_t cap;
   char **keys;
   void **vals;
 } TsnMap;
+
+/* --- TypeInfo (GC / RTTI metadata; does not change object byte layouts) --- */
+
+typedef enum TsnTypeKind {
+  TSN_KIND_CLASS = 1,
+  TSN_KIND_ARRAY = 2,
+  TSN_KIND_STRING = 3,
+  TSN_KIND_MAP = 4,
+  TSN_KIND_CLOSURE = 5, /* %__Callable handle shape (not always heap) */
+  TSN_KIND_ENV = 6,     /* closure environment blob */
+} TsnTypeKind;
+
+typedef enum TsnRefClass {
+  TSN_REF_VALUE = 0, /* no GC scan (primitive / pure value aggregate) */
+  TSN_REF_PTR = 1,   /* field/element is a heap pointer */
+  TSN_REF_AGG = 2,   /* inline aggregate; scan via nested type_id */
+} TsnRefClass;
+
+/* Reserved builtin type_ids. Class type_ids start at TSN_TYPEID_CLASS_BASE. */
+#define TSN_TYPEID_STRING 1
+#define TSN_TYPEID_ARRAY 2
+#define TSN_TYPEID_MAP 3
+#define TSN_TYPEID_CLOSURE 4
+#define TSN_TYPEID_ENV 5
+#define TSN_TYPEID_CLASS_BASE 256
+
+typedef struct TsnFieldInfo {
+  int32_t offset;    /* bytes from object start */
+  int32_t size;
+  int32_t ref_class; /* TsnRefClass */
+  int32_t type_id;   /* nested TypeInfo for AGG; related type for PTR; 0 if N/A */
+} TsnFieldInfo;
+
+/* Must match %TsnTypeInfo / %TsnFieldInfo in llvm.ts when emitting constants. */
+typedef struct TsnTypeInfo {
+  int32_t type_id;
+  int32_t kind; /* TsnTypeKind */
+  int32_t size; /* fixed size, or -1 if variable-length */
+  int32_t field_count;
+  const TsnFieldInfo *fields;
+  /* Array */
+  int32_t elem_type_id;
+  int32_t elem_ref_class;
+  /* Map */
+  int32_t key_type_id;
+  int32_t key_ref_class;
+  int32_t value_type_id;
+  int32_t value_ref_class;
+} TsnTypeInfo;
+
+const TsnTypeInfo *tsn_typeinfo_get(int32_t type_id);
+void tsn_typeinfo_register(const TsnTypeInfo *info);
 
 /* Element comparison kinds for array search helpers. */
 #define TSN_CMP_I32 0

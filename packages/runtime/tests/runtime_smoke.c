@@ -69,10 +69,63 @@ static void test_print_and_format(void) {
   tsn_print_newline();
 }
 
+static void test_typeinfo(void) {
+  const TsnTypeInfo *string_ti = tsn_typeinfo_get(TSN_TYPEID_STRING);
+  assert(string_ti != NULL);
+  assert(string_ti->kind == TSN_KIND_STRING);
+  assert(string_ti->size == -1);
+
+  const TsnTypeInfo *array_ti = tsn_typeinfo_get(TSN_TYPEID_ARRAY);
+  assert(array_ti != NULL);
+  assert(array_ti->kind == TSN_KIND_ARRAY);
+  assert(array_ti->size == (int32_t)sizeof(TsnArray));
+
+  const TsnTypeInfo *map_ti = tsn_typeinfo_get(TSN_TYPEID_MAP);
+  assert(map_ti != NULL);
+  assert(map_ti->kind == TSN_KIND_MAP);
+  assert(map_ti->key_ref_class == TSN_REF_PTR);
+  assert(map_ti->value_ref_class == TSN_REF_PTR);
+
+  const TsnTypeInfo *closure_ti = tsn_typeinfo_get(TSN_TYPEID_CLOSURE);
+  assert(closure_ti != NULL);
+  assert(closure_ti->kind == TSN_KIND_CLOSURE);
+  assert(closure_ti->field_count == 2);
+  assert(closure_ti->fields[1].ref_class == TSN_REF_PTR);
+
+  const TsnTypeInfo *env_ti = tsn_typeinfo_get(TSN_TYPEID_ENV);
+  assert(env_ti != NULL);
+  assert(env_ti->kind == TSN_KIND_ENV);
+
+  assert(tsn_typeinfo_get(TSN_TYPEID_CLASS_BASE) == NULL);
+
+  static const TsnFieldInfo class_fields[] = {
+      {.offset = 16, .size = 8, .ref_class = TSN_REF_PTR, .type_id = TSN_TYPEID_STRING},
+  };
+  static const TsnTypeInfo class_ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE,
+      .kind = TSN_KIND_CLASS,
+      .size = 24,
+      .field_count = 1,
+      .fields = class_fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&class_ti);
+  const TsnTypeInfo *got = tsn_typeinfo_get(TSN_TYPEID_CLASS_BASE);
+  assert(got == &class_ti);
+  assert(got->field_count == 1);
+  assert(got->fields[0].ref_class == TSN_REF_PTR);
+}
+
 int main(void) {
   test_strings();
   test_arrays();
   test_maps();
   test_print_and_format();
+  test_typeinfo();
   return 0;
 }
