@@ -216,6 +216,8 @@ interface ClassInfo {
   readonly constructorMangledName: string;
   readonly constructorDecl: ConstructorDeclaration | null;
   readonly vtableGlobalName: string;
+  /** Runtime type identity stored in ObjectHeader.type_id. */
+  readonly typeId: number;
   readonly decl: ClassDeclaration;
 }
 
@@ -249,6 +251,9 @@ const LOGICAL_OPS = new Set(["&&", "||"]);
 /** Array header: { i64 length, i64 capacity, ptr data } — 24 bytes. */
 const ARRAY_HEADER_SIZE = 24;
 
+/** Shared header on every class instance: { type_id, vtable }. */
+const OBJECT_HEADER_TYPE = "%ObjectHeader";
+
 /** Must match TSN_EH_FRAME_SIZE in packages/runtime/include/tsn/runtime.h */
 const TSN_EH_FRAME_SIZE = 256;
 
@@ -274,6 +279,8 @@ export class LlvmCodegen {
   private interfaces = new Map<string, InterfaceInfo>();
   private localInterfaces = new Map<string, InterfaceInfo>();
   private namespaces = new Map<string, NamespaceInfo>();
+  /** Next monotonic type_id for class ObjectHeaders (starts at 1). */
+  private nextTypeId = 1;
   private needsTsnAlloc = false;
   private needsTsnString = false;
   private needsTsnArray = false;
@@ -801,11 +808,14 @@ export class LlvmCodegen {
     const tupleTypeLines = this.emitTupleTypeDefs();
     const interfaceTypeLines = this.emitInterfaceTypeDefs();
     const classTypeLines = this.emitClassTypeDefs();
+    const objectHeaderLines =
+      classTypeLines.length > 0 ? [`${OBJECT_HEADER_TYPE} = type { i32, ptr }`] : [];
     const unionTypeLines = this.needsUnionRuntime ? ["%__Union = type { i32, ptr }"] : [];
     const callableTypeLines = this.needsCallableRuntime
       ? ["%__Callable = type { ptr, ptr }"]
       : [];
     const typeLines = [
+      ...objectHeaderLines,
       ...structTypeLines,
       ...tupleTypeLines,
       ...interfaceTypeLines,
@@ -876,8 +886,47 @@ export class LlvmCodegen {
       constructorMangledName: mangleSymbol(moduleId, `${decl.name.name}__constructor`),
       constructorDecl: null,
       vtableGlobalName: `${mangled}__vtable`,
+      typeId: 0,
       decl,
     };
+  }
+
+  private allocateTypeId(): number {
+    const id = this.nextTypeId;
+    this.nextTypeId += 1;
+    return id;
+  }
+
+  /** GEP to ObjectHeader.type_id (index 0 of the nested header). */
+  private emitObjectTypeIdPtr(className: string, objPtr: string, lines: string[]): string {
+    const ptr = this.nextTemp();
+    lines.push(
+      `  ${ptr} = getelementptr inbounds %${className}, ptr ${objPtr}, i32 0, i32 0, i32 0`,
+    );
+    return ptr;
+  }
+
+  /** GEP to ObjectHeader.vtable (index 1 of the nested header). */
+  private emitObjectVtablePtr(className: string, objPtr: string, lines: string[]): string {
+    const ptr = this.nextTemp();
+    lines.push(
+      `  ${ptr} = getelementptr inbounds %${className}, ptr ${objPtr}, i32 0, i32 0, i32 1`,
+    );
+    return ptr;
+  }
+
+  /**
+   * Load the vtable pointer from an object via the shared ObjectHeader layout
+   * (works without knowing the concrete class LLVM type).
+   */
+  private emitLoadObjectVtable(objPtr: string, lines: string[]): string {
+    const vtField = this.nextTemp();
+    lines.push(
+      `  ${vtField} = getelementptr inbounds ${OBJECT_HEADER_TYPE}, ptr ${objPtr}, i32 0, i32 1`,
+    );
+    const vt = this.nextTemp();
+    lines.push(`  ${vt} = load ptr, ptr ${vtField}`);
+    return vt;
   }
 
   private registerBuiltinErrorClass(
@@ -1091,6 +1140,7 @@ export class LlvmCodegen {
     }
 
     for (let i = 0; i < fields.length; i += 1) {
+      // Slot 0 is ObjectHeader; instance fields start at index 1.
       fields[i] = { ...fields[i]!, fieldIndex: i + 1 };
     }
 
@@ -1203,6 +1253,7 @@ export class LlvmCodegen {
       constructorMangledName: mangleSymbol(moduleId, `${decl.name.name}__constructor`),
       constructorDecl,
       vtableGlobalName: `${mangled}__vtable`,
+      typeId: this.allocateTypeId(),
       decl,
     };
   }
@@ -1675,7 +1726,10 @@ export class LlvmCodegen {
   private emitClassTypeDefs(): string[] {
     const lines: string[] = [];
     for (const info of this.classes.values()) {
-      const fieldTypes = ["ptr", ...info.fields.map((f) => toLlvmType(f.type))].join(", ");
+      const fieldTypes = [
+        OBJECT_HEADER_TYPE,
+        ...info.fields.map((f) => toLlvmType(f.type)),
+      ].join(", ");
       lines.push(`%${info.name} = type { ${fieldTypes} }`);
       if (info.instanceMethods.length > 0) {
         const slots = info.instanceMethods.map(() => "ptr").join(", ");
@@ -2281,10 +2335,9 @@ export class LlvmCodegen {
     lines.push(
       `  ${obj} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(`%${classInfo.name}`)})`,
     );
-    const vtPtr = this.nextTemp();
-    lines.push(
-      `  ${vtPtr} = getelementptr inbounds %${classInfo.name}, ptr ${obj}, i32 0, i32 0`,
-    );
+    const typeIdPtr = this.emitObjectTypeIdPtr(classInfo.name, obj, lines);
+    lines.push(`  store i32 ${classInfo.typeId}, ptr ${typeIdPtr}`);
+    const vtPtr = this.emitObjectVtablePtr(classInfo.name, obj, lines);
     lines.push(`  store ptr @${classInfo.vtableGlobalName}, ptr ${vtPtr}`);
 
     const args: EmittedValue[] = [];
@@ -4688,10 +4741,7 @@ export class LlvmCodegen {
       }
 
       // Virtual dispatch via vtable
-      const vtField = this.nextTemp();
-      lines.push(
-        `  ${vtField} = getelementptr inbounds %${def.name}, ptr ${obj.llvm}, i32 0, i32 0`,
-      );
+      const vtField = this.emitObjectVtablePtr(def.name, obj.llvm, lines);
       const vt = this.nextTemp();
       lines.push(`  ${vt} = load ptr, ptr ${vtField}`);
       const slotPtr = this.nextTemp();
@@ -4945,10 +4995,7 @@ export class LlvmCodegen {
         lines.push(`  ${payload} = extractvalue %__Union ${value.llvm}, 1`);
         const loaded = this.nextTemp();
         lines.push(`  ${loaded} = load ptr, ptr ${payload}`);
-        const vtPtr = this.nextTemp();
-        lines.push(`  ${vtPtr} = getelementptr inbounds ptr, ptr ${loaded}, i32 0`);
-        const vt = this.nextTemp();
-        lines.push(`  ${vt} = load ptr, ptr ${vtPtr}`);
+        const vt = this.emitLoadObjectVtable(loaded, lines);
         const match = this.nextTemp();
         lines.push(`  ${match} = icmp eq ptr ${vt}, @${info.vtableGlobalName}`);
         lines.push(`  ${tmp} = and i1 ${isObj}, ${match}`);
@@ -4958,19 +5005,13 @@ export class LlvmCodegen {
         if (isNullablePointerUnion(value.type)) {
           const notNull = this.nextTemp();
           lines.push(`  ${notNull} = icmp ne ptr ${objPtr}, null`);
-          const vtPtr = this.nextTemp();
-          lines.push(`  ${vtPtr} = getelementptr inbounds ptr, ptr ${objPtr}, i32 0`);
-          const vt = this.nextTemp();
-          lines.push(`  ${vt} = load ptr, ptr ${vtPtr}`);
+          const vt = this.emitLoadObjectVtable(objPtr, lines);
           const match = this.nextTemp();
           lines.push(`  ${match} = icmp eq ptr ${vt}, @${info.vtableGlobalName}`);
           lines.push(`  ${tmp} = and i1 ${notNull}, ${match}`);
           return { llvm: tmp, type: "bool" };
         }
-        const vtPtr = this.nextTemp();
-        lines.push(`  ${vtPtr} = getelementptr inbounds ptr, ptr ${objPtr}, i32 0`);
-        const vt = this.nextTemp();
-        lines.push(`  ${vt} = load ptr, ptr ${vtPtr}`);
+        const vt = this.emitLoadObjectVtable(objPtr, lines);
         lines.push(`  ${tmp} = icmp eq ptr ${vt}, @${info.vtableGlobalName}`);
         return { llvm: tmp, type: "bool" };
       }

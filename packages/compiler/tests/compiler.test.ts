@@ -601,6 +601,8 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
+      expect(result.ir).toContain("%ObjectHeader = type { i32, ptr }");
+      expect(result.ir).toContain("%Counter = type { %ObjectHeader, i32 }");
       expect(result.ir).toContain("call ptr @tsn_alloc");
       expect(result.ir).toContain("@Counter__vtable");
       expect(result.ir).toContain("define void @Counter__constructor");
@@ -2477,7 +2479,8 @@ describe("default and named arguments", () => {
       }
     `);
     expect(ok.success).toBe(true);
-    expect(ok.ir).toContain("%Error = type { ptr, ptr }");
+    expect(ok.ir).toContain("%ObjectHeader = type { i32, ptr }");
+    expect(ok.ir).toContain("%Error = type { %ObjectHeader, ptr }");
     expect(ok.ir).toContain("declare void @tsn_throw");
     expect(ok.ir).toContain("declare i32 @setjmp");
     expect(ok.ir).toContain("call void @tsn_throw");

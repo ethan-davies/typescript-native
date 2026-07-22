@@ -37,11 +37,64 @@ describe("value vs reference memory semantics", () => {
       }
     `);
     expect(result.success).toBe(true);
+    expect(result.ir).toContain("%ObjectHeader = type { i32, ptr }");
+    expect(result.ir).toContain("%Person = type { %ObjectHeader, ptr }");
     expect(result.ir).toContain("%v.a = alloca ptr");
     expect(result.ir).toContain("%v.b = alloca ptr");
     expect(result.ir).toMatch(/load ptr, ptr %v\.a/);
     expect(result.ir).toMatch(/store ptr .*, ptr %v\.b/);
     expect(result.ir).toContain("call ptr @tsn_alloc");
+    expect(result.ir).toMatch(/store i32 \d+, ptr %/);
+    expect(result.ir).toContain("store ptr @Person__vtable");
+  });
+
+  it("lays out class instances with ObjectHeader before fields", () => {
+    const result = compile(`
+      class Person {
+        name: string;
+        age: i32;
+        constructor(name: string, age: i32) {
+          this.name = name;
+          this.age = age;
+        }
+      }
+      function main(): void {
+        let p = new Person("A", 20);
+        p.age = 21;
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%ObjectHeader = type { i32, ptr }");
+    expect(result.ir).toContain("%Person = type { %ObjectHeader, ptr, i32 }");
+    expect(result.ir).toContain("getelementptr inbounds %Person, ptr");
+    expect(result.ir).toMatch(/i32 0, i32 0, i32 0/); // type_id
+    expect(result.ir).toMatch(/i32 0, i32 0, i32 1/); // vtable
+    expect(result.ir).toMatch(/i32 0, i32 2/); // age field
+  });
+
+  it("flattens superclass fields after ObjectHeader", () => {
+    const result = compile(`
+      class Animal {
+        name: string;
+        constructor(name: string) {
+          this.name = name;
+        }
+      }
+      class Dog extends Animal {
+        breed: string;
+        constructor(name: string, breed: string) {
+          super(name);
+          this.breed = breed;
+        }
+      }
+      function main(): void {
+        let d = new Dog("Rex", "lab");
+        print(d.name);
+        print(d.breed);
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("%Dog = type { %ObjectHeader, ptr, ptr }");
   });
 
   it("passes struct params by value and class params by reference", () => {

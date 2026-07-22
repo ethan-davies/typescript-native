@@ -178,7 +178,7 @@ export interface ClassFieldDef {
   readonly isStatic: boolean;
   /** Mangled name of the class that declared this field. */
   readonly declaringClass: string;
-  /** LLVM field index in the instance object (0 = vtable); -1 for static. */
+  /** LLVM field index in the instance object (0 = ObjectHeader); -1 for static. */
   readonly fieldIndex: number;
   readonly initializer: Expression | null;
 }
@@ -231,7 +231,7 @@ export interface ClassDef {
   readonly superclass: ClassDef | null;
   /** Interfaces directly listed in `implements` (not transitive). */
   readonly implementedInterfaces: InterfaceDef[];
-  /** Instance fields in layout order (after vtable slot). */
+  /** Instance fields in layout order (after ObjectHeader slot). */
   readonly instanceFields: ClassFieldDef[];
   readonly staticFields: ClassFieldDef[];
   /** Instance methods in vtable order. */
@@ -1772,7 +1772,7 @@ function collectClasses(
             isReadonly: member.isReadonly,
             isStatic: false,
             declaringClass: mangled,
-            fieldIndex: instanceFields.length + 1, // +1 for vtable
+            fieldIndex: instanceFields.length + 1, // +1 for ObjectHeader
             initializer: null,
           });
         }

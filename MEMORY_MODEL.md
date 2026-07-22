@@ -146,6 +146,39 @@ b ─────┘
 
 `a` and `b` refer to the same object. Mutating through `b` is visible through `a` — the same general behaviour as TypeScript/JavaScript objects.
 
+### Class/object physical layout
+
+Class variables hold a **reference** (`Person*`). The object itself lives on the heap:
+
+```text
+Stack / local                 Heap
+person (Person*) ───────────→ ┌─────────────────────┐
+                              │ ObjectHeader        │
+                              │  ├── type_id : i32  │
+                              │  └── vtable  : ptr  │
+                              ├─────────────────────┤
+                              │ name : String*      │
+                              ├─────────────────────┤
+                              │ age  : i32          │
+                              └─────────────────────┘
+```
+
+LLVM shape (illustrative):
+
+```text
+%ObjectHeader = type { i32, ptr }          ; type_id, vtable
+%Person       = type { %ObjectHeader, ptr, i32 }
+```
+
+Rules:
+
+- **Struct** locals store the aggregate by value; **class** locals store a pointer.
+- Assigning `let b = a` copies only the reference, not the object.
+- Methods are **not** stored in the object. Instance methods live in a per-class vtable; the object header holds a pointer to that table. A call is conceptually `greet(person)`.
+- **Inheritance** flattens superclass fields after the header, then subclass fields (so a `Dog*` can be treated as an `Animal*` for field offsets).
+- Class fields that are reference types (string, class, array, …) are pointers. Struct fields are stored **inline** in the object.
+- `new Person()` allocates with `tsn_alloc(sizeof(Person))`, initializes the object header (`type_id` + vtable), then runs the constructor. Richer type metadata and GC scanning of the header come later.
+
 ---
 
 ## 4. Arrays → reference types

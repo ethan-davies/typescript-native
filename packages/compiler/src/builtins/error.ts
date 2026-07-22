@@ -72,6 +72,7 @@ export function createBuiltinErrorClassDeclaration(): ClassDeclaration {
 
 export function createBuiltinErrorClassDef(): ClassDef {
   const decl = createBuiltinErrorClassDeclaration();
+  // fieldIndex 1: slot 0 is ObjectHeader { type_id, vtable }.
   const messageField: ClassFieldDef = {
     name: "message",
     type: "string",

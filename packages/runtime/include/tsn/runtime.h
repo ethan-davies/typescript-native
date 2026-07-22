@@ -26,6 +26,12 @@ void tsn_throw(void *error);
 void *tsn_eh_caught_exception(void);
 void tsn_uncaught_exception(void *error);
 
+/* Shared header on every class instance. Must match %ObjectHeader in llvm.ts. */
+typedef struct TsnObjectHeader {
+  int32_t type_id;
+  void *vtable;
+} TsnObjectHeader;
+
 typedef struct TsnArray {
   int64_t length;
   int64_t capacity;
