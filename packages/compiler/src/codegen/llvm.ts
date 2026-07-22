@@ -310,8 +310,10 @@ export class LlvmCodegen {
   private nextTypeId = TSN_TYPEID_CLASS_BASE;
   private needsTypeInfo = false;
   private needsGc = false;
-  /** Shadow-stack roots pushed in the current function (popped on every return). */
+  /** Shadow-stack roots pushed in the current function (informational; epilogue uses restore). */
   private gcRootCount = 0;
+  /** Alloca holding root_len at function entry (before this frame's pushes). */
+  private gcEntryCheckpoint: string | null = null;
   /** Function-scoped slot holding the latest heap pointer across allocating calls. */
   private gcExprRoot: string | null = null;
   /** Closure environment TypeInfo records to emit alongside class TypeInfo. */
@@ -403,6 +405,7 @@ export class LlvmCodegen {
     this.needsTypeInfo = false;
     this.needsGc = false;
     this.gcRootCount = 0;
+    this.gcEntryCheckpoint = null;
     this.gcExprRoot = null;
     this.pendingEnvTypeInfos.length = 0;
     this.needsTsnAlloc = false;
@@ -2312,20 +2315,35 @@ export class LlvmCodegen {
   }
 
   private pushGcRoot(slot: string, lines: string[]): void {
+    this.ensureGcEntryCheckpoint(lines);
     this.needsGc = true;
     lines.push(`  call void @tsn_gc_root_push(ptr noundef ${slot})`);
     this.gcRootCount += 1;
   }
 
-  private emitGcRootPop(lines: string[]): void {
-    if (this.gcRootCount <= 0) {
+  private ensureGcEntryCheckpoint(lines: string[]): void {
+    if (this.gcEntryCheckpoint !== null) {
       return;
     }
     this.needsGc = true;
-    lines.push(`  call void @tsn_gc_root_pop(i32 noundef ${this.gcRootCount})`);
+    this.gcEntryCheckpoint = "%gc.cp";
+    lines.push(`  ${this.gcEntryCheckpoint} = alloca i32`);
+    const cp = this.nextTemp();
+    lines.push(`  ${cp} = call i32 @tsn_gc_root_checkpoint()`);
+    lines.push(`  store i32 ${cp}, ptr ${this.gcEntryCheckpoint}`);
   }
 
-  /** Emit `ret` after popping this function's shadow-stack roots. */
+  private emitGcRootPop(lines: string[]): void {
+    if (this.gcEntryCheckpoint === null) {
+      return;
+    }
+    this.needsGc = true;
+    const cp = this.nextTemp();
+    lines.push(`  ${cp} = load i32, ptr ${this.gcEntryCheckpoint}`);
+    lines.push(`  call void @tsn_gc_root_restore(i32 noundef ${cp})`);
+  }
+
+  /** Emit `ret` after restoring this function's shadow-stack roots. */
   private emitFunctionRet(lines: string[], retInstruction: string): void {
     this.emitGcRootPop(lines);
     lines.push(retInstruction);
@@ -2457,16 +2475,30 @@ export class LlvmCodegen {
     this.pushGcRoot(holder, lines);
   }
 
-  private beginGcFunctionScope(): { rootCount: number; exprRoot: string | null } {
-    const saved = { rootCount: this.gcRootCount, exprRoot: this.gcExprRoot };
+  private beginGcFunctionScope(): {
+    rootCount: number;
+    exprRoot: string | null;
+    entryCheckpoint: string | null;
+  } {
+    const saved = {
+      rootCount: this.gcRootCount,
+      exprRoot: this.gcExprRoot,
+      entryCheckpoint: this.gcEntryCheckpoint,
+    };
     this.gcRootCount = 0;
     this.gcExprRoot = null;
+    this.gcEntryCheckpoint = null;
     return saved;
   }
 
-  private endGcFunctionScope(saved: { rootCount: number; exprRoot: string | null }): void {
+  private endGcFunctionScope(saved: {
+    rootCount: number;
+    exprRoot: string | null;
+    entryCheckpoint: string | null;
+  }): void {
     this.gcRootCount = saved.rootCount;
     this.gcExprRoot = saved.exprRoot;
+    this.gcEntryCheckpoint = saved.entryCheckpoint;
   }
 
   private refClassForElement(elementType: ValueType): number {
@@ -2636,6 +2668,8 @@ export class LlvmCodegen {
       );
       declares.push("declare void @tsn_gc_root_push(ptr noundef) nounwind");
       declares.push("declare void @tsn_gc_root_pop(i32 noundef) nounwind");
+      declares.push("declare i32 @tsn_gc_root_checkpoint() nounwind");
+      declares.push("declare void @tsn_gc_root_restore(i32 noundef) nounwind");
       declares.push("declare void @tsn_gc_add_global_root(ptr noundef) nounwind");
     }
     if (
@@ -2680,6 +2714,7 @@ export class LlvmCodegen {
       declares.push("declare i32 @setjmp(ptr noundef)");
       declares.push("declare void @tsn_throw(ptr noundef)");
       declares.push("declare ptr @tsn_eh_caught_exception()");
+      declares.push("declare void @tsn_eh_clear_exception()");
       declares.push("declare void @tsn_uncaught_exception(ptr noundef)");
     }
     if (this.needsTsnPrint) {
@@ -3105,6 +3140,7 @@ export class LlvmCodegen {
     const savedControl = [...this.controlStack];
     const savedPendingReturn = this.pendingReturn;
     const savedPendingBranch = this.pendingBranch;
+    const gcScope = this.beginGcFunctionScope();
 
     this.locals = new Map(this.locals);
     this.controlStack.length = 0;
@@ -3122,12 +3158,13 @@ export class LlvmCodegen {
       terminated = this.emitStatement(s, thunkLines);
     }
     if (!terminated) {
-      thunkLines.push("  ret void");
+      this.emitFunctionRet(thunkLines, "  ret void");
     }
     thunkLines.push("}");
     thunkLines.push("");
     this.functionBodies.push(...thunkLines);
 
+    this.endGcFunctionScope(gcScope);
     this.locals = savedLocals;
     this.thisPtr = savedThisPtr;
     this.thisType = savedThisType;
@@ -3145,11 +3182,14 @@ export class LlvmCodegen {
     finallyBlock: Statement[] | null,
     finallyOnly: boolean,
     lines: string[],
+    popFrame = true,
   ): boolean {
     if (finallyBlock) {
       this.emitFinallyBlock(finallyBlock, lines);
     }
-    lines.push(`  call void @tsn_eh_pop(ptr noundef ${framePtr})`);
+    if (popFrame) {
+      lines.push(`  call void @tsn_eh_pop(ptr noundef ${framePtr})`);
+    }
     if (this.pendingReturn) {
       const pending = this.pendingReturn;
       this.pendingReturn = null;
@@ -3181,6 +3221,21 @@ export class LlvmCodegen {
 
     const framePtr = this.nextTemp();
     lines.push(`  ${framePtr} = alloca i8, i64 ${TSN_EH_FRAME_SIZE}`);
+
+    /* Pre-root catch param so gcRootCount matches both try-success and catch paths. */
+    let catchPtr: string | null = null;
+    if (hasCatch && stmt.catchClause) {
+      const catchParam = stmt.catchClause.parameter.name;
+      catchPtr = `%v.${catchParam}`;
+      lines.push(`  ${catchPtr} = alloca ptr`);
+      lines.push(`  store ptr null, ptr ${catchPtr}`);
+      this.locals.set(catchParam, {
+        ptr: catchPtr,
+        type: { kind: "class", name: BUILTIN_ERROR_MANGLED },
+        boxed: false,
+      });
+      this.registerRootsForStorage(catchPtr, { kind: "class", name: BUILTIN_ERROR_MANGLED }, lines);
+    }
 
     let finallyFnName: string | null = null;
     if (finallyOnly && stmt.finallyBlock) {
@@ -3241,20 +3296,14 @@ export class LlvmCodegen {
       lines,
     );
 
-    if (catchLabel && stmt.catchClause) {
+    if (catchLabel && stmt.catchClause && catchPtr) {
       lines.push(`${catchLabel}:`);
+      /* Disable this catch frame so throws inside catch propagate outward. */
+      lines.push(`  call void @tsn_eh_pop(ptr noundef ${framePtr})`);
       const err = this.nextTemp();
       lines.push(`  ${err} = call ptr @tsn_eh_caught_exception()`);
-      const catchParam = stmt.catchClause.parameter.name;
-      const catchPtr = `%v.${catchParam}`;
-      lines.push(`  ${catchPtr} = alloca ptr`);
       lines.push(`  store ptr ${err}, ptr ${catchPtr}`);
-      this.locals.set(catchParam, {
-        ptr: catchPtr,
-        type: { kind: "class", name: BUILTIN_ERROR_MANGLED },
-        boxed: false,
-      });
-      this.registerRootsForStorage(catchPtr, { kind: "class", name: BUILTIN_ERROR_MANGLED }, lines);
+      lines.push("  call void @tsn_eh_clear_exception()");
 
       terminated = false;
       for (const s of stmt.catchClause.body) {
@@ -3274,6 +3323,7 @@ export class LlvmCodegen {
         stmt.finallyBlock,
         finallyOnly,
         lines,
+        false /* already popped at catch entry */,
       );
       this.controlStack.pop();
       if (!(tryLeaveTerminated || catchLeaveTerminated)) {

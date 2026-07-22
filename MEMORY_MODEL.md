@@ -581,12 +581,15 @@ String literals are not in the side table; marking them is a no-op, so they are 
 The compiler emits:
 
 ```text
-tsn_gc_root_push(slot)   // on reference locals / params / this / callable env fields
+cp = tsn_gc_root_checkpoint()   // once per function, before its first root push
+tsn_gc_root_push(slot)          // on reference locals / params / this / callable env fields
 … function body …
-tsn_gc_root_pop(N)       // on every return
+tsn_gc_root_restore(cp)         // on every return (safe if unwind already trimmed roots)
 ```
 
 Roots also include global slots (`tsn_gc_add_global_root`) and the pending exception pointer (`tsn_gc_set_exception_root`).
+
+Exception unwinding (setjmp/longjmp) restores the shadow stack: each EH frame records a root checkpoint at `tsn_eh_push`, and `tsn_throw` calls `tsn_gc_root_restore` before running a finally-only callback or longjmping to a catcher. That drops abandoned callee roots so the next collection cannot scan dangling stack slots. Catch parameters are rooted before `setjmp`; after binding, `tsn_eh_clear_exception` transfers ownership from the pending-exception root to the catch local. Try-only locals may become unmarked after unwind into catch (they are language-dead). Function returns always restore to the function-entry checkpoint, so a static push count never over-pops after an exception trimmed the shadow stack.
 
 Rule: anything reachable from a GC root stays alive.
 

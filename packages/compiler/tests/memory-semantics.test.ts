@@ -547,7 +547,8 @@ describe("GC root registration and type hooks", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.ir).toContain("call void @tsn_gc_root_push");
-    expect(result.ir).toContain("call void @tsn_gc_root_pop");
+    expect(result.ir).toContain("call void @tsn_gc_root_restore");
+    expect(result.ir).toContain("call i32 @tsn_gc_root_checkpoint");
   });
 
   it("emits tsn_gc_set_type after class allocation", () => {
@@ -694,5 +695,88 @@ describe("GC root registration and type hooks", () => {
     expect(result.success).toBe(true);
     expect(result.ir).toMatch(/define void @use\(ptr %arg0\)/);
     expect(result.ir).toContain("call void @tsn_gc_root_push");
+  });
+
+  it("pre-roots catch parameter before setjmp and clears pending exception", () => {
+    const result = compile(`
+      function main(): void {
+        try {
+          throw new Error("boom");
+        } catch (error) {
+          print(error.message);
+        }
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("declare void @tsn_eh_clear_exception()");
+    const mainFn = result.ir!.slice(result.ir!.indexOf("define i32 @main"));
+    const catchAlloca = mainFn.indexOf("%v.error = alloca ptr");
+    const setjmpCall = mainFn.indexOf("call i32 @setjmp");
+    const clearCall = mainFn.indexOf("call void @tsn_eh_clear_exception()");
+    const catchLabel = mainFn.indexOf("try.catch.");
+    expect(catchAlloca).toBeGreaterThanOrEqual(0);
+    expect(setjmpCall).toBeGreaterThan(catchAlloca);
+    expect(catchLabel).toBeGreaterThan(setjmpCall);
+    expect(clearCall).toBeGreaterThan(catchLabel);
+    /* Catch entry pops EH frame before the body so rethrow propagates outward. */
+    const afterCatch = mainFn.slice(catchLabel);
+    expect(afterCatch.indexOf("call void @tsn_eh_pop")).toBeGreaterThanOrEqual(0);
+    expect(afterCatch.indexOf("call void @tsn_eh_pop")).toBeLessThan(
+      afterCatch.indexOf("call void @tsn_eh_clear_exception()"),
+    );
+  });
+
+  it("restores entry root checkpoint on return after try/catch", () => {
+    const result = compile(`
+      class Box {
+        value: i32;
+        constructor(value: i32) {
+          this.value = value;
+        }
+      }
+      function main(): void {
+        try {
+          let b = new Box(1);
+          print(b.value);
+        } catch (error) {
+          print(error.message);
+        }
+      }
+    `);
+    expect(result.success).toBe(true);
+    const mainFn = result.ir!.slice(result.ir!.indexOf("define i32 @main"));
+    expect(mainFn).toContain("call i32 @tsn_gc_root_checkpoint()");
+    expect(mainFn).toContain("call void @tsn_gc_root_restore");
+    expect(mainFn).toContain("%v.error = alloca ptr");
+    expect(mainFn.indexOf("%v.error = alloca ptr")).toBeLessThan(mainFn.indexOf("call i32 @setjmp"));
+  });
+
+  it("allocates throwable subclasses with GC type hooks", () => {
+    const result = compile(`
+      class Person {
+        name: string;
+        constructor(name: string) {
+          this.name = name;
+        }
+      }
+      class MyError extends Error {
+        person: Person;
+        constructor(message: string, person: Person) {
+          super(message);
+          this.person = person;
+        }
+      }
+      function main(): void {
+        try {
+          throw new MyError("x", new Person("A"));
+        } catch (error) {
+          print(error.message);
+        }
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call ptr @tsn_alloc");
+    expect(result.ir).toContain("call void @tsn_gc_set_type");
+    expect(result.ir).toContain("call void @tsn_throw");
   });
 });

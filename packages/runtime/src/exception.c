@@ -10,6 +10,7 @@ typedef struct TsnEhFrame {
   int has_catch;
   TsnFinallyFn finally_fn;
   void *finally_ctx;
+  int32_t root_checkpoint;
 } TsnEhFrame;
 
 _Static_assert(sizeof(TsnEhFrame) <= TSN_EH_FRAME_SIZE, "TSN_EH_FRAME_SIZE is too small");
@@ -31,11 +32,13 @@ void tsn_eh_init_frame(void *frame, int32_t has_catch, TsnFinallyFn finally_fn, 
   f->has_catch = has_catch;
   f->finally_fn = finally_fn;
   f->finally_ctx = finally_ctx;
+  f->root_checkpoint = 0;
 }
 
 void tsn_eh_push(void *frame) {
   ensure_exception_root();
   TsnEhFrame *f = (TsnEhFrame *)frame;
+  f->root_checkpoint = tsn_gc_root_checkpoint();
   f->parent = tsn_eh_stack;
   tsn_eh_stack = f;
 }
@@ -55,6 +58,10 @@ void *tsn_eh_caught_exception(void) {
   return tsn_eh_current_exception;
 }
 
+void tsn_eh_clear_exception(void) {
+  tsn_eh_current_exception = NULL;
+}
+
 void tsn_uncaught_exception(void *error) {
   char *message = "";
   if (error != NULL) {
@@ -72,8 +79,10 @@ void tsn_throw(void *error) {
   struct TsnEhFrame *f = tsn_eh_stack;
   while (f != NULL) {
     if (f->has_catch) {
+      tsn_gc_root_restore(f->root_checkpoint);
       longjmp(f->buf, 1);
     }
+    tsn_gc_root_restore(f->root_checkpoint);
     if (f->finally_fn != NULL) {
       f->finally_fn(f->finally_ctx);
     }

@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <setjmp.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -517,6 +518,474 @@ static void test_gc_mutable_box_scans_interior(void) {
   tsn_gc_root_pop(1);
 }
 
+/* Error-like class: ObjectHeader + message PTR + payload PTR. */
+static void *gc_test_exception_slot = NULL;
+
+static void register_error_with_payload_type(void) {
+  static const TsnFieldInfo fields[] = {
+      {.offset = 16, .size = 8, .ref_class = TSN_REF_PTR, .type_id = TSN_TYPEID_STRING},
+      {.offset = 24, .size = 8, .ref_class = TSN_REF_PTR, .type_id = 0},
+  };
+  static const TsnTypeInfo ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 30,
+      .kind = TSN_KIND_CLASS,
+      .size = 32,
+      .field_count = 2,
+      .fields = fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&ti);
+}
+
+static void *make_error_with_payload(void *payload) {
+  void *err = tsn_alloc(32);
+  tsn_gc_set_type(err, TSN_TYPEID_CLASS_BASE + 30);
+  ((TsnObjectHeader *)err)->type_id = TSN_TYPEID_CLASS_BASE + 30;
+  ((TsnObjectHeader *)err)->vtable = NULL;
+  char *msg = (char *)tsn_alloc(6);
+  memcpy(msg, "boom", 5);
+  tsn_gc_set_type(msg, TSN_TYPEID_STRING);
+  *(char **)((char *)err + 16) = msg;
+  *(void **)((char *)err + 24) = payload;
+  return err;
+}
+
+/* Pending exception root keeps Error + nested payload alive across GC. */
+static void test_gc_pending_exception_keeps_payload(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  register_error_with_payload_type();
+
+  void *payload = tsn_alloc(64);
+  tsn_gc_set_type(payload, 0);
+  gc_test_exception_slot = make_error_with_payload(payload);
+  tsn_gc_set_exception_root(&gc_test_exception_slot);
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+  assert(*(void **)((char *)gc_test_exception_slot + 24) == payload);
+
+  gc_test_exception_slot = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+}
+
+/* Catch local root keeps exception after TLS is cleared. */
+static void test_gc_caught_exception_local_root(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  register_error_with_payload_type();
+
+  void *payload = tsn_alloc(32);
+  tsn_gc_set_type(payload, 0);
+  gc_test_exception_slot = make_error_with_payload(payload);
+  tsn_gc_set_exception_root(&gc_test_exception_slot);
+
+  void *caught = NULL;
+  tsn_gc_root_push(&caught);
+  caught = gc_test_exception_slot;
+  gc_test_exception_slot = NULL; /* clear pending exception */
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+  assert(*(void **)((char *)caught + 24) == payload);
+
+  caught = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
+static void throw_with_rooted_local(void) {
+  void *local = NULL;
+  tsn_gc_root_push(&local);
+  local = tsn_alloc(48);
+  tsn_gc_set_type(local, 0);
+  void *payload = tsn_alloc(16);
+  tsn_gc_set_type(payload, 0);
+  void *err = make_error_with_payload(payload);
+  tsn_throw(err);
+}
+
+/* Cross-frame throw restores shadow-stack roots; GC during catch is safe. */
+static void test_gc_exception_unwind_restores_roots(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  register_error_with_payload_type();
+
+  void *outer = NULL;
+  void *caught = NULL;
+  tsn_gc_root_push(&outer);
+  tsn_gc_root_push(&caught);
+  outer = tsn_alloc(24);
+  tsn_gc_set_type(outer, 0);
+  memset(outer, 0xAB, 24);
+
+  char frame[TSN_EH_FRAME_SIZE];
+  tsn_eh_init_frame(frame, 1, NULL, NULL);
+  tsn_eh_push(frame);
+
+  if (setjmp(*tsn_eh_jmp_buf(frame)) == 0) {
+    throw_with_rooted_local();
+    assert(0 && "should not return");
+  } else {
+    caught = tsn_eh_caught_exception();
+    tsn_eh_clear_exception();
+    tsn_eh_pop(frame);
+
+    /* Abandoned callee locals may be freed; outer + caught graph must survive. */
+    tsn_gc_collect();
+    assert(caught != NULL);
+    assert(*(unsigned char *)outer == 0xAB);
+    assert(*(void **)((char *)caught + 24) != NULL);
+    int64_t mid = tsn_gc_bytes_allocated();
+    tsn_gc_collect();
+    assert(tsn_gc_bytes_allocated() == mid);
+  }
+
+  caught = NULL;
+  outer = NULL;
+  tsn_gc_collect();
+  tsn_gc_root_pop(2);
+}
+
+static int32_t finally_ran = 0;
+
+static void finally_thunk(void *ctx) {
+  (void)ctx;
+  finally_ran = 1;
+  tsn_gc_collect(); /* GC during finally-only unwind must be safe */
+}
+
+static void throw_through_finally(void) {
+  void *local = NULL;
+  tsn_gc_root_push(&local);
+  local = tsn_alloc(40);
+  tsn_gc_set_type(local, 0);
+  void *err = make_error_with_payload(NULL);
+  tsn_throw(err);
+}
+
+/* Finally-only frames restore roots before finally runs; outer catch still works. */
+static void test_gc_during_finally_unwind(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  register_error_with_payload_type();
+  finally_ran = 0;
+
+  void *caught = NULL;
+  tsn_gc_root_push(&caught);
+
+  char catch_frame[TSN_EH_FRAME_SIZE];
+  char finally_frame[TSN_EH_FRAME_SIZE];
+  tsn_eh_init_frame(catch_frame, 1, NULL, NULL);
+  tsn_eh_push(catch_frame);
+
+  if (setjmp(*tsn_eh_jmp_buf(catch_frame)) == 0) {
+    tsn_eh_init_frame(finally_frame, 0, finally_thunk, NULL);
+    tsn_eh_push(finally_frame);
+    throw_through_finally();
+    assert(0);
+  } else {
+    assert(finally_ran == 1);
+    caught = tsn_eh_caught_exception();
+    tsn_eh_clear_exception();
+    tsn_eh_pop(catch_frame);
+    tsn_gc_collect();
+    assert(caught != NULL);
+  }
+
+  caught = NULL;
+  tsn_gc_collect();
+  tsn_gc_root_pop(1);
+}
+
+/* After catch clears TLS and drops local, exception graph is reclaimed. */
+static void test_gc_unreachable_after_exception_cleared(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  register_error_with_payload_type();
+
+  int64_t before = tsn_gc_bytes_allocated();
+  tsn_gc_set_exception_root(&gc_test_exception_slot);
+  void *payload = tsn_alloc(20);
+  tsn_gc_set_type(payload, 0);
+  gc_test_exception_slot = make_error_with_payload(payload);
+
+  void *caught = NULL;
+  tsn_gc_root_push(&caught);
+  caught = gc_test_exception_slot;
+  gc_test_exception_slot = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() > before);
+
+  caught = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before);
+  tsn_gc_root_pop(1);
+}
+
+/* Long-lived global root survives many GC cycles. */
+static void test_gc_global_root_survives_cycles(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static void *global_obj = NULL;
+  tsn_gc_add_global_root(&global_obj);
+  global_obj = tsn_alloc(64);
+  tsn_gc_set_type(global_obj, 0);
+  memset(global_obj, 0x5A, 64);
+  int64_t mid = tsn_gc_bytes_allocated();
+
+  for (int i = 0; i < 20; i += 1) {
+    void *junk = tsn_alloc(32);
+    tsn_gc_set_type(junk, 0);
+    (void)junk;
+    tsn_gc_collect();
+    assert(tsn_gc_bytes_allocated() == mid);
+    assert(*(unsigned char *)global_obj == 0x5A);
+  }
+
+  global_obj = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid - 64);
+}
+
+/* Rooted object graph survives repeated collection; fields stay intact. */
+static void test_gc_repeated_cycles_preserve_survivors(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo fields[] = {
+      {.offset = 16, .size = 8, .ref_class = TSN_REF_PTR, .type_id = 0},
+  };
+  static const TsnTypeInfo ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 31,
+      .kind = TSN_KIND_CLASS,
+      .size = 24,
+      .field_count = 1,
+      .fields = fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&ti);
+
+  void *a = NULL;
+  tsn_gc_root_push(&a);
+  a = tsn_alloc(24);
+  tsn_gc_set_type(a, TSN_TYPEID_CLASS_BASE + 31);
+  ((TsnObjectHeader *)a)->type_id = TSN_TYPEID_CLASS_BASE + 31;
+  ((TsnObjectHeader *)a)->vtable = NULL;
+  void *b = tsn_alloc(24);
+  tsn_gc_set_type(b, 0);
+  *(void **)((char *)a + 16) = b;
+  int64_t mid = tsn_gc_bytes_allocated();
+
+  for (int i = 0; i < 15; i += 1) {
+    tsn_gc_collect();
+    assert(tsn_gc_bytes_allocated() == mid);
+    assert(*(void **)((char *)a + 16) == b);
+  }
+
+  a = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() < mid);
+  tsn_gc_root_pop(1);
+}
+
+/* Unreachable chain A→B→C is fully reclaimed. */
+static void test_gc_unreachable_chain(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo fields[] = {
+      {.offset = 0, .size = 8, .ref_class = TSN_REF_PTR, .type_id = 0},
+  };
+  static const TsnTypeInfo ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 32,
+      .kind = TSN_KIND_CLASS,
+      .size = 8,
+      .field_count = 1,
+      .fields = fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&ti);
+
+  int64_t before = tsn_gc_bytes_allocated();
+  void *a = NULL;
+  tsn_gc_root_push(&a);
+  a = tsn_alloc(8);
+  tsn_gc_set_type(a, TSN_TYPEID_CLASS_BASE + 32);
+  void *b = tsn_alloc(8);
+  tsn_gc_set_type(b, TSN_TYPEID_CLASS_BASE + 32);
+  void *c = tsn_alloc(8);
+  tsn_gc_set_type(c, TSN_TYPEID_CLASS_BASE + 32);
+  *(void **)a = b;
+  *(void **)b = c;
+  *(void **)c = NULL;
+
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before + 24);
+
+  a = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before);
+  tsn_gc_root_pop(1);
+}
+
+/* Large unreachable graph is reclaimed without crash. */
+static void test_gc_large_unreachable_graph(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  static const TsnFieldInfo fields[] = {
+      {.offset = 0, .size = 8, .ref_class = TSN_REF_PTR, .type_id = 0},
+      {.offset = 8, .size = 8, .ref_class = TSN_REF_PTR, .type_id = 0},
+  };
+  static const TsnTypeInfo ti = {
+      .type_id = TSN_TYPEID_CLASS_BASE + 33,
+      .kind = TSN_KIND_CLASS,
+      .size = 16,
+      .field_count = 2,
+      .fields = fields,
+      .elem_type_id = 0,
+      .elem_ref_class = TSN_REF_VALUE,
+      .key_type_id = 0,
+      .key_ref_class = TSN_REF_VALUE,
+      .value_type_id = 0,
+      .value_ref_class = TSN_REF_VALUE,
+  };
+  tsn_typeinfo_register(&ti);
+
+  int64_t before = tsn_gc_bytes_allocated();
+  void *root = NULL;
+  tsn_gc_root_push(&root);
+  root = tsn_alloc(16);
+  tsn_gc_set_type(root, TSN_TYPEID_CLASS_BASE + 33);
+  void *prev = root;
+  for (int i = 0; i < 64; i += 1) {
+    void *n = tsn_alloc(16);
+    tsn_gc_set_type(n, TSN_TYPEID_CLASS_BASE + 33);
+    *(void **)prev = n;
+    *((void **)prev + 1) = NULL;
+    prev = n;
+  }
+  *(void **)prev = NULL;
+  *((void **)prev + 1) = NULL;
+
+  int64_t mid = tsn_gc_bytes_allocated();
+  assert(mid > before);
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+
+  root = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before);
+  tsn_gc_root_pop(1);
+}
+
+/* Reassignment drops the previous object. */
+static void test_gc_unreachable_after_reassignment(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+
+  void *obj = NULL;
+  tsn_gc_root_push(&obj);
+  obj = tsn_alloc(80);
+  tsn_gc_set_type(obj, 0);
+  int64_t mid = tsn_gc_bytes_allocated();
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid);
+
+  obj = tsn_alloc(16);
+  tsn_gc_set_type(obj, 0);
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == mid - 80 + 16);
+
+  obj = NULL;
+  tsn_gc_collect();
+  tsn_gc_root_pop(1);
+}
+
+/* Scope exit (root_pop) makes locals unreachable. */
+static void test_gc_unreachable_after_scope_exit(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  int64_t before = tsn_gc_bytes_allocated();
+
+  {
+    void *local = NULL;
+    tsn_gc_root_push(&local);
+    local = tsn_alloc(56);
+    tsn_gc_set_type(local, 0);
+    tsn_gc_collect();
+    assert(tsn_gc_bytes_allocated() == before + 56);
+    local = NULL;
+    tsn_gc_root_pop(1);
+  }
+
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before);
+}
+
+/* Allocation after GC is tracked and later collectable. */
+static void test_gc_alloc_after_collect(void) {
+  tsn_gc_set_threshold(0);
+  tsn_gc_collect();
+  int64_t before = tsn_gc_bytes_allocated();
+
+  void *a = tsn_alloc(32);
+  tsn_gc_set_type(a, 0);
+  (void)a;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before);
+
+  void *b = NULL;
+  tsn_gc_root_push(&b);
+  b = tsn_alloc(48);
+  tsn_gc_set_type(b, 0);
+  assert(tsn_gc_bytes_allocated() == before + 48);
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before + 48);
+
+  b = NULL;
+  tsn_gc_collect();
+  assert(tsn_gc_bytes_allocated() == before);
+  tsn_gc_root_pop(1);
+}
+
+/* Root checkpoint/restore drops abandoned slots without under/overflow. */
+static void test_gc_root_checkpoint_restore(void) {
+  void *a = NULL;
+  void *b = NULL;
+  tsn_gc_root_push(&a);
+  int32_t cp = tsn_gc_root_checkpoint();
+  tsn_gc_root_push(&b);
+  a = tsn_alloc(8);
+  tsn_gc_set_type(a, 0);
+  b = tsn_alloc(8);
+  tsn_gc_set_type(b, 0);
+  tsn_gc_root_restore(cp);
+  /* b's root slot is gone; clearing a keeps only a if we re-push — just ensure restore works */
+  tsn_gc_collect();
+  tsn_gc_root_pop(1);
+}
+
 int main(void) {
   test_alloc();
   test_strings();
@@ -535,5 +1004,18 @@ int main(void) {
   test_gc_map_keeps_entries();
   test_gc_closure_env_keeps_capture();
   test_gc_mutable_box_scans_interior();
+  test_gc_pending_exception_keeps_payload();
+  test_gc_caught_exception_local_root();
+  test_gc_exception_unwind_restores_roots();
+  test_gc_during_finally_unwind();
+  test_gc_unreachable_after_exception_cleared();
+  test_gc_global_root_survives_cycles();
+  test_gc_repeated_cycles_preserve_survivors();
+  test_gc_unreachable_chain();
+  test_gc_large_unreachable_graph();
+  test_gc_unreachable_after_reassignment();
+  test_gc_unreachable_after_scope_exit();
+  test_gc_alloc_after_collect();
+  test_gc_root_checkpoint_restore();
   return 0;
 }

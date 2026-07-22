@@ -24,6 +24,7 @@ void tsn_eh_pop(void *frame);
 jmp_buf *tsn_eh_jmp_buf(void *frame);
 void tsn_throw(void *error);
 void *tsn_eh_caught_exception(void);
+void tsn_eh_clear_exception(void);
 void tsn_uncaught_exception(void *error);
 
 /* Shared header on every class instance. Must match %ObjectHeader in llvm.ts.
@@ -110,6 +111,8 @@ void tsn_gc_set_map_meta(void *map, int32_t key_ref_class, int32_t key_type_id, 
                          int32_t value_type_id);
 void tsn_gc_root_push(void **slot);
 void tsn_gc_root_pop(int32_t n);
+int32_t tsn_gc_root_checkpoint(void);
+void tsn_gc_root_restore(int32_t n);
 void tsn_gc_add_global_root(void **slot);
 void tsn_gc_set_exception_root(void **slot);
 void tsn_gc_collect(void);

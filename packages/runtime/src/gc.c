@@ -184,6 +184,17 @@ void tsn_gc_root_pop(int32_t n) {
   root_len -= n;
 }
 
+int32_t tsn_gc_root_checkpoint(void) {
+  return root_len;
+}
+
+void tsn_gc_root_restore(int32_t n) {
+  if (n < 0 || n > root_len) {
+    abort();
+  }
+  root_len = n;
+}
+
 void tsn_gc_add_global_root(void **slot) {
   if (slot == NULL) {
     return;
