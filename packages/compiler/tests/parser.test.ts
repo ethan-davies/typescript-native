@@ -1224,4 +1224,59 @@ describe("Parser", () => {
       expect(stmts[7].initializer?.kind).toBe("NullCoalescingExpression");
     }
   });
+
+  it("parses throw statements and try/catch/finally forms", () => {
+    const { ast, diagnostics } = parse(`
+      function main(): void {
+        throw new Error("oops");
+        try {
+          doWork();
+        } catch (error) {
+          print(error.message);
+        }
+        try {
+          doWork();
+        } finally {
+          cleanup();
+        }
+        try {
+          doWork();
+        } catch (error) {
+          handle(error);
+        } finally {
+          cleanup();
+        }
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    const main = functionAt(ast, 0);
+    expect(main.body[0]?.kind).toBe("ThrowStatement");
+    expect(main.body[1]?.kind).toBe("TryStatement");
+    if (main.body[1]?.kind === "TryStatement") {
+      expect(main.body[1].catchClause?.parameter.name).toBe("error");
+      expect(main.body[1].finallyBlock).toBeNull();
+    }
+    expect(main.body[2]?.kind).toBe("TryStatement");
+    if (main.body[2]?.kind === "TryStatement") {
+      expect(main.body[2].catchClause).toBeNull();
+      expect(main.body[2].finallyBlock?.length).toBeGreaterThan(0);
+    }
+    expect(main.body[3]?.kind).toBe("TryStatement");
+    if (main.body[3]?.kind === "TryStatement") {
+      expect(main.body[3].catchClause).not.toBeNull();
+      expect(main.body[3].finallyBlock?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("rejects try without catch or finally", () => {
+    const { diagnostics } = parse(`
+      function main(): void {
+        try {
+          doWork();
+        }
+      }
+    `);
+    expect(diagnostics.hasErrors).toBe(true);
+    expect(diagnostics.diagnostics.some((d) => d.code === "E0381")).toBe(true);
+  });
 });

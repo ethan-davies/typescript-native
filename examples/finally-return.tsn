@@ -1,0 +1,11 @@
+function test(): i32 {
+  try {
+    return 10;
+  } finally {
+    print("Cleanup");
+  }
+}
+
+function main(): void {
+  print(test());
+}

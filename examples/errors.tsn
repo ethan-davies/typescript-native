@@ -1,0 +1,14 @@
+function divide(a: i32, b: i32): i32 {
+  if (b == 0) {
+    throw new Error("Cannot divide by zero");
+  }
+  return a / b;
+}
+
+function main(): void {
+  try {
+    print(divide(10, 0));
+  } catch (error) {
+    print(error.message);
+  }
+}

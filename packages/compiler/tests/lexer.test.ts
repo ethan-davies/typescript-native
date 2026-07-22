@@ -337,4 +337,20 @@ describe("Lexer", () => {
     expect(tokens.map((t) => t.kind)).toContain(TokenKind.Interface);
     expect(tokens.map((t) => t.kind)).toContain(TokenKind.Implements);
   });
+
+  it("tokenizes throw, try, catch, and finally keywords", () => {
+    const { tokens, diagnostics } = lex(`
+      throw new Error("x");
+      try { } catch (e) { } finally { }
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens.map((t) => t.kind)).toEqual(
+      expect.arrayContaining([
+        TokenKind.Throw,
+        TokenKind.Try,
+        TokenKind.Catch,
+        TokenKind.Finally,
+      ]),
+    );
+  });
 });

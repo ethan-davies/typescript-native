@@ -365,6 +365,22 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
     case "BreakStatement":
     case "ContinueStatement":
       return stmt;
+    case "ThrowStatement":
+      return { ...stmt, expression: substituteExpression(stmt.expression, subst) };
+    case "TryStatement":
+      return {
+        ...stmt,
+        tryBlock: stmt.tryBlock.map((s) => substStatement(s, subst)),
+        catchClause: stmt.catchClause
+          ? {
+              ...stmt.catchClause,
+              body: stmt.catchClause.body.map((s) => substStatement(s, subst)),
+            }
+          : null,
+        finallyBlock: stmt.finallyBlock
+          ? stmt.finallyBlock.map((s) => substStatement(s, subst))
+          : null,
+      };
   }
 }
 

@@ -2381,6 +2381,62 @@ describe("default and named arguments", () => {
     const testCalls = result.ir?.match(/call void @test\(/g) ?? [];
     expect(testCalls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("compiles builtin Error, throw, and try/catch", () => {
+    const ok = compile(`
+      function divide(a: i32, b: i32): i32 {
+        if (b == 0) {
+          throw new Error("Cannot divide by zero");
+        }
+        return a / b;
+      }
+      function main(): void {
+        try {
+          print(divide(10, 0));
+        } catch (error) {
+          print(error.message);
+        }
+      }
+    `);
+    expect(ok.success).toBe(true);
+    expect(ok.ir).toContain("%Error = type { ptr, ptr }");
+    expect(ok.ir).toContain("declare void @tsn_throw");
+    expect(ok.ir).toContain("declare i32 @setjmp");
+    expect(ok.ir).toContain("call void @tsn_throw");
+
+    const badString = compile(`
+      function main(): void {
+        throw "oops";
+      }
+    `);
+    expect(badString.success).toBe(false);
+    expect(badString.diagnostics.some((d) => d.code === "E0380")).toBe(true);
+
+    const redefine = compile(`
+      class Error {
+        message: string;
+      }
+      function main(): void {}
+    `);
+    expect(redefine.success).toBe(false);
+    expect(redefine.diagnostics.some((d) => d.code === "E0382")).toBe(true);
+  });
+
+  it("allows throwing subclasses of Error", () => {
+    const result = compile(`
+      class FileError extends Error {
+        path: string;
+        constructor(message: string) {
+          super(message);
+        }
+      }
+      function main(): void {
+        throw new FileError("missing");
+      }
+    `);
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call void @tsn_throw");
+  });
 });
 
 describe("encodeLlvmString", () => {

@@ -98,6 +98,7 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 - Value-position `typeof` expression (returns type tags such as `"string"`, `"i32"`, `"bool"`, `"null"`, `"object"`)
 - `value is Type` type checks (including `is null` and class types) with narrowing
 - Control flow: `if` / `elseif` / `else`, `while`, C-style `for`, element `for (i in arr)`, `switch` / `case` / `default`, `break`, `continue`
+- Exceptions: built-in `Error` class (`message`), `throw`, `try` / `catch` / `finally` (every thrown value must be `Error` or a subclass)
 - `//` line comments and `/* */` block comments
 
 `print` is a builtin. It is lowered to `tsn_print_*` runtime calls in the generated LLVM IR, and `tsn run` links `libtsn_runtime.a` when building the native binary.
@@ -113,6 +114,8 @@ Programs are stored in `.tsn` files. Every program must define `function main():
 | [`examples/control-flow.tsn`](./examples/control-flow.tsn) | `if` / `elseif` / `else`, comparisons |
 | [`examples/loops.tsn`](./examples/loops.tsn) | `for` / `while`, updates, `break` / `continue` |
 | [`examples/switch.tsn`](./examples/switch.tsn) | `switch` / `case` / `default`, fallthrough, enum cases |
+| [`examples/errors.tsn`](./examples/errors.tsn) | `Error`, `throw`, `try` / `catch` |
+| [`examples/finally-return.tsn`](./examples/finally-return.tsn) | `finally` with `return` |
 | [`examples/arrays.tsn`](./examples/arrays.tsn) | Array literals, indexing, methods, `for-in` |
 | [`examples/tuples.tsn`](./examples/tuples.tsn) | Tuple types, indexing, destructuring, generics |
 | [`examples/structs.tsn`](./examples/structs.tsn) | Struct decls, literals, fields, params |

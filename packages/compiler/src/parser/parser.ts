@@ -9,6 +9,7 @@ import type {
   BindingPattern,
   BooleanLiteral,
   BreakStatement,
+  CatchClause,
   CallArgument,
   CallExpression,
   CharLiteral,
@@ -69,7 +70,9 @@ import type {
   SwitchStatement,
   SuperExpression,
   ThisExpression,
+  ThrowStatement,
   TopLevelDeclaration,
+  TryStatement,
   TupleType,
   TypeAliasDeclaration,
   TypeAnnotation,
@@ -1336,6 +1339,14 @@ export class Parser {
       return this.parseContinueStatement();
     }
 
+    if (this.check(TokenKind.Throw)) {
+      return this.parseThrowStatement();
+    }
+
+    if (this.check(TokenKind.Try)) {
+      return this.parseTryStatement();
+    }
+
     if (this.check(TokenKind.Identifier)) {
       const next = this.tokens[this.current + 1];
       if (next && UPDATE_OPS.has(next.kind)) {
@@ -1649,6 +1660,110 @@ export class Parser {
     const end = semicolon?.span.end ?? this.peek().span.end;
     return {
       kind: "ContinueStatement",
+      span: { start, end },
+    };
+  }
+
+  private parseThrowStatement(): ThrowStatement | null {
+    const start = this.peek().span.start;
+    this.advance(); // throw
+    const expression = this.parseExpression();
+    if (!expression) {
+      return null;
+    }
+    const semicolon = this.expect(TokenKind.Semicolon, "Expected ';' after throw expression");
+    const end = semicolon?.span.end ?? expression.span.end;
+    return {
+      kind: "ThrowStatement",
+      expression,
+      span: { start, end },
+    };
+  }
+
+  private parseTryStatement(): TryStatement | null {
+    const start = this.peek().span.start;
+    this.advance(); // try
+
+    const tryBlockResult = this.parseBlock();
+    if (!tryBlockResult) {
+      return null;
+    }
+
+    let catchClause: CatchClause | null = null;
+    if (this.check(TokenKind.Catch)) {
+      const catchStart = this.peek().span.start;
+      this.advance(); // catch
+      if (!this.expect(TokenKind.LParen, "Expected '(' after 'catch'")) {
+        return null;
+      }
+      const paramToken = this.expect(TokenKind.Identifier, "Expected catch parameter name");
+      if (!paramToken) {
+        return null;
+      }
+      const parameter: Identifier = {
+        kind: "Identifier",
+        name: paramToken.lexeme,
+        span: paramToken.span,
+      };
+      if (this.check(TokenKind.Colon)) {
+        this.diagnostics.error(
+          "Catch clause must not have a type annotation",
+          this.peek().span,
+          "E0383",
+        );
+        this.synchronizeStatement();
+        return null;
+      }
+      if (!this.expect(TokenKind.RParen, "Expected ')' after catch parameter")) {
+        return null;
+      }
+      const catchBody = this.parseBlock();
+      if (!catchBody) {
+        return null;
+      }
+      const catchEnd =
+        catchBody.statements.length > 0
+          ? catchBody.statements[catchBody.statements.length - 1]!.span.end
+          : catchBody.end;
+      catchClause = {
+        kind: "CatchClause",
+        parameter,
+        body: catchBody.statements,
+        span: { start: catchStart, end: catchEnd },
+      };
+    }
+
+    let finallyBlock: Statement[] | null = null;
+    if (this.check(TokenKind.Finally)) {
+      this.advance(); // finally
+      const finallyResult = this.parseBlock();
+      if (!finallyResult) {
+        return null;
+      }
+      finallyBlock = finallyResult.statements;
+    }
+
+    if (!catchClause && !finallyBlock) {
+      this.diagnostics.error(
+        "try must have catch and/or finally",
+        { start, end: tryBlockResult.end },
+        "E0381",
+      );
+      return null;
+    }
+
+    const end =
+      finallyBlock && finallyBlock.length > 0
+        ? finallyBlock[finallyBlock.length - 1]!.span.end
+        : catchClause
+          ? catchClause.span.end
+          : tryBlockResult.end;
+
+    return {
+      kind: "TryStatement",
+      tryBlock: tryBlockResult.statements,
+      catchClause,
+      finallyBlock,
       span: { start, end },
     };
   }

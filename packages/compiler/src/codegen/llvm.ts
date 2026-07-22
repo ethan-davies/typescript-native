@@ -24,6 +24,8 @@ import type {
   StructLiteral,
   StructMethod,
   SwitchStatement,
+  ThrowStatement,
+  TryStatement,
   TypeAnnotation,
   TypeAliasDeclaration,
   UnaryExpression,
@@ -36,6 +38,11 @@ import { mangleTypeAnnotation } from "../generics/mangle.js";
 import { valueTypeToAnnotation } from "../generics/value-type.js";
 import { mangleSymbol } from "../modules/mangle.js";
 import type { ResolvedModule } from "../modules/resolve.js";
+import {
+  BUILTIN_ERROR_LOCAL_NAME,
+  BUILTIN_ERROR_MANGLED,
+  createBuiltinErrorClassDeclaration,
+} from "../builtins/error.js";
 import {
   isArrayType,
   isAssignable,
@@ -137,7 +144,15 @@ interface FunctionSig {
 
 type ControlContext =
   | { readonly kind: "loop"; readonly continueLabel: string; readonly breakLabel: string }
-  | { readonly kind: "switch"; readonly breakLabel: string };
+  | { readonly kind: "switch"; readonly breakLabel: string }
+  | {
+      readonly kind: "try";
+      readonly framePtr: string;
+      readonly normalLeaveLabel: string;
+      readonly afterLabel: string;
+      readonly hasFinally: boolean;
+      readonly finallyOnly: boolean;
+    };
 
 interface StructFieldInfo {
   readonly name: string;
@@ -232,6 +247,9 @@ const LOGICAL_OPS = new Set(["&&", "||"]);
 /** Array header: { i64 length, i64 capacity, ptr data } — 24 bytes. */
 const ARRAY_HEADER_SIZE = 24;
 
+/** Must match TSN_EH_FRAME_SIZE in packages/runtime/include/tsn/runtime.h */
+const TSN_EH_FRAME_SIZE = 256;
+
 /**
  * Lowers a validated, type-checked AST to LLVM IR text.
  */
@@ -264,6 +282,12 @@ export class LlvmCodegen {
   private needsUnionRuntime = false;
   private needsCallableRuntime = false;
   private needsStrcmp = false;
+  private needsTsnException = false;
+  /** Deferred return through a finally block. */
+  private pendingReturn: { readonly llvm: string; readonly type: ValueType | "void" } | null =
+    null;
+  /** Deferred break/continue through a finally block. */
+  private pendingBranch: string | null = null;
   /** Synthetic tuple LLVM type name → element types. */
   private readonly registeredTuples = new Map<string, readonly ValueType[]>();
   /** Local type alias expansions (local name → annotation). */
@@ -407,9 +431,20 @@ export class LlvmCodegen {
         }
       }
 
+      this.registerBuiltinErrorClass(
+        mod.moduleId,
+        localStructs,
+        localEnums,
+        localClasses,
+        localInterfaces,
+      );
+
       for (const decl of mod.ast.body) {
         if (decl.kind === "ClassDeclaration") {
           if (decl.typeParams.length > 0) {
+            continue;
+          }
+          if (decl.name.name === BUILTIN_ERROR_LOCAL_NAME) {
             continue;
           }
           const info = this.registerClassStub(decl, mod.moduleId);
@@ -505,6 +540,9 @@ export class LlvmCodegen {
       // Resolve class members (inheritance within module via localClasses).
       for (const decl of mod.ast.body) {
         if (decl.kind !== "ClassDeclaration") {
+          continue;
+        }
+        if (decl.name.name === BUILTIN_ERROR_LOCAL_NAME) {
           continue;
         }
         const info = this.buildClassInfo(
@@ -670,6 +708,11 @@ export class LlvmCodegen {
       }
     }
 
+    const builtinError = this.classes.get(BUILTIN_ERROR_MANGLED);
+    if (builtinError) {
+      this.emitClassMembers(builtinError);
+    }
+
     this.emitClassGlobals();
 
     const structTypeLines = this.emitStructTypeDefs();
@@ -753,6 +796,26 @@ export class LlvmCodegen {
       vtableGlobalName: `${mangled}__vtable`,
       decl,
     };
+  }
+
+  private registerBuiltinErrorClass(
+    moduleId: string,
+    localStructs: Map<string, StructInfo>,
+    localEnums: Map<string, EnumInfo>,
+    localClasses: Map<string, ClassInfo>,
+    localInterfaces: Map<string, InterfaceInfo>,
+  ): void {
+    const decl = createBuiltinErrorClassDeclaration();
+    const info = this.buildClassInfo(
+      decl,
+      "",
+      localStructs,
+      localEnums,
+      localClasses,
+      localInterfaces,
+    );
+    localClasses.set(BUILTIN_ERROR_LOCAL_NAME, info);
+    this.classes.set(BUILTIN_ERROR_MANGLED, info);
   }
 
   private registerInterfaceStub(decl: InterfaceDeclaration, moduleId: string): InterfaceInfo {
@@ -1882,6 +1945,18 @@ export class LlvmCodegen {
       declares.push("declare void @tsn_map_set(ptr noundef, ptr noundef, ptr noundef) nounwind");
       declares.push("declare ptr @tsn_map_get(ptr noundef, ptr noundef) nounwind");
     }
+    if (this.needsTsnException) {
+      declares.push(
+        "declare void @tsn_eh_init_frame(ptr noundef, i32 noundef, ptr noundef, ptr noundef)",
+      );
+      declares.push("declare void @tsn_eh_push(ptr noundef)");
+      declares.push("declare void @tsn_eh_pop(ptr noundef)");
+      declares.push("declare ptr @tsn_eh_jmp_buf(ptr noundef)");
+      declares.push("declare i32 @setjmp(ptr noundef)");
+      declares.push("declare void @tsn_throw(ptr noundef)");
+      declares.push("declare ptr @tsn_eh_caught_exception()");
+      declares.push("declare void @tsn_uncaught_exception(ptr noundef)");
+    }
     if (this.needsTsnPrint) {
       declares.push("declare void @tsn_print_i32(i32 noundef) nounwind");
       declares.push("declare void @tsn_print_i64(i64 noundef) nounwind");
@@ -2014,6 +2089,25 @@ export class LlvmCodegen {
     const lines: string[] = [];
     lines.push(`define void @${info.constructorMangledName}(${params}) {`);
     lines.push("entry:");
+
+    if (info.localName === BUILTIN_ERROR_LOCAL_NAME) {
+      for (let i = 0; i < info.constructorDecl!.params.length; i += 1) {
+        this.emitParameter(info.constructorDecl!.params[i]!, i, lines);
+      }
+      const msgField = this.nextTemp();
+      lines.push(
+        `  ${msgField} = getelementptr inbounds %${info.name}, ptr %this, i32 0, i32 1`,
+      );
+      lines.push(`  store ptr %arg0, ptr ${msgField}`);
+      lines.push("  ret void");
+      lines.push("}");
+      lines.push("");
+      this.functionBodies.push(...lines);
+      this.thisPtr = null;
+      this.thisType = null;
+      this.currentReturnType = null;
+      return;
+    }
 
     if (info.constructorDecl) {
       for (let i = 0; i < info.constructorDecl.params.length; i += 1) {
@@ -2217,22 +2311,268 @@ export class LlvmCodegen {
       case "SwitchStatement":
         return this.emitSwitchStatement(stmt, lines);
       case "BreakStatement": {
-        lines.push(`  br label %${this.currentBreakLabel()}`);
+        this.emitBreak(lines);
         return true;
       }
       case "ContinueStatement": {
-        lines.push(`  br label %${this.currentContinueLabel()}`);
+        this.emitContinue(lines);
         return true;
       }
+      case "ThrowStatement":
+        return this.emitThrowStatement(stmt, lines);
+      case "TryStatement":
+        return this.emitTryStatement(stmt, lines);
     }
   }
 
-  private currentBreakLabel(): string {
-    const ctx = this.controlStack[this.controlStack.length - 1];
-    if (!ctx) {
-      throw new Error("Codegen: break outside loop or switch");
+  private enclosingTryWithFinally(): Extract<ControlContext, { kind: "try" }> | null {
+    for (let i = this.controlStack.length - 1; i >= 0; i -= 1) {
+      const ctx = this.controlStack[i]!;
+      if (ctx.kind === "try" && ctx.hasFinally) {
+        return ctx;
+      }
     }
-    return ctx.breakLabel;
+    return null;
+  }
+
+  private emitFinallyBlock(stmts: Statement[], lines: string[]): void {
+    let terminated = false;
+    for (const s of stmts) {
+      if (terminated) {
+        break;
+      }
+      terminated = this.emitStatement(s, lines);
+    }
+  }
+
+  private emitFinallyThunk(stmts: Statement[], id: number): string {
+    const name = `__tsn_finally_${id}`;
+    const savedLocals = this.locals;
+    const savedThisPtr = this.thisPtr;
+    const savedThisType = this.thisType;
+    const savedReturnType = this.currentReturnType;
+    const savedControl = [...this.controlStack];
+    const savedPendingReturn = this.pendingReturn;
+    const savedPendingBranch = this.pendingBranch;
+
+    this.locals = new Map(this.locals);
+    this.controlStack.length = 0;
+    this.pendingReturn = null;
+    this.pendingBranch = null;
+
+    const thunkLines: string[] = [];
+    thunkLines.push(`define internal void @${name}(ptr noundef %ctx) {`);
+    thunkLines.push("entry:");
+    let terminated = false;
+    for (const s of stmts) {
+      if (terminated) {
+        break;
+      }
+      terminated = this.emitStatement(s, thunkLines);
+    }
+    if (!terminated) {
+      thunkLines.push("  ret void");
+    }
+    thunkLines.push("}");
+    thunkLines.push("");
+    this.functionBodies.push(...thunkLines);
+
+    this.locals = savedLocals;
+    this.thisPtr = savedThisPtr;
+    this.thisType = savedThisType;
+    this.currentReturnType = savedReturnType;
+    this.controlStack.length = 0;
+    this.controlStack.push(...savedControl);
+    this.pendingReturn = savedPendingReturn;
+    this.pendingBranch = savedPendingBranch;
+    return name;
+  }
+
+  private emitTryLeave(
+    framePtr: string,
+    afterLabel: string,
+    finallyBlock: Statement[] | null,
+    finallyOnly: boolean,
+    lines: string[],
+  ): boolean {
+    if (finallyBlock) {
+      this.emitFinallyBlock(finallyBlock, lines);
+    }
+    lines.push(`  call void @tsn_eh_pop(ptr noundef ${framePtr})`);
+    if (this.pendingReturn) {
+      const pending = this.pendingReturn;
+      this.pendingReturn = null;
+      if (pending.type === "void") {
+        lines.push("  ret void");
+      } else {
+        lines.push(`  ret ${toLlvmType(pending.type)} ${pending.llvm}`);
+      }
+      return true;
+    }
+    if (this.pendingBranch) {
+      const target = this.pendingBranch;
+      this.pendingBranch = null;
+      lines.push(`  br label %${target}`);
+      return true;
+    }
+    lines.push(`  br label %${afterLabel}`);
+    return false;
+  }
+
+  private emitTryStatement(stmt: TryStatement, lines: string[]): boolean {
+    this.needsTsnException = true;
+    const id = this.labelCounter;
+    this.labelCounter += 1;
+
+    const hasCatch = stmt.catchClause !== null;
+    const hasFinally = stmt.finallyBlock !== null && stmt.finallyBlock.length > 0;
+    const finallyOnly = hasFinally && !hasCatch;
+
+    const framePtr = this.nextTemp();
+    lines.push(`  ${framePtr} = alloca i8, i64 ${TSN_EH_FRAME_SIZE}`);
+
+    let finallyFnName: string | null = null;
+    if (finallyOnly && stmt.finallyBlock) {
+      finallyFnName = this.emitFinallyThunk(stmt.finallyBlock, id);
+    }
+
+    const finallyArg = finallyFnName ? `ptr @${finallyFnName}` : "ptr null";
+    lines.push(
+      `  call void @tsn_eh_init_frame(ptr noundef ${framePtr}, i32 ${hasCatch ? 1 : 0}, ${finallyArg}, ptr null)`,
+    );
+    lines.push(`  call void @tsn_eh_push(ptr noundef ${framePtr})`);
+
+    const jmpBuf = this.nextTemp();
+    lines.push(`  ${jmpBuf} = call ptr @tsn_eh_jmp_buf(ptr noundef ${framePtr})`);
+    const sj = this.nextTemp();
+    lines.push(`  ${sj} = call i32 @setjmp(ptr noundef ${jmpBuf})`);
+    const isCatch = this.nextTemp();
+    lines.push(`  ${isCatch} = icmp ne i32 ${sj}, 0`);
+
+    const tryLabel = `try.body.${id}`;
+    const normalLeaveLabel = `try.normal.${id}`;
+    const catchLabel = hasCatch ? `try.catch.${id}` : null;
+    const afterLabel = `try.after.${id}`;
+
+    if (hasCatch) {
+      lines.push(`  br i1 ${isCatch}, label %${catchLabel}, label %${tryLabel}`);
+    } else {
+      lines.push(`  br i1 ${isCatch}, label %${normalLeaveLabel}, label %${tryLabel}`);
+    }
+
+    this.controlStack.push({
+      kind: "try",
+      framePtr,
+      normalLeaveLabel,
+      afterLabel,
+      hasFinally,
+      finallyOnly,
+    });
+
+    lines.push(`${tryLabel}:`);
+    let terminated = false;
+    for (const s of stmt.tryBlock) {
+      if (terminated) {
+        break;
+      }
+      terminated = this.emitStatement(s, lines);
+    }
+    if (!terminated) {
+      lines.push(`  br label %${normalLeaveLabel}`);
+    }
+
+    lines.push(`${normalLeaveLabel}:`);
+    const tryLeaveTerminated = this.emitTryLeave(
+      framePtr,
+      afterLabel,
+      stmt.finallyBlock,
+      finallyOnly,
+      lines,
+    );
+
+    if (catchLabel && stmt.catchClause) {
+      lines.push(`${catchLabel}:`);
+      const err = this.nextTemp();
+      lines.push(`  ${err} = call ptr @tsn_eh_caught_exception()`);
+      const catchParam = stmt.catchClause.parameter.name;
+      const catchPtr = `%v.${catchParam}`;
+      lines.push(`  ${catchPtr} = alloca ptr`);
+      lines.push(`  store ptr ${err}, ptr ${catchPtr}`);
+      this.locals.set(catchParam, {
+        ptr: catchPtr,
+        type: { kind: "class", name: BUILTIN_ERROR_MANGLED },
+        boxed: false,
+      });
+
+      terminated = false;
+      for (const s of stmt.catchClause.body) {
+        if (terminated) {
+          break;
+        }
+        terminated = this.emitStatement(s, lines);
+      }
+      if (!terminated) {
+        lines.push(`  br label %${normalLeaveLabel}.catch.${id}`);
+      }
+
+      lines.push(`${normalLeaveLabel}.catch.${id}:`);
+      const catchLeaveTerminated = this.emitTryLeave(
+        framePtr,
+        afterLabel,
+        stmt.finallyBlock,
+        finallyOnly,
+        lines,
+      );
+      this.controlStack.pop();
+      if (!(tryLeaveTerminated || catchLeaveTerminated)) {
+        lines.push(`${afterLabel}:`);
+      }
+      return tryLeaveTerminated || catchLeaveTerminated;
+    }
+
+    this.controlStack.pop();
+    if (!tryLeaveTerminated) {
+      lines.push(`${afterLabel}:`);
+    }
+    return tryLeaveTerminated;
+  }
+
+  private emitThrowStatement(stmt: ThrowStatement, lines: string[]): boolean {
+    this.needsTsnException = true;
+    const value = this.emitExpression(stmt.expression, lines);
+    lines.push(`  call void @tsn_throw(ptr noundef ${value.llvm})`);
+    lines.push("  unreachable");
+    return true;
+  }
+
+  private emitContinue(lines: string[]): void {
+    const tryCtx = this.enclosingTryWithFinally();
+    if (tryCtx) {
+      this.pendingBranch = this.currentContinueLabel();
+      lines.push(`  br label %${tryCtx.normalLeaveLabel}`);
+      return;
+    }
+    lines.push(`  br label %${this.currentContinueLabel()}`);
+  }
+
+  private currentBreakLabel(): string {
+    for (let i = this.controlStack.length - 1; i >= 0; i -= 1) {
+      const ctx = this.controlStack[i]!;
+      if (ctx.kind === "loop" || ctx.kind === "switch") {
+        return ctx.breakLabel;
+      }
+    }
+    throw new Error("Codegen: break outside loop or switch");
+  }
+
+  private emitBreak(lines: string[]): void {
+    const tryCtx = this.enclosingTryWithFinally();
+    if (tryCtx) {
+      this.pendingBranch = this.currentBreakLabel();
+      lines.push(`  br label %${tryCtx.normalLeaveLabel}`);
+      return;
+    }
+    lines.push(`  br label %${this.currentBreakLabel()}`);
   }
 
   private currentContinueLabel(): string {
@@ -2786,7 +3126,13 @@ export class LlvmCodegen {
   }
 
   private emitReturn(stmt: ReturnStatement, lines: string[]): void {
+    const tryCtx = this.enclosingTryWithFinally();
     if (stmt.value === null) {
+      if (tryCtx) {
+        this.pendingReturn = { llvm: "", type: "void" };
+        lines.push(`  br label %${tryCtx.normalLeaveLabel}`);
+        return;
+      }
       lines.push("  ret void");
       return;
     }
@@ -2795,6 +3141,11 @@ export class LlvmCodegen {
         ? this.currentReturnType
         : undefined;
     const value = this.emitExpression(stmt.value, lines, expected);
+    if (tryCtx) {
+      this.pendingReturn = { llvm: value.llvm, type: value.type };
+      lines.push(`  br label %${tryCtx.normalLeaveLabel}`);
+      return;
+    }
     lines.push(`  ret ${toLlvmType(value.type)} ${value.llvm}`);
   }
 

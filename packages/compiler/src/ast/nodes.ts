@@ -65,6 +65,9 @@ export type AstNode =
   | SwitchCase
   | BreakStatement
   | ContinueStatement
+  | ThrowStatement
+  | TryStatement
+  | CatchClause
   | CallExpression
   | BinaryExpression
   | UnaryExpression
@@ -127,7 +130,9 @@ export type Statement =
   | ForInStatement
   | SwitchStatement
   | BreakStatement
-  | ContinueStatement;
+  | ContinueStatement
+  | ThrowStatement
+  | TryStatement;
 
 export interface TypeParameter extends AstNodeBase {
   readonly kind: "TypeParameter";
@@ -377,6 +382,24 @@ export interface BreakStatement extends AstNodeBase {
 
 export interface ContinueStatement extends AstNodeBase {
   readonly kind: "ContinueStatement";
+}
+
+export interface ThrowStatement extends AstNodeBase {
+  readonly kind: "ThrowStatement";
+  readonly expression: Expression;
+}
+
+export interface CatchClause extends AstNodeBase {
+  readonly kind: "CatchClause";
+  readonly parameter: Identifier;
+  readonly body: Statement[];
+}
+
+export interface TryStatement extends AstNodeBase {
+  readonly kind: "TryStatement";
+  readonly tryBlock: Statement[];
+  readonly catchClause: CatchClause | null;
+  readonly finallyBlock: Statement[] | null;
 }
 
 export type Expression =

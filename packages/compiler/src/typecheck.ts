@@ -36,6 +36,11 @@ import type { TypecheckInstantiations } from "./generics/monomorphize.js";
 import { mangleSymbol } from "./modules/mangle.js";
 import type { ResolvedModule } from "./modules/resolve.js";
 import {
+  BUILTIN_ERROR_LOCAL_NAME,
+  BUILTIN_ERROR_MANGLED,
+  createBuiltinErrorClassDef,
+} from "./builtins/error.js";
+import {
   advancedIsAssignable,
   advancedTypeToString,
   advancedTypesEqual,
@@ -1316,6 +1321,14 @@ function collectClasses(
     if (decl.kind !== "ClassDeclaration") {
       continue;
     }
+    if (decl.name.name === BUILTIN_ERROR_LOCAL_NAME) {
+      diagnostics.error(
+        `Cannot redefine builtin class '${BUILTIN_ERROR_LOCAL_NAME}'`,
+        decl.name.span,
+        "E0382",
+      );
+      continue;
+    }
     if (decl.typeParams.length > 0) {
       continue;
     }
@@ -1353,6 +1366,7 @@ function collectClasses(
 
   // Placeholder map so resolveAnnotation can see class names mid-build.
   const classes = new Map<string, ClassDef>();
+  classes.set(BUILTIN_ERROR_LOCAL_NAME, createBuiltinErrorClassDef());
   for (const decl of declarations) {
     const mangled = mangleSymbol(moduleId, decl.name.name);
     classes.set(decl.name.name, {
@@ -1881,6 +1895,29 @@ export function isStructType(type: ValueType): type is StructValueType {
 
 export function isClassType(type: ValueType): type is ClassValueType {
   return typeof type === "object" && type.kind === "class";
+}
+
+/** True when `type` is the builtin Error class or a subclass. */
+export function isErrorType(type: ValueType): boolean {
+  if (typeof type !== "object" || type.kind !== "class") {
+    return false;
+  }
+  if (type.name === BUILTIN_ERROR_MANGLED) {
+    return true;
+  }
+  let current: ClassDef | undefined =
+    classesByMangled.get(type.name) ?? findClassByMangled(type.name);
+  while (current) {
+    if (current.localName === BUILTIN_ERROR_LOCAL_NAME) {
+      return true;
+    }
+    current = current.superclass ?? undefined;
+  }
+  return false;
+}
+
+export function isThrowableType(type: ValueType): boolean {
+  return isErrorType(type);
 }
 
 export function isInterfaceType(type: ValueType): type is InterfaceValueType {
@@ -3417,7 +3454,10 @@ function checkFunction(
 
   if (returnType !== "void") {
     const last = fn.body[fn.body.length - 1];
-    if (!last || last.kind !== "ReturnStatement" || last.value === null) {
+    if (
+      !bodyReturnsValue(fn.body) &&
+      (!last || last.kind !== "ReturnStatement" || last.value === null)
+    ) {
       diagnostics.error(
         `Function '${fn.name.name}' must end with a return statement`,
         fn.name.span,
@@ -3468,7 +3508,10 @@ function checkStructMethods(
     }
     if (method.returnType !== "void") {
       const last = method.decl.body[method.decl.body.length - 1];
-      if (!last || last.kind !== "ReturnStatement" || last.value === null) {
+      if (
+        !bodyReturnsValue(method.decl.body) &&
+        (!last || last.kind !== "ReturnStatement" || last.value === null)
+      ) {
         diagnostics.error(
           `Method '${method.name}' must end with a return statement`,
           method.decl.name.span,
@@ -3617,7 +3660,10 @@ function checkClassMembers(
     }
     if (method.returnType !== "void") {
       const last = body[body.length - 1];
-      if (!last || last.kind !== "ReturnStatement" || last.value === null) {
+      if (
+        !bodyReturnsValue(body) &&
+        (!last || last.kind !== "ReturnStatement" || last.value === null)
+      ) {
         diagnostics.error(
           `Method '${method.name}' must end with a return statement`,
           method.decl.name.span,
@@ -3995,6 +4041,38 @@ function checkStatements(
     );
   }
   return exits;
+}
+
+/** True when the statement list contains a returning value (return with value or throw). */
+function bodyReturnsValue(statements: Statement[]): boolean {
+  for (const stmt of statements) {
+    if (stmt.kind === "ReturnStatement" && stmt.value !== null) {
+      return true;
+    }
+    if (stmt.kind === "ThrowStatement") {
+      return true;
+    }
+    if (stmt.kind === "TryStatement") {
+      if (bodyReturnsValue(stmt.tryBlock)) {
+        return true;
+      }
+      if (stmt.catchClause && bodyReturnsValue(stmt.catchClause.body)) {
+        return true;
+      }
+    }
+    if (stmt.kind === "IfStatement") {
+      const thenReturns = bodyReturnsValue(stmt.consequent);
+      const elseReturns = stmt.alternate
+        ? Array.isArray(stmt.alternate)
+          ? bodyReturnsValue(stmt.alternate)
+          : bodyReturnsValue([stmt.alternate])
+        : false;
+      if (thenReturns && elseReturns) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -4467,6 +4545,73 @@ function checkStatement(
         diagnostics.error("'continue' used outside of a loop", stmt.span, "E0317");
       }
       return true;
+    }
+    case "ThrowStatement": {
+      const thrown = checkExpression(
+        stmt.expression,
+        scope,
+        functions,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (!thrown || !isThrowableType(thrown)) {
+        diagnostics.error(
+          `Cannot throw value of type '${thrown ? typeToString(thrown) : "unknown"}'; expected Error or a subtype`,
+          stmt.expression.span,
+          "E0380",
+        );
+      }
+      return true;
+    }
+    case "TryStatement": {
+      if (!stmt.catchClause && !stmt.finallyBlock) {
+        diagnostics.error("try must have catch and/or finally", stmt.span, "E0381");
+        return false;
+      }
+      checkStatements(
+        stmt.tryBlock,
+        scope,
+        functions,
+        structs,
+        enums,
+        returnType,
+        diagnostics,
+        loopDepth,
+        switchDepth,
+      );
+      if (stmt.catchClause) {
+        const catchScope = new Map(scope);
+        catchScope.set(stmt.catchClause.parameter.name, {
+          type: { kind: "class", name: BUILTIN_ERROR_MANGLED },
+          mutable: false,
+        });
+        checkStatements(
+          stmt.catchClause.body,
+          catchScope,
+          functions,
+          structs,
+          enums,
+          returnType,
+          diagnostics,
+          loopDepth,
+          switchDepth,
+        );
+      }
+      if (stmt.finallyBlock) {
+        checkStatements(
+          stmt.finallyBlock,
+          scope,
+          functions,
+          structs,
+          enums,
+          returnType,
+          diagnostics,
+          loopDepth,
+          switchDepth,
+        );
+      }
+      return false;
     }
   }
 }

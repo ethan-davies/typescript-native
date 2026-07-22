@@ -1,6 +1,7 @@
 #ifndef TSN_RUNTIME_H
 #define TSN_RUNTIME_H
 
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -11,6 +12,19 @@ extern "C" {
 /* Must match ARRAY_HEADER_SIZE in packages/compiler/src/codegen/llvm.ts */
 #define TSN_ARRAY_HEADER_SIZE 24
 #define TSN_MAP_HEADER_SIZE 32
+
+/* Opaque exception-handling frame; must match TsnEhFrame in exception.c */
+#define TSN_EH_FRAME_SIZE 256
+
+typedef void (*TsnFinallyFn)(void *ctx);
+
+void tsn_eh_init_frame(void *frame, int32_t has_catch, TsnFinallyFn finally_fn, void *finally_ctx);
+void tsn_eh_push(void *frame);
+void tsn_eh_pop(void *frame);
+jmp_buf *tsn_eh_jmp_buf(void *frame);
+void tsn_throw(void *error);
+void *tsn_eh_caught_exception(void);
+void tsn_uncaught_exception(void *error);
 
 typedef struct TsnArray {
   int64_t length;

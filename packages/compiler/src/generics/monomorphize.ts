@@ -374,6 +374,22 @@ function rewriteStatement(stmt: Statement, inst: TypecheckInstantiations): State
     case "BreakStatement":
     case "ContinueStatement":
       return stmt;
+    case "ThrowStatement":
+      return { ...stmt, expression: rewriteExpression(stmt.expression, inst) };
+    case "TryStatement":
+      return {
+        ...stmt,
+        tryBlock: stmt.tryBlock.map((s) => rewriteStatement(s, inst)),
+        catchClause: stmt.catchClause
+          ? {
+              ...stmt.catchClause,
+              body: stmt.catchClause.body.map((s) => rewriteStatement(s, inst)),
+            }
+          : null,
+        finallyBlock: stmt.finallyBlock
+          ? stmt.finallyBlock.map((s) => rewriteStatement(s, inst))
+          : null,
+      };
   }
 }
 
