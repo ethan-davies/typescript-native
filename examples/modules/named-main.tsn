@@ -1,0 +1,6 @@
+import { add as sum, mul } from "math";
+
+function main(): void {
+  print(sum(5, 10));
+  print(mul(3, 4));
+}

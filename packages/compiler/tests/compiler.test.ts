@@ -1599,7 +1599,85 @@ function main(): void {
       },
     });
     expect(result.success).toBe(false);
-    expect(result.diagnostics.some((d) => d.code === "E0307")).toBe(true);
+    expect(result.diagnostics.some((d) => d.code === "E0408")).toBe(true);
+    expect(result.diagnostics.some((d) => d.message.includes('does not export "secret"'))).toBe(
+      true,
+    );
+  });
+
+  it("compiles named imports and aliases to mangled calls", () => {
+    const result = compileFile(join(modulesDir, "named-main.tsn"));
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("define i32 @math__add(i32 %arg0, i32 %arg1)");
+    expect(result.ir).toContain("define i32 @math__mul(i32 %arg0, i32 %arg1)");
+    expect(result.ir).toContain("call i32 @math__add(i32 5, i32 10)");
+    expect(result.ir).toContain("call i32 @math__mul(i32 3, i32 4)");
+  });
+
+  it("compiles explicit import * as namespace syntax", () => {
+    const files = new Map<string, string>([
+      [
+        "/virt/main.tsn",
+        `import * as math from "math";
+function main(): void {
+  print(math.add(1, 2));
+}
+`,
+      ],
+      [
+        "/virt/math.tsn",
+        `export function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+`,
+      ],
+    ]);
+    const result = compileFile("/virt/main.tsn", {
+      readFile: (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+    });
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("call i32 @math__add(i32 1, i32 2)");
+  });
+
+  it("errors when a named import is not exported", () => {
+    const files = new Map<string, string>([
+      [
+        "/virt/main.tsn",
+        `import { helper } from "math";
+function main(): void {
+  helper();
+}
+`,
+      ],
+      [
+        "/virt/math.tsn",
+        `function helper(): void {}
+export function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+`,
+      ],
+    ]);
+    const result = compileFile("/virt/main.tsn", {
+      readFile: (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0408")).toBe(true);
+    expect(
+      result.diagnostics.some((d) => d.message === 'Module "math" does not export "helper".'),
+    ).toBe(true);
   });
 });
 

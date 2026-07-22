@@ -306,14 +306,23 @@ describe("Lexer", () => {
     expect(diagnostics.diagnostics.some((d) => d.code === "E0002")).toBe(true);
   });
 
-  it("tokenizes import, export, and as keywords", () => {
-    const { tokens, diagnostics } = lex(`import "math" as m; export function add(): i32 {}`);
+  it("tokenizes import, export, from, and as keywords", () => {
+    const { tokens, diagnostics } = lex(
+      `import "math" as m; import { add } from "math"; export function add(): i32 {}`,
+    );
     expect(diagnostics.hasErrors).toBe(false);
     expect(tokens.map((t) => t.kind)).toEqual([
       TokenKind.Import,
       TokenKind.String,
       TokenKind.As,
       TokenKind.Identifier,
+      TokenKind.Semicolon,
+      TokenKind.Import,
+      TokenKind.LBrace,
+      TokenKind.Identifier,
+      TokenKind.RBrace,
+      TokenKind.From,
+      TokenKind.String,
       TokenKind.Semicolon,
       TokenKind.Export,
       TokenKind.Function,

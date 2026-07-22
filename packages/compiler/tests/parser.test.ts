@@ -582,12 +582,12 @@ describe("Parser", () => {
     expect(ast.body[0]).toMatchObject({
       kind: "ImportDeclaration",
       source: { value: "math" },
-      alias: null,
+      clause: { kind: "NamespaceImport", localName: null },
     });
     expect(ast.body[1]).toMatchObject({
       kind: "ImportDeclaration",
       source: { value: "math/vector" },
-      alias: { name: "v" },
+      clause: { kind: "NamespaceImport", localName: { name: "v" } },
     });
     expect(ast.body[2]).toMatchObject({
       kind: "FunctionDeclaration",
@@ -627,6 +627,36 @@ describe("Parser", () => {
         name: { name: "Point" },
       });
     }
+  });
+
+  it("parses explicit namespace and named imports with aliases", () => {
+    const { ast, diagnostics } = parse(`
+      import * as math from "math";
+      import {
+        add as sum,
+        subtract as difference,
+        Vector
+      } from "math";
+      function main(): void {}
+    `);
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(ast.body[0]).toMatchObject({
+      kind: "ImportDeclaration",
+      source: { value: "math" },
+      clause: { kind: "NamespaceImport", localName: { name: "math" } },
+    });
+    expect(ast.body[1]).toMatchObject({
+      kind: "ImportDeclaration",
+      source: { value: "math" },
+      clause: {
+        kind: "NamedImports",
+        specifiers: [
+          { importedName: { name: "add" }, localName: { name: "sum" } },
+          { importedName: { name: "subtract" }, localName: { name: "difference" } },
+          { importedName: { name: "Vector" }, localName: { name: "Vector" } },
+        ],
+      },
+    });
   });
 
   it("rejects imports after other declarations", () => {

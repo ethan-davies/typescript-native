@@ -31,6 +31,7 @@ export type Visibility = "public" | "private";
 export type AstNode =
   | Program
   | ImportDeclaration
+  | ImportSpecifier
   | FunctionDeclaration
   | StructDeclaration
   | StructField
@@ -111,11 +112,29 @@ export interface Program extends AstNodeBase {
   readonly body: TopLevelDeclaration[];
 }
 
+export interface ImportSpecifier extends AstNodeBase {
+  readonly kind: "ImportSpecifier";
+  /** Name in the exporting module's export table. */
+  readonly importedName: Identifier;
+  /** Binding name in this module (same as importedName when no `as`). */
+  readonly localName: Identifier;
+}
+
+export type ImportClause =
+  | {
+      readonly kind: "NamespaceImport";
+      /** Null means use the resolved file basename. */
+      readonly localName: Identifier | null;
+    }
+  | {
+      readonly kind: "NamedImports";
+      readonly specifiers: ImportSpecifier[];
+    };
+
 export interface ImportDeclaration extends AstNodeBase {
   readonly kind: "ImportDeclaration";
   readonly source: StringLiteral;
-  /** Namespace binding; null means use the resolved file basename. */
-  readonly alias: Identifier | null;
+  readonly clause: ImportClause;
 }
 
 export type Statement =

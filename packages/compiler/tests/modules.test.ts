@@ -67,11 +67,109 @@ function main(): void {
     expect(result.modules).toHaveLength(3);
     const entry = result.modules.find((m) => m.isEntry);
     expect(entry?.path).toBe("/proj/main.tsn");
-    expect(entry?.imports.map((i) => i.alias)).toEqual(["math", "v"]);
-    expect(entry?.imports.map((i) => i.modulePath)).toEqual([
-      "/proj/math.tsn",
-      "/proj/math/vector.tsn",
+    expect(entry?.imports).toEqual([
+      expect.objectContaining({
+        kind: "namespace",
+        alias: "math",
+        modulePath: "/proj/math.tsn",
+      }),
+      expect.objectContaining({
+        kind: "namespace",
+        alias: "v",
+        modulePath: "/proj/math/vector.tsn",
+      }),
     ]);
+  });
+
+  it("resolves named imports and explicit namespace imports", () => {
+    const files = new Map<string, string>([
+      [
+        "/proj/main.tsn",
+        `import * as math from "math";
+import { add as sum, mul } from "math";
+function main(): void {
+  print(math.add(1, 2));
+  print(sum(3, 4));
+  print(mul(5, 6));
+}
+`,
+      ],
+      [
+        "/proj/math.tsn",
+        `export function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+export function mul(a: i32, b: i32): i32 {
+  return a * b;
+}
+`,
+      ],
+    ]);
+
+    const diagnostics = new DiagnosticCollector();
+    const result = resolveModules(
+      "/proj/main.tsn",
+      (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+      diagnostics,
+    );
+
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(result.success).toBe(true);
+    const entry = result.modules.find((m) => m.isEntry);
+    expect(entry?.imports).toEqual([
+      expect.objectContaining({ kind: "namespace", alias: "math" }),
+      expect.objectContaining({
+        kind: "named",
+        exportName: "add",
+        localName: "sum",
+        specifier: "math",
+      }),
+      expect.objectContaining({
+        kind: "named",
+        exportName: "mul",
+        localName: "mul",
+        specifier: "math",
+      }),
+    ]);
+  });
+
+  it("reports duplicate import bindings", () => {
+    const files = new Map<string, string>([
+      [
+        "/proj/main.tsn",
+        `import "math";
+import { add as math } from "math";
+function main(): void {}
+`,
+      ],
+      [
+        "/proj/math.tsn",
+        `export function add(a: i32, b: i32): i32 {
+  return a + b;
+}
+`,
+      ],
+    ]);
+    const diagnostics = new DiagnosticCollector();
+    const result = resolveModules(
+      "/proj/main.tsn",
+      (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+      diagnostics,
+    );
+    expect(result.success).toBe(false);
+    expect(diagnostics.diagnostics.some((d) => d.code === "E0404")).toBe(true);
   });
 
   it("reports missing modules", () => {

@@ -426,6 +426,19 @@ export function typecheckModules(
     const local = byPath.get(mod.path)!;
     const namespaces = new Map<string, ModuleNamespace>();
 
+    // Working maps: local symbols plus named imports injected under local names.
+    const functions = new Map(local.functions);
+    const structs = new Map(local.structs);
+    const enums = new Map(local.enums);
+    const classes = new Map(local.classes);
+    const interfaces = new Map(local.interfaces);
+    const typeAliases = new Map(local.typeAliases);
+    const genericStructs = new Map(local.genericStructs);
+    const genericClasses = new Map(local.genericClasses);
+    const genericInterfaces = new Map(local.genericInterfaces);
+    const genericFunctions = new Map(local.genericFunctions);
+    const genericTypeAliases = new Map(local.genericTypeAliases);
+
     const localNames = new Set<string>([
       ...local.functions.keys(),
       ...local.structs.keys(),
@@ -441,27 +454,70 @@ export function typecheckModules(
     ]);
 
     for (const binding of mod.imports) {
-      if (localNames.has(binding.alias)) {
+      const imported = byPath.get(binding.modulePath);
+      if (!imported) {
+        continue;
+      }
+
+      if (binding.kind === "namespace") {
+        if (localNames.has(binding.alias)) {
+          diagnostics.error(
+            `Import binding '${binding.alias}' conflicts with a local declaration`,
+            binding.span,
+            "E0405",
+          );
+          continue;
+        }
+        namespaces.set(binding.alias, {
+          moduleId: imported.moduleId,
+          functions: exportedFunctions(imported.functions),
+          structs: exportedStructs(imported.structs),
+          enums: exportedEnums(imported.enums),
+          classes: exportedClasses(imported.classes),
+          interfaces: exportedInterfaces(imported.interfaces),
+          typeAliases: exportedTypeAliases(imported.typeAliases),
+        });
+        continue;
+      }
+
+      // Named import
+      if (localNames.has(binding.localName)) {
         diagnostics.error(
-          `Import namespace '${binding.alias}' conflicts with a local declaration`,
+          `Import binding '${binding.localName}' conflicts with a local declaration`,
           binding.span,
           "E0405",
         );
         continue;
       }
-      const imported = byPath.get(binding.modulePath);
-      if (!imported) {
+
+      const resolved = lookupExport(imported, binding.exportName);
+      if (!resolved) {
+        diagnostics.error(
+          `Module "${binding.specifier}" does not export "${binding.exportName}".`,
+          binding.span,
+          "E0408",
+        );
         continue;
       }
-      namespaces.set(binding.alias, {
-        moduleId: imported.moduleId,
-        functions: exportedFunctions(imported.functions),
-        structs: exportedStructs(imported.structs),
-        enums: exportedEnums(imported.enums),
-        classes: exportedClasses(imported.classes),
-        interfaces: exportedInterfaces(imported.interfaces),
-        typeAliases: exportedTypeAliases(imported.typeAliases),
-      });
+
+      injectNamedImport(
+        binding.localName,
+        resolved,
+        {
+          functions,
+          structs,
+          enums,
+          classes,
+          interfaces,
+          typeAliases,
+          genericStructs,
+          genericClasses,
+          genericInterfaces,
+          genericFunctions,
+          genericTypeAliases,
+        },
+      );
+      localNames.add(binding.localName);
     }
 
     if (diagnostics.hasErrors) {
@@ -469,14 +525,14 @@ export function typecheckModules(
     }
 
     activeNamespaces = namespaces;
-    activeClasses = local.classes;
-    activeInterfaces = local.interfaces;
-    activeTypeAliases = local.typeAliases;
-    activeGenericTypeAliases = local.genericTypeAliases;
-    activeGenericStructs = local.genericStructs;
-    activeGenericClasses = local.genericClasses;
-    activeGenericInterfaces = local.genericInterfaces;
-    activeGenericFunctions = local.genericFunctions;
+    activeClasses = classes;
+    activeInterfaces = interfaces;
+    activeTypeAliases = typeAliases;
+    activeGenericTypeAliases = genericTypeAliases;
+    activeGenericStructs = genericStructs;
+    activeGenericClasses = genericClasses;
+    activeGenericInterfaces = genericInterfaces;
+    activeGenericFunctions = genericFunctions;
     activeModulePath = mod.path;
     activeModuleId = mod.moduleId;
     specializedStructs = new Map();
@@ -485,31 +541,31 @@ export function typecheckModules(
     specializedFunctions = new Map();
     syntheticObjectStructs = new Map();
     aliasExpandStack = [];
-    activeFunctions = local.functions;
+    activeFunctions = functions;
 
     for (const decl of mod.ast.body) {
       if (decl.kind === "FunctionDeclaration") {
         if (decl.typeParams.length > 0) {
-          checkGenericFunctionTemplate(decl, local.functions, local.structs, local.enums, diagnostics);
+          checkGenericFunctionTemplate(decl, functions, structs, enums, diagnostics);
         } else {
-          checkFunction(decl, local.functions, local.structs, local.enums, diagnostics);
+          checkFunction(decl, functions, structs, enums, diagnostics);
         }
       } else if (decl.kind === "StructDeclaration") {
         if (decl.typeParams.length > 0) {
-          checkGenericStructTemplate(decl, local.functions, local.structs, local.enums, diagnostics);
+          checkGenericStructTemplate(decl, functions, structs, enums, diagnostics);
         } else {
-          const def = local.structs.get(decl.name.name);
+          const def = structs.get(decl.name.name);
           if (def) {
-            checkStructMethods(def, local.functions, local.structs, local.enums, diagnostics);
+            checkStructMethods(def, functions, structs, enums, diagnostics);
           }
         }
       } else if (decl.kind === "ClassDeclaration") {
         if (decl.typeParams.length > 0) {
-          checkGenericClassTemplate(decl, local.functions, local.structs, local.enums, diagnostics);
+          checkGenericClassTemplate(decl, functions, structs, enums, diagnostics);
         } else {
-          const def = local.classes.get(decl.name.name);
+          const def = classes.get(decl.name.name);
           if (def) {
-            checkClassMembers(def, local.functions, local.structs, local.enums, diagnostics);
+            checkClassMembers(def, functions, structs, enums, diagnostics);
           }
         }
       }
@@ -534,6 +590,123 @@ export function typecheckModules(
   allModuleSymbols = new Map();
 
   return instantiationCollector.snapshot();
+}
+
+type NamedExportKind =
+  | { kind: "function"; value: FunctionSig }
+  | { kind: "struct"; value: StructDef }
+  | { kind: "enum"; value: EnumDef }
+  | { kind: "class"; value: ClassDef }
+  | { kind: "interface"; value: InterfaceDef }
+  | { kind: "typeAlias"; value: TypeAliasDef }
+  | { kind: "genericStruct"; value: GenericStructTemplate }
+  | { kind: "genericClass"; value: GenericClassTemplate }
+  | { kind: "genericInterface"; value: GenericInterfaceTemplate }
+  | { kind: "genericFunction"; value: GenericFunctionTemplate }
+  | { kind: "genericTypeAlias"; value: TypeAliasDeclaration };
+
+function lookupExport(symbols: ModuleSymbols, exportName: string): NamedExportKind | null {
+  const fn = symbols.functions.get(exportName);
+  if (fn) {
+    return fn.exported ? { kind: "function", value: fn } : null;
+  }
+  const st = symbols.structs.get(exportName);
+  if (st) {
+    return st.exported ? { kind: "struct", value: st } : null;
+  }
+  const en = symbols.enums.get(exportName);
+  if (en) {
+    return en.exported ? { kind: "enum", value: en } : null;
+  }
+  const cl = symbols.classes.get(exportName);
+  if (cl) {
+    return cl.exported ? { kind: "class", value: cl } : null;
+  }
+  const iface = symbols.interfaces.get(exportName);
+  if (iface) {
+    return iface.exported ? { kind: "interface", value: iface } : null;
+  }
+  const alias = symbols.typeAliases.get(exportName);
+  if (alias) {
+    return alias.exported ? { kind: "typeAlias", value: alias } : null;
+  }
+  const gs = symbols.genericStructs.get(exportName);
+  if (gs) {
+    return gs.decl.exported ? { kind: "genericStruct", value: gs } : null;
+  }
+  const gc = symbols.genericClasses.get(exportName);
+  if (gc) {
+    return gc.decl.exported ? { kind: "genericClass", value: gc } : null;
+  }
+  const gi = symbols.genericInterfaces.get(exportName);
+  if (gi) {
+    return gi.decl.exported ? { kind: "genericInterface", value: gi } : null;
+  }
+  const gf = symbols.genericFunctions.get(exportName);
+  if (gf) {
+    return gf.decl.exported ? { kind: "genericFunction", value: gf } : null;
+  }
+  const gta = symbols.genericTypeAliases.get(exportName);
+  if (gta) {
+    return gta.exported ? { kind: "genericTypeAlias", value: gta } : null;
+  }
+  return null;
+}
+
+interface NamedImportMaps {
+  functions: Map<string, FunctionSig>;
+  structs: Map<string, StructDef>;
+  enums: Map<string, EnumDef>;
+  classes: Map<string, ClassDef>;
+  interfaces: Map<string, InterfaceDef>;
+  typeAliases: Map<string, TypeAliasDef>;
+  genericStructs: Map<string, GenericStructTemplate>;
+  genericClasses: Map<string, GenericClassTemplate>;
+  genericInterfaces: Map<string, GenericInterfaceTemplate>;
+  genericFunctions: Map<string, GenericFunctionTemplate>;
+  genericTypeAliases: Map<string, TypeAliasDeclaration>;
+}
+
+function injectNamedImport(
+  localName: string,
+  resolved: NamedExportKind,
+  maps: NamedImportMaps,
+): void {
+  switch (resolved.kind) {
+    case "function":
+      maps.functions.set(localName, resolved.value);
+      break;
+    case "struct":
+      maps.structs.set(localName, resolved.value);
+      break;
+    case "enum":
+      maps.enums.set(localName, resolved.value);
+      break;
+    case "class":
+      maps.classes.set(localName, resolved.value);
+      break;
+    case "interface":
+      maps.interfaces.set(localName, resolved.value);
+      break;
+    case "typeAlias":
+      maps.typeAliases.set(localName, resolved.value);
+      break;
+    case "genericStruct":
+      maps.genericStructs.set(localName, resolved.value);
+      break;
+    case "genericClass":
+      maps.genericClasses.set(localName, resolved.value);
+      break;
+    case "genericInterface":
+      maps.genericInterfaces.set(localName, resolved.value);
+      break;
+    case "genericFunction":
+      maps.genericFunctions.set(localName, resolved.value);
+      break;
+    case "genericTypeAlias":
+      maps.genericTypeAliases.set(localName, resolved.value);
+      break;
+  }
 }
 
 function exportedFunctions(fns: Map<string, FunctionSig>): Map<string, FunctionSig> {
@@ -4983,10 +5156,20 @@ function checkNamespaceCall(
   const ns = activeNamespaces.get(nsName)!;
   const sig = ns.functions.get(expr.callee.property.name);
   if (!sig) {
+    const prop = expr.callee.property.name;
+    let existsButPrivate = false;
+    for (const symbols of allModuleSymbols.values()) {
+      if (symbols.moduleId === ns.moduleId && symbols.functions.has(prop)) {
+        existsButPrivate = true;
+        break;
+      }
+    }
     diagnostics.error(
-      `Unknown function '${nsName}.${expr.callee.property.name}'`,
+      existsButPrivate
+        ? `Module "${ns.moduleId}" does not export "${prop}".`
+        : `Unknown function '${nsName}.${prop}'`,
       expr.callee.property.span,
-      "E0307",
+      existsButPrivate ? "E0408" : "E0307",
     );
     return null;
   }

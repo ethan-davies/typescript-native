@@ -7,11 +7,22 @@ import { moduleIdFromPath } from "./mangle.js";
 
 export type ReadFileFn = (absolutePath: string) => string;
 
-export interface ModuleImportBinding {
-  readonly alias: string;
-  readonly modulePath: string;
-  readonly span: SourceSpan;
-}
+export type ModuleImportBinding =
+  | {
+      readonly kind: "namespace";
+      readonly alias: string;
+      readonly modulePath: string;
+      readonly span: SourceSpan;
+    }
+  | {
+      readonly kind: "named";
+      readonly exportName: string;
+      readonly localName: string;
+      readonly modulePath: string;
+      /** Original import specifier string for diagnostics. */
+      readonly specifier: string;
+      readonly span: SourceSpan;
+    };
 
 export interface ResolvedModule {
   readonly path: string;
@@ -20,7 +31,7 @@ export interface ResolvedModule {
   /** File basename without `.tsn`; used for LLVM mangling. */
   readonly moduleId: string;
   readonly isEntry: boolean;
-  /** Namespace bindings declared by this module's imports. */
+  /** Namespace and named bindings declared by this module's imports. */
   readonly imports: readonly ModuleImportBinding[];
 }
 
@@ -104,24 +115,12 @@ export function resolveModules(
       (d): d is ImportDeclaration => d.kind === "ImportDeclaration",
     );
     const bindings: ModuleImportBinding[] = [];
-    const seenAliases = new Set<string>();
+    const seenLocalNames = new Set<string>();
     const importerDir = dirname(absolutePath);
     let ok = true;
 
     for (const decl of importDecls) {
       const resolved = resolveImportSpecifier(importerDir, decl.source.value);
-      const alias = decl.alias?.name ?? defaultNamespaceFromPath(resolved);
-
-      if (seenAliases.has(alias)) {
-        diagnostics.error(
-          `Duplicate import namespace '${alias}'`,
-          decl.alias?.span ?? decl.source.span,
-          "E0404",
-        );
-        ok = false;
-        continue;
-      }
-      seenAliases.add(alias);
 
       // Existence check before recurse
       try {
@@ -141,11 +140,46 @@ export function resolveModules(
         continue;
       }
 
-      bindings.push({
-        alias,
-        modulePath: resolved,
-        span: decl.span,
-      });
+      if (decl.clause.kind === "NamespaceImport") {
+        const alias = decl.clause.localName?.name ?? defaultNamespaceFromPath(resolved);
+        const span = decl.clause.localName?.span ?? decl.source.span;
+
+        if (seenLocalNames.has(alias)) {
+          diagnostics.error(`Duplicate import binding '${alias}'`, span, "E0404");
+          ok = false;
+          continue;
+        }
+        seenLocalNames.add(alias);
+
+        bindings.push({
+          kind: "namespace",
+          alias,
+          modulePath: resolved,
+          span: decl.span,
+        });
+      } else {
+        for (const spec of decl.clause.specifiers) {
+          if (seenLocalNames.has(spec.localName.name)) {
+            diagnostics.error(
+              `Duplicate import binding '${spec.localName.name}'`,
+              spec.localName.span,
+              "E0404",
+            );
+            ok = false;
+            continue;
+          }
+          seenLocalNames.add(spec.localName.name);
+
+          bindings.push({
+            kind: "named",
+            exportName: spec.importedName.name,
+            localName: spec.localName.name,
+            modulePath: resolved,
+            specifier: decl.source.value,
+            span: spec.span,
+          });
+        }
+      }
     }
 
     visiting.delete(absolutePath);

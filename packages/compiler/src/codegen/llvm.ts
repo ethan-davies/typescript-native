@@ -617,11 +617,11 @@ export class LlvmCodegen {
     // Emit function/method bodies with per-module local/namespace context.
     for (const mod of modules) {
       const symbols = moduleSymbols.get(mod.path)!;
-      this.localFunctions = symbols.functions;
-      this.localStructs = symbols.structs;
-      this.localEnums = symbols.enums;
-      this.localClasses = symbols.classes;
-      this.localInterfaces = symbols.interfaces;
+      const localFunctions = new Map(symbols.functions);
+      const localStructs = new Map(symbols.structs);
+      const localEnums = new Map(symbols.enums);
+      const localClasses = new Map(symbols.classes);
+      const localInterfaces = new Map(symbols.interfaces);
       this.currentModuleId = mod.moduleId;
 
       const namespaces = new Map<string, NamespaceInfo>();
@@ -630,63 +630,143 @@ export class LlvmCodegen {
         if (!imported) {
           continue;
         }
-        const exportedFns = new Map<string, FunctionSig>();
         const importedMod = modules.find((m) => m.path === binding.modulePath);
         if (!importedMod) {
           continue;
         }
-        for (const [name, sig] of imported.functions) {
-          const fnDecl = importedMod.ast.body.find(
-            (d) => d.kind === "FunctionDeclaration" && d.name.name === name,
-          );
-          if (fnDecl && fnDecl.kind === "FunctionDeclaration" && fnDecl.exported) {
-            exportedFns.set(name, sig);
+
+        if (binding.kind === "namespace") {
+          const exportedFns = new Map<string, FunctionSig>();
+          for (const [name, sig] of imported.functions) {
+            const fnDecl = importedMod.ast.body.find(
+              (d) => d.kind === "FunctionDeclaration" && d.name.name === name,
+            );
+            if (fnDecl && fnDecl.kind === "FunctionDeclaration" && fnDecl.exported) {
+              exportedFns.set(name, sig);
+            }
+          }
+          const exportedStructs = new Map<string, StructInfo>();
+          for (const [name, info] of imported.structs) {
+            const sDecl = importedMod.ast.body.find(
+              (d) => d.kind === "StructDeclaration" && d.name.name === name,
+            );
+            if (sDecl && sDecl.kind === "StructDeclaration" && sDecl.exported) {
+              exportedStructs.set(name, info);
+            }
+          }
+          const exportedEnums = new Map<string, EnumInfo>();
+          for (const [name, info] of imported.enums) {
+            const eDecl = importedMod.ast.body.find(
+              (d) => d.kind === "EnumDeclaration" && d.name.name === name,
+            );
+            if (eDecl && eDecl.kind === "EnumDeclaration" && eDecl.exported) {
+              exportedEnums.set(name, info);
+            }
+          }
+          const exportedClasses = new Map<string, ClassInfo>();
+          for (const [name, info] of imported.classes) {
+            const cDecl = importedMod.ast.body.find(
+              (d) => d.kind === "ClassDeclaration" && d.name.name === name,
+            );
+            if (cDecl && cDecl.kind === "ClassDeclaration" && cDecl.exported) {
+              exportedClasses.set(name, info);
+            }
+          }
+          const exportedInterfaces = new Map<string, InterfaceInfo>();
+          for (const [name, info] of imported.interfaces) {
+            const iDecl = importedMod.ast.body.find(
+              (d) => d.kind === "InterfaceDeclaration" && d.name.name === name,
+            );
+            if (iDecl && iDecl.kind === "InterfaceDeclaration" && iDecl.exported) {
+              exportedInterfaces.set(name, info);
+            }
+          }
+          namespaces.set(binding.alias, {
+            functions: exportedFns,
+            structs: exportedStructs,
+            enums: exportedEnums,
+            classes: exportedClasses,
+            interfaces: exportedInterfaces,
+          });
+          continue;
+        }
+
+        // Named import: bind export under local name in this module's maps.
+        const exportName = binding.exportName;
+        const localName = binding.localName;
+
+        const fnDecl = importedMod.ast.body.find(
+          (d) => d.kind === "FunctionDeclaration" && d.name.name === exportName,
+        );
+        if (fnDecl?.kind === "FunctionDeclaration" && fnDecl.exported) {
+          const sig = imported.functions.get(exportName);
+          if (sig) {
+            localFunctions.set(localName, sig);
+          }
+          continue;
+        }
+
+        const sDecl = importedMod.ast.body.find(
+          (d) => d.kind === "StructDeclaration" && d.name.name === exportName,
+        );
+        if (sDecl?.kind === "StructDeclaration" && sDecl.exported) {
+          const info = imported.structs.get(exportName);
+          if (info) {
+            localStructs.set(localName, info);
+          }
+          continue;
+        }
+
+        const eDecl = importedMod.ast.body.find(
+          (d) => d.kind === "EnumDeclaration" && d.name.name === exportName,
+        );
+        if (eDecl?.kind === "EnumDeclaration" && eDecl.exported) {
+          const info = imported.enums.get(exportName);
+          if (info) {
+            localEnums.set(localName, info);
+          }
+          continue;
+        }
+
+        const cDecl = importedMod.ast.body.find(
+          (d) => d.kind === "ClassDeclaration" && d.name.name === exportName,
+        );
+        if (cDecl?.kind === "ClassDeclaration" && cDecl.exported) {
+          const info = imported.classes.get(exportName);
+          if (info) {
+            localClasses.set(localName, info);
+          }
+          continue;
+        }
+
+        const iDecl = importedMod.ast.body.find(
+          (d) => d.kind === "InterfaceDeclaration" && d.name.name === exportName,
+        );
+        if (iDecl?.kind === "InterfaceDeclaration" && iDecl.exported) {
+          const info = imported.interfaces.get(exportName);
+          if (info) {
+            localInterfaces.set(localName, info);
+          }
+          continue;
+        }
+
+        const tDecl = importedMod.ast.body.find(
+          (d) => d.kind === "TypeAliasDeclaration" && d.name.name === exportName,
+        );
+        if (tDecl?.kind === "TypeAliasDeclaration" && tDecl.exported) {
+          if (tDecl.typeParams.length === 0) {
+            this.typeAliases.set(localName, tDecl.type);
+          } else {
+            this.genericTypeAliases.set(localName, tDecl);
           }
         }
-        const exportedStructs = new Map<string, StructInfo>();
-        for (const [name, info] of imported.structs) {
-          const sDecl = importedMod.ast.body.find(
-            (d) => d.kind === "StructDeclaration" && d.name.name === name,
-          );
-          if (sDecl && sDecl.kind === "StructDeclaration" && sDecl.exported) {
-            exportedStructs.set(name, info);
-          }
-        }
-        const exportedEnums = new Map<string, EnumInfo>();
-        for (const [name, info] of imported.enums) {
-          const eDecl = importedMod.ast.body.find(
-            (d) => d.kind === "EnumDeclaration" && d.name.name === name,
-          );
-          if (eDecl && eDecl.kind === "EnumDeclaration" && eDecl.exported) {
-            exportedEnums.set(name, info);
-          }
-        }
-        const exportedClasses = new Map<string, ClassInfo>();
-        for (const [name, info] of imported.classes) {
-          const cDecl = importedMod.ast.body.find(
-            (d) => d.kind === "ClassDeclaration" && d.name.name === name,
-          );
-          if (cDecl && cDecl.kind === "ClassDeclaration" && cDecl.exported) {
-            exportedClasses.set(name, info);
-          }
-        }
-        const exportedInterfaces = new Map<string, InterfaceInfo>();
-        for (const [name, info] of imported.interfaces) {
-          const iDecl = importedMod.ast.body.find(
-            (d) => d.kind === "InterfaceDeclaration" && d.name.name === name,
-          );
-          if (iDecl && iDecl.kind === "InterfaceDeclaration" && iDecl.exported) {
-            exportedInterfaces.set(name, info);
-          }
-        }
-        namespaces.set(binding.alias, {
-          functions: exportedFns,
-          structs: exportedStructs,
-          enums: exportedEnums,
-          classes: exportedClasses,
-          interfaces: exportedInterfaces,
-        });
       }
+
+      this.localFunctions = localFunctions;
+      this.localStructs = localStructs;
+      this.localEnums = localEnums;
+      this.localClasses = localClasses;
+      this.localInterfaces = localInterfaces;
       this.namespaces = namespaces;
 
       for (const decl of mod.ast.body) {

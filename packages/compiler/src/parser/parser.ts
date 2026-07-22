@@ -30,7 +30,9 @@ import type {
   FunctionDeclaration,
   Identifier,
   IfStatement,
+  ImportClause,
   ImportDeclaration,
+  ImportSpecifier,
   IndexedAccessType,
   IndexExpression,
   IntegerLiteral,
@@ -286,45 +288,178 @@ export class Parser {
       return null;
     }
 
-    const sourceToken = this.expect(TokenKind.String, "Expected a string module path after 'import'");
-    if (!sourceToken) {
-      this.synchronizeToTopLevel();
-      return null;
+    // import "path" [as alias];
+    if (this.check(TokenKind.String)) {
+      const source = this.parseImportSource();
+      if (!source) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+
+      let localName: Identifier | null = null;
+      if (this.check(TokenKind.As)) {
+        this.advance();
+        const aliasToken = this.expect(TokenKind.Identifier, "Expected identifier after 'as'");
+        if (!aliasToken) {
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        localName = {
+          kind: "Identifier",
+          name: aliasToken.lexeme,
+          span: aliasToken.span,
+        };
+      }
+
+      const semicolon = this.expect(TokenKind.Semicolon, "Expected ';' after import");
+      if (!semicolon) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+
+      return {
+        kind: "ImportDeclaration",
+        source,
+        clause: { kind: "NamespaceImport", localName },
+        span: { start, end: semicolon.span.end },
+      };
     }
 
-    const source: StringLiteral = {
-      kind: "StringLiteral",
-      value: sourceToken.value ?? "",
-      raw: sourceToken.lexeme,
-      span: sourceToken.span,
-    };
-
-    let alias: Identifier | null = null;
-    if (this.check(TokenKind.As)) {
+    // import * as name from "path";
+    if (this.check(TokenKind.Star)) {
       this.advance();
+      if (!this.expect(TokenKind.As, "Expected 'as' after '*' in namespace import")) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
       const aliasToken = this.expect(TokenKind.Identifier, "Expected identifier after 'as'");
       if (!aliasToken) {
         this.synchronizeToTopLevel();
         return null;
       }
-      alias = {
+      const localName: Identifier = {
         kind: "Identifier",
         name: aliasToken.lexeme,
         span: aliasToken.span,
       };
+
+      if (!this.expect(TokenKind.From, "Expected 'from' in namespace import")) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      const source = this.parseImportSource();
+      if (!source) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+
+      const semicolon = this.expect(TokenKind.Semicolon, "Expected ';' after import");
+      if (!semicolon) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+
+      return {
+        kind: "ImportDeclaration",
+        source,
+        clause: { kind: "NamespaceImport", localName },
+        span: { start, end: semicolon.span.end },
+      };
     }
 
-    const semicolon = this.expect(TokenKind.Semicolon, "Expected ';' after import");
-    if (!semicolon) {
-      this.synchronizeToTopLevel();
+    // import { a, b as c } from "path";
+    if (this.check(TokenKind.LBrace)) {
+      this.advance();
+      const specifiers: ImportSpecifier[] = [];
+
+      while (!this.check(TokenKind.RBrace) && !this.check(TokenKind.Eof)) {
+        const nameToken = this.expect(TokenKind.Identifier, "Expected import specifier name");
+        if (!nameToken) {
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        const importedName: Identifier = {
+          kind: "Identifier",
+          name: nameToken.lexeme,
+          span: nameToken.span,
+        };
+
+        let localName: Identifier = importedName;
+        if (this.check(TokenKind.As)) {
+          this.advance();
+          const aliasToken = this.expect(TokenKind.Identifier, "Expected identifier after 'as'");
+          if (!aliasToken) {
+            this.synchronizeToTopLevel();
+            return null;
+          }
+          localName = {
+            kind: "Identifier",
+            name: aliasToken.lexeme,
+            span: aliasToken.span,
+          };
+        }
+
+        specifiers.push({
+          kind: "ImportSpecifier",
+          importedName,
+          localName,
+          span: { start: importedName.span.start, end: localName.span.end },
+        });
+
+        if (this.check(TokenKind.Comma)) {
+          this.advance();
+          continue;
+        }
+        break;
+      }
+
+      if (!this.expect(TokenKind.RBrace, "Expected '}' after import specifiers")) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      if (!this.expect(TokenKind.From, "Expected 'from' after import specifiers")) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      const source = this.parseImportSource();
+      if (!source) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+
+      const semicolon = this.expect(TokenKind.Semicolon, "Expected ';' after import");
+      if (!semicolon) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+
+      return {
+        kind: "ImportDeclaration",
+        source,
+        clause: { kind: "NamedImports", specifiers },
+        span: { start, end: semicolon.span.end },
+      };
+    }
+
+    this.diagnostics.error(
+      `Expected module path, '*', or '{' after 'import', found '${this.peek().lexeme}'`,
+      this.peek().span,
+      "E0103",
+    );
+    this.synchronizeToTopLevel();
+    return null;
+  }
+
+  private parseImportSource(): StringLiteral | null {
+    const sourceToken = this.expect(TokenKind.String, "Expected a string module path");
+    if (!sourceToken) {
       return null;
     }
-
     return {
-      kind: "ImportDeclaration",
-      source,
-      alias,
-      span: { start, end: semicolon.span.end },
+      kind: "StringLiteral",
+      value: sourceToken.value ?? "",
+      raw: sourceToken.lexeme,
+      span: sourceToken.span,
     };
   }
 
