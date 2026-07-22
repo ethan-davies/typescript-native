@@ -33,6 +33,17 @@
     "onLanguage:tsn"
   ],
   "contributes": {
+    "configuration": {
+      "title": "TypeScript Native",
+      "properties": {
+        "typescriptNative.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the TypeScript Native language server."
+        }
+      }
+    },
     "languages": [
       {
         "id": "tsn",
