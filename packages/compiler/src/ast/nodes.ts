@@ -166,6 +166,11 @@ export interface Parameter extends AstNodeBase {
   readonly typeAnnotation: TypeAnnotation;
   /** Optional default; evaluated at the call site when the argument is omitted. */
   readonly defaultValue: Expression | null;
+  /**
+   * True when this is an extension-method receiver (`this: T` as the first parameter).
+   * Only valid on the first parameter of a function declaration.
+   */
+  readonly isReceiver: boolean;
 }
 
 /** Named argument at a call site: `foo(name: value)`. Not a standalone expression. */
@@ -180,11 +185,14 @@ export type CallArgument = Expression | NamedArgument;
 export interface FunctionDeclaration extends AstNodeBase {
   readonly kind: "FunctionDeclaration";
   readonly exported: boolean;
+  /** True for `extern function ...;` — no body; symbol is a C ABI import. */
+  readonly isExtern: boolean;
   readonly name: Identifier;
   readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
   readonly returnType: TypeAnnotation;
-  readonly body: Statement[];
+  /** null when `isExtern`. */
+  readonly body: Statement[] | null;
 }
 
 export interface StructField extends AstNodeBase {

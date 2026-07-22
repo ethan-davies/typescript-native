@@ -30,6 +30,50 @@ static void test_strings(void) {
   assert(strcmp(joined, "Hello world") == 0);
   assert(tsn_str_len(joined) == 11);
   tsn_free(joined);
+
+  assert(tsn_str_contains("hello", "ell"));
+  assert(!tsn_str_contains("hello", "xyz"));
+  assert(tsn_str_starts_with("hello", "he"));
+  assert(tsn_str_ends_with("hello", "lo"));
+  assert(tsn_str_index_of("hello", "ll") == 2);
+
+  char *sub = tsn_str_substring("hello", 1, 4);
+  assert(strcmp(sub, "ell") == 0);
+  tsn_free(sub);
+
+  char *trimmed = tsn_str_trim("  hi  ");
+  assert(strcmp(trimmed, "hi") == 0);
+  tsn_free(trimmed);
+
+  char *upper = tsn_str_to_upper("AbC");
+  assert(strcmp(upper, "ABC") == 0);
+  tsn_free(upper);
+
+  char *lower = tsn_str_to_lower("AbC");
+  assert(strcmp(lower, "abc") == 0);
+  tsn_free(lower);
+
+  char *replaced = tsn_str_replace("hello", "ll", "y");
+  assert(strcmp(replaced, "heyo") == 0);
+  tsn_free(replaced);
+
+  void *parts = tsn_str_split("a,b,c", ",");
+  assert(tsn_array_length(parts) == 3);
+
+  assert(tsn_str_char_at("hello", 1) == 'e');
+  assert(tsn_str_last_index_of("banana", "an") == 3);
+
+  char *repeated = tsn_str_repeat("ab", 3);
+  assert(strcmp(repeated, "ababab") == 0);
+  tsn_free(repeated);
+
+  char *padded = tsn_str_pad_start("42", 5, "0");
+  assert(strcmp(padded, "00042") == 0);
+  tsn_free(padded);
+
+  char *joined_parts = tsn_str_join(parts, "-");
+  assert(strcmp(joined_parts, "a-b-c") == 0);
+  tsn_free(joined_parts);
 }
 
 static void test_arrays(void) {
@@ -68,6 +112,33 @@ static void test_maps(void) {
     tsn_map_set(map, key, val);
   }
   assert(tsn_map_get(map, "key-9") != NULL);
+}
+
+static void test_math(void) {
+  assert(tsn_math_abs(-3.5) == 3.5);
+  assert(tsn_math_sqrt(25.0) == 5.0);
+  assert(tsn_math_floor(3.9) == 3.0);
+  assert(tsn_math_ceil(3.1) == 4.0);
+  assert(tsn_math_pow(2.0, 10.0) == 1024.0);
+  assert(tsn_math_abs_i32(-7) == 7);
+  assert(tsn_math_min_i32(3, 7) == 3);
+  assert(tsn_math_max_i64(3, 7) == 7);
+}
+
+static void test_random(void) {
+  tsn_random_seed(12345);
+  double a = tsn_random();
+  double b = tsn_random();
+  assert(a >= 0.0 && a < 1.0);
+  assert(b >= 0.0 && b < 1.0);
+  assert(a != b);
+
+  tsn_random_seed(99);
+  int32_t n = tsn_random_int(1, 6);
+  assert(n >= 1 && n <= 6);
+
+  double f = tsn_random_float(2.0, 5.0);
+  assert(f >= 2.0 && f < 5.0);
 }
 
 static void test_print_and_format(void) {
@@ -1028,6 +1099,8 @@ int main(void) {
   test_strings();
   test_arrays();
   test_maps();
+  test_math();
+  test_random();
   test_print_and_format();
   test_typeinfo();
   test_is_instance();

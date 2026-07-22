@@ -45,6 +45,7 @@ const MESSAGE_PARAM: Parameter = {
   name: BUILTIN_ID("message"),
   typeAnnotation: STRING_TYPE,
   defaultValue: null,
+  isReceiver: false,
   span: BUILTIN_SPAN,
 };
 

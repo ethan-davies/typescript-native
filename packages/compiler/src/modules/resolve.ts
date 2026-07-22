@@ -1,4 +1,5 @@
-import { dirname, resolve as resolvePath } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import type { ImportDeclaration, Program } from "../ast/nodes.js";
 import type { DiagnosticCollector, SourceSpan } from "../diagnostics/diagnostic.js";
 import { Lexer } from "../lexer/lexer.js";
@@ -40,11 +41,109 @@ export interface ResolveResult {
   readonly success: boolean;
 }
 
+export type StdRootProvider = () => string | null;
+
+let stdRootProvider: StdRootProvider | null = null;
+
+/** Provide the absolute path to `packages/std/src` (or null if unavailable). */
+export function setStdRootProvider(provider: StdRootProvider | null): void {
+  stdRootProvider = provider;
+}
+
+export function getStdRootPath(): string | null {
+  return stdRootProvider?.() ?? null;
+}
+
+function isStdSpecifier(specifier: string): boolean {
+  const spec = specifier.trim();
+  return spec === "std" || spec.startsWith("std/");
+}
+
+/**
+ * Resolve a `std/...` specifier against the standard-library root.
+ * Tries `std/math` → `$STD/math.tsn` then `$STD/math/index.tsn`.
+ */
+export function resolveStdSpecifier(specifier: string): string | null {
+  const root = getStdRootPath();
+  if (!root) {
+    return null;
+  }
+  let rest = specifier.trim();
+  if (rest === "std") {
+    rest = "";
+  } else if (rest.startsWith("std/")) {
+    rest = rest.slice(4);
+  } else {
+    return null;
+  }
+  if (rest.toLowerCase().endsWith(".tsn")) {
+    rest = rest.slice(0, -4);
+  }
+
+  if (rest === "") {
+    const indexPath = join(root, "index.tsn");
+    return existsSync(indexPath) ? indexPath : null;
+  }
+
+  const direct = join(root, `${rest}.tsn`);
+  if (existsSync(direct)) {
+    return direct;
+  }
+  const indexPath = join(root, rest, "index.tsn");
+  if (existsSync(indexPath)) {
+    return indexPath;
+  }
+  return direct;
+}
+
+/**
+ * Stable mangling id for std modules, e.g. `math/index.tsn` → `std_math`.
+ */
+export function moduleIdForStdPath(absolutePath: string): string | null {
+  const root = getStdRootPath();
+  if (!root) {
+    return null;
+  }
+  const normalized = absolutePath.replace(/\\/g, "/");
+  const rootNorm = root.replace(/\\/g, "/").replace(/\/$/, "");
+  if (!normalized.startsWith(`${rootNorm}/`) && normalized !== rootNorm) {
+    return null;
+  }
+  let rel = normalized.slice(rootNorm.length + 1);
+  if (rel.toLowerCase().endsWith(".tsn")) {
+    rel = rel.slice(0, -4);
+  }
+  if (rel.endsWith("/index")) {
+    rel = rel.slice(0, -"/index".length);
+  }
+  if (rel === "" || rel === "index") {
+    return "std";
+  }
+  return `std_${rel.replace(/\//g, "_")}`;
+}
+
 /**
  * Normalize an import specifier to an absolute `.tsn` path.
- * Accepts `"math"`, `"./math"`, `"math.tsn"`, `"./math.tsn"`, `"math/vector"`, etc.
+ * Accepts `"math"`, `"./math"`, `"math.tsn"`, `"./math.tsn"`, `"math/vector"`,
+ * and `"std/math"` (resolved against the standard library root).
  */
 export function resolveImportSpecifier(importerDir: string, specifier: string): string {
+  if (isStdSpecifier(specifier)) {
+    const stdPath = resolveStdSpecifier(specifier);
+    if (stdPath) {
+      return stdPath;
+    }
+    let rest = specifier.trim();
+    if (rest.startsWith("std/")) {
+      rest = rest.slice(4);
+    }
+    if (rest.toLowerCase().endsWith(".tsn")) {
+      rest = rest.slice(0, -4);
+    }
+    const root = getStdRootPath() ?? resolvePath(importerDir, "std");
+    return resolvePath(root, `${rest || "index"}.tsn`);
+  }
+
   let spec = specifier.trim();
   if (spec.startsWith("./")) {
     spec = spec.slice(2);
@@ -56,6 +155,11 @@ export function resolveImportSpecifier(importerDir: string, specifier: string): 
 }
 
 function defaultNamespaceFromPath(absolutePath: string): string {
+  const stdId = moduleIdForStdPath(absolutePath);
+  if (stdId) {
+    const parts = stdId.replace(/^std_/, "").split("_");
+    return parts[parts.length - 1] || "std";
+  }
   return moduleIdFromPath(absolutePath);
 }
 
@@ -73,6 +177,13 @@ export function resolveModules(
   const visiting = new Set<string>();
   const order: string[] = [];
 
+  function readModuleSource(absolutePath: string, preferRealFs: boolean): string {
+    if (preferRealFs || moduleIdForStdPath(absolutePath) !== null) {
+      return readFileSync(absolutePath, "utf8");
+    }
+    return readFile(absolutePath);
+  }
+
   function visit(absolutePath: string, isEntry: boolean): boolean {
     if (parsed.has(absolutePath)) {
       return true;
@@ -88,9 +199,10 @@ export function resolveModules(
 
     visiting.add(absolutePath);
 
+    const isStdModule = moduleIdForStdPath(absolutePath) !== null;
     let source: string;
     try {
-      source = readFile(absolutePath);
+      source = readModuleSource(absolutePath, isStdModule);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       diagnostics.error(
@@ -108,7 +220,6 @@ export function resolveModules(
     const parser = new Parser(tokens, diagnostics);
     const ast = parser.parse();
 
-    // Attach file name on diagnostics via options is handled by caller; parsing uses shared collector.
     void fileName;
 
     const importDecls = ast.body.filter(
@@ -121,10 +232,16 @@ export function resolveModules(
 
     for (const decl of importDecls) {
       const resolved = resolveImportSpecifier(importerDir, decl.source.value);
+      const stdImport = isStdSpecifier(decl.source.value);
 
-      // Existence check before recurse
       try {
-        readFile(resolved);
+        if (stdImport || moduleIdForStdPath(resolved) !== null) {
+          if (!existsSync(resolved)) {
+            throw new Error("ENOENT");
+          }
+        } else {
+          readFile(resolved);
+        }
       } catch {
         diagnostics.error(
           `Cannot resolve module '${decl.source.value}' (looked for '${resolved}')`,
@@ -188,7 +305,7 @@ export function resolveModules(
       path: absolutePath,
       source,
       ast,
-      moduleId: moduleIdFromPath(absolutePath),
+      moduleId: moduleIdForStdPath(absolutePath) ?? moduleIdFromPath(absolutePath),
       isEntry,
       imports: bindings,
     };
@@ -199,8 +316,6 @@ export function resolveModules(
 
   const success = visit(absoluteEntry, true) && !diagnostics.hasErrors;
 
-  // Entry first, then other modules in discovery order (deps appear before importers in DFS post-order).
-  // Our visit pushes after children, so order is deps-first. Move entry to front.
   const modules = order
     .map((p) => parsed.get(p)!)
     .sort((a, b) => {

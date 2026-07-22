@@ -1,0 +1,27 @@
+function main(): void {
+  let text = "hello";
+  print(text.contains("h"));
+  print(text.startsWith("he"));
+  print(text.toUpperCase());
+  print(text.indexOf("ll"));
+  print("42".padStart(5, "0"));
+  print("ab".repeat(3));
+  print(["a", "b", "c"].join("-"));
+  print("".isEmpty());
+
+  let numbers: i32[] = [1, 2, 3];
+  print(numbers.length);
+  print(numbers.includes(2));
+  print(numbers.indexOf(2));
+  let doubled = numbers.map((x) => x * 2);
+  print(doubled);
+  let filtered = numbers.filter((x) => x > 1);
+  print(filtered);
+  print(numbers.reduce((acc: i32, x: i32) => acc + x, 0));
+  print(numbers.some((x) => x == 3));
+  print(numbers.every((x) => x > 0));
+  print(numbers.slice(0, 2));
+  print(numbers.reverse());
+  print([3, 1, 2].sort());
+  print([1, 2].concat([3, 4]));
+}

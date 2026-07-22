@@ -49,7 +49,8 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).toContain("call void @tsn_init_typeinfo()");
     expect(result.ir).toContain("@Person__typeinfo");
     expect(result.ir).toContain("tsn_typeinfo_register");
-    const typeIdStore = result.ir!.match(/store i32 (\d+), ptr %/);
+    // ObjectHeader.type_id stores a class id (>= TSN_TYPEID_CLASS_BASE = 256).
+    const typeIdStore = result.ir!.match(/store i32 (2\d{2,}), ptr %/);
     expect(typeIdStore).not.toBeNull();
     expect(Number(typeIdStore![1])).toBeGreaterThanOrEqual(256);
   });

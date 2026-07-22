@@ -112,7 +112,7 @@ function runFile(inputPath: string): number {
 
     const clang = spawnSync(
       "clang",
-      [llPath, runtimeLibrary, "-o", binPath, "-Wno-override-module"],
+      [llPath, runtimeLibrary, "-lm", "-o", binPath, "-Wno-override-module"],
       { encoding: "utf8" },
     );
 

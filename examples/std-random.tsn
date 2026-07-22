@@ -1,0 +1,8 @@
+import { random, randomInt, randomFloat, seed } from "std/random";
+
+function main(): void {
+  seed(42);
+  print(random());
+  print(randomInt(1, 6));
+  print(randomFloat(0.0, 1.0));
+}

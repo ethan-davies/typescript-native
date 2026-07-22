@@ -1,0 +1,79 @@
+extern function tsn_str_contains(haystack: string, needle: string): bool;
+extern function tsn_str_starts_with(s: string, prefix: string): bool;
+extern function tsn_str_ends_with(s: string, suffix: string): bool;
+extern function tsn_str_substring(s: string, start: i32, end: i32): string;
+extern function tsn_str_trim(s: string): string;
+extern function tsn_str_to_upper(s: string): string;
+extern function tsn_str_to_lower(s: string): string;
+extern function tsn_str_replace(s: string, oldValue: string, newValue: string): string;
+extern function tsn_str_split(s: string, sep: string): string[];
+extern function tsn_str_index_of(haystack: string, needle: string): i32;
+extern function tsn_str_last_index_of(haystack: string, needle: string): i32;
+extern function tsn_str_char_at(s: string, index: i32): char;
+extern function tsn_str_repeat(s: string, count: i32): string;
+extern function tsn_str_pad_start(s: string, targetLen: i32, pad: string): string;
+extern function tsn_str_pad_end(s: string, targetLen: i32, pad: string): string;
+
+export function contains(this: string, needle: string): bool {
+  return tsn_str_contains(this, needle);
+}
+
+export function startsWith(this: string, prefix: string): bool {
+  return tsn_str_starts_with(this, prefix);
+}
+
+export function endsWith(this: string, suffix: string): bool {
+  return tsn_str_ends_with(this, suffix);
+}
+
+export function substring(this: string, start: i32, end: i32): string {
+  return tsn_str_substring(this, start, end);
+}
+
+export function split(this: string, sep: string): string[] {
+  return tsn_str_split(this, sep);
+}
+
+export function trim(this: string): string {
+  return tsn_str_trim(this);
+}
+
+export function replace(this: string, oldValue: string, newValue: string): string {
+  return tsn_str_replace(this, oldValue, newValue);
+}
+
+export function toUpperCase(this: string): string {
+  return tsn_str_to_upper(this);
+}
+
+export function toLowerCase(this: string): string {
+  return tsn_str_to_lower(this);
+}
+
+export function indexOf(this: string, needle: string): i32 {
+  return tsn_str_index_of(this, needle);
+}
+
+export function lastIndexOf(this: string, needle: string): i32 {
+  return tsn_str_last_index_of(this, needle);
+}
+
+export function charAt(this: string, index: i32): char {
+  return tsn_str_char_at(this, index);
+}
+
+export function isEmpty(this: string): bool {
+  return this.length == 0;
+}
+
+export function repeat(this: string, count: i32): string {
+  return tsn_str_repeat(this, count);
+}
+
+export function padStart(this: string, targetLen: i32, pad: string): string {
+  return tsn_str_pad_start(this, targetLen, pad);
+}
+
+export function padEnd(this: string, targetLen: i32, pad: string): string {
+  return tsn_str_pad_end(this, targetLen, pad);
+}

@@ -1,0 +1,164 @@
+extern function tsn_array_push<T>(arr: T[], value: T): void;
+extern function tsn_array_pop<T>(arr: T[]): T;
+extern function tsn_array_index_of<T>(arr: T[], value: T): i32;
+extern function tsn_str_join(parts: string[], sep: string): string;
+
+// `.length` is a language property on arrays (and strings/tuples), not an extension.
+
+export function push<T>(this: T[], value: T): void {
+  tsn_array_push(this, value);
+}
+
+export function pop<T>(this: T[]): T {
+  return tsn_array_pop(this);
+}
+
+export function indexOf<T>(this: T[], value: T): i32 {
+  return tsn_array_index_of(this, value);
+}
+
+export function includes<T>(this: T[], value: T): bool {
+  return tsn_array_index_of(this, value) >= 0;
+}
+
+export function map<T, U>(this: T[], fn: (T) => U): U[] {
+  let result: U[] = [];
+  let i: i32 = 0;
+  while (i < this.length) {
+    tsn_array_push(result, fn(this[i]));
+    i = i + 1;
+  }
+  return result;
+}
+
+export function filter<T>(this: T[], fn: (T) => bool): T[] {
+  let result: T[] = [];
+  let i: i32 = 0;
+  while (i < this.length) {
+    let value = this[i];
+    if (fn(value)) {
+      tsn_array_push(result, value);
+    }
+    i = i + 1;
+  }
+  return result;
+}
+
+export function reduce<T, U>(this: T[], fn: (U, T) => U, initial: U): U {
+  let acc = initial;
+  let i: i32 = 0;
+  while (i < this.length) {
+    acc = fn(acc, this[i]);
+    i = i + 1;
+  }
+  return acc;
+}
+
+export function find<T>(this: T[], fn: (T) => bool): T | null {
+  let i: i32 = 0;
+  while (i < this.length) {
+    let value = this[i];
+    if (fn(value)) {
+      return value;
+    }
+    i = i + 1;
+  }
+  return null;
+}
+
+export function some<T>(this: T[], fn: (T) => bool): bool {
+  let i: i32 = 0;
+  while (i < this.length) {
+    if (fn(this[i])) {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+export function every<T>(this: T[], fn: (T) => bool): bool {
+  let i: i32 = 0;
+  while (i < this.length) {
+    if (!fn(this[i])) {
+      return false;
+    }
+    i = i + 1;
+  }
+  return true;
+}
+
+export function reverse<T>(this: T[]): T[] {
+  let result: T[] = [];
+  let i: i32 = this.length - 1;
+  while (i >= 0) {
+    tsn_array_push(result, this[i]);
+    i = i - 1;
+  }
+  return result;
+}
+
+export function slice<T>(this: T[], start: i32, end: i32): T[] {
+  let len = this.length;
+  let lo = start;
+  let hi = end;
+  if (lo < 0) {
+    lo = 0;
+  }
+  if (hi > len) {
+    hi = len;
+  }
+  if (lo > hi) {
+    lo = hi;
+  }
+  let result: T[] = [];
+  let i = lo;
+  while (i < hi) {
+    tsn_array_push(result, this[i]);
+    i = i + 1;
+  }
+  return result;
+}
+
+export function sort(this: i32[]): i32[] {
+  let result: i32[] = [];
+  let i: i32 = 0;
+  while (i < this.length) {
+    tsn_array_push(result, this[i]);
+    i = i + 1;
+  }
+  let n = result.length;
+  let a: i32 = 0;
+  while (a < n) {
+    let b: i32 = 0;
+    while (b + 1 < n - a) {
+      if (result[b] > result[b + 1]) {
+        let tmp = result[b];
+        result[b] = result[b + 1];
+        result[b + 1] = tmp;
+      }
+      b = b + 1;
+    }
+    a = a + 1;
+  }
+  return result;
+}
+
+export function join(this: string[], sep: string): string {
+  return tsn_str_join(this, sep);
+}
+
+export function concat<T>(this: T[], other: T[]): T[] {
+  let result: T[] = [];
+  let i: i32 = 0;
+  while (i < this.length) {
+    tsn_array_push(result, this[i]);
+    i = i + 1;
+  }
+  let j: i32 = 0;
+  while (j < other.length) {
+    tsn_array_push(result, other[j]);
+    j = j + 1;
+  }
+  return result;
+}

@@ -1,0 +1,228 @@
+extern function tsn_array_push<T>(arr: T[], value: T): void;
+extern function tsn_array_pop<T>(arr: T[]): T;
+extern function tsn_array_index_of<T>(arr: T[], value: T): i32;
+
+export class Stack<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  push(value: T): void {
+    tsn_array_push(this.items, value);
+  }
+
+  pop(): T {
+    if (this.items.length == 0) {
+      throw new Error("Stack is empty");
+    }
+    return tsn_array_pop(this.items);
+  }
+
+  peek(): T {
+    if (this.items.length == 0) {
+      throw new Error("Stack is empty");
+    }
+    return this.items[this.items.length - 1];
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+}
+
+export class Queue<T> {
+  private items: T[];
+  private head: i32;
+
+  constructor() {
+    this.items = [];
+    this.head = 0;
+  }
+
+  enqueue(value: T): void {
+    tsn_array_push(this.items, value);
+  }
+
+  dequeue(): T {
+    if (this.head >= this.items.length) {
+      throw new Error("Queue is empty");
+    }
+    let value = this.items[this.head];
+    this.head = this.head + 1;
+    if (this.head > 16 && this.head * 2 > this.items.length) {
+      let compacted: T[] = [];
+      let i = this.head;
+      while (i < this.items.length) {
+        tsn_array_push(compacted, this.items[i]);
+        i = i + 1;
+      }
+      this.items = compacted;
+      this.head = 0;
+    }
+    return value;
+  }
+
+  peek(): T {
+    if (this.head >= this.items.length) {
+      throw new Error("Queue is empty");
+    }
+    return this.items[this.head];
+  }
+
+  size(): i32 {
+    return this.items.length - this.head;
+  }
+
+  isEmpty(): bool {
+    return this.head >= this.items.length;
+  }
+
+  clear(): void {
+    this.items = [];
+    this.head = 0;
+  }
+}
+
+export class Set<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  add(value: T): bool {
+    if (tsn_array_index_of(this.items, value) >= 0) {
+      return false;
+    }
+    tsn_array_push(this.items, value);
+    return true;
+  }
+
+  has(value: T): bool {
+    return tsn_array_index_of(this.items, value) >= 0;
+  }
+
+  remove(value: T): bool {
+    let idx = tsn_array_index_of(this.items, value);
+    if (idx < 0) {
+      return false;
+    }
+    let next: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      if (i != idx) {
+        tsn_array_push(next, this.items[i]);
+      }
+      i = i + 1;
+    }
+    this.items = next;
+    return true;
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+
+  toArray(): T[] {
+    let result: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      tsn_array_push(result, this.items[i]);
+      i = i + 1;
+    }
+    return result;
+  }
+}
+
+export class List<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  add(value: T): void {
+    tsn_array_push(this.items, value);
+  }
+
+  get(index: i32): T {
+    if (index < 0 || index >= this.items.length) {
+      throw new Error("List index out of bounds");
+    }
+    return this.items[index];
+  }
+
+  set(index: i32, value: T): void {
+    if (index < 0 || index >= this.items.length) {
+      throw new Error("List index out of bounds");
+    }
+    let next: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      if (i == index) {
+        tsn_array_push(next, value);
+      } else {
+        tsn_array_push(next, this.items[i]);
+      }
+      i = i + 1;
+    }
+    this.items = next;
+  }
+
+  removeAt(index: i32): T {
+    if (index < 0 || index >= this.items.length) {
+      throw new Error("List index out of bounds");
+    }
+    let removed = this.items[index];
+    let next: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      if (i != index) {
+        tsn_array_push(next, this.items[i]);
+      }
+      i = i + 1;
+    }
+    this.items = next;
+    return removed;
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+
+  toArray(): T[] {
+    let result: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      tsn_array_push(result, this.items[i]);
+      i = i + 1;
+    }
+    return result;
+  }
+}

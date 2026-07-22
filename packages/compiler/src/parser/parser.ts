@@ -159,7 +159,16 @@ export class Parser {
 
       sawNonImport = true;
       const exported = this.match(TokenKind.Export);
+      const isExtern = this.match(TokenKind.Extern);
       const isAbstract = this.match(TokenKind.Abstract);
+
+      if (isExtern && isAbstract) {
+        this.diagnostics.error(
+          "'extern' cannot be combined with 'abstract'",
+          this.peek().span,
+          "E0103",
+        );
+      }
 
       if (isAbstract && !this.check(TokenKind.Class)) {
         this.diagnostics.error(
@@ -175,9 +184,11 @@ export class Parser {
       }
 
       if (this.check(TokenKind.Struct)) {
-        if (isAbstract) {
+        if (isAbstract || isExtern) {
           this.diagnostics.error(
-            "'abstract' can only be used with classes",
+            isExtern
+              ? "'extern' can only be used with functions"
+              : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -189,9 +200,11 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Enum)) {
-        if (isAbstract) {
+        if (isAbstract || isExtern) {
           this.diagnostics.error(
-            "'abstract' can only be used with classes",
+            isExtern
+              ? "'extern' can only be used with functions"
+              : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -203,9 +216,11 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Interface)) {
-        if (isAbstract) {
+        if (isAbstract || isExtern) {
           this.diagnostics.error(
-            "'abstract' can only be used with classes",
+            isExtern
+              ? "'extern' can only be used with functions"
+              : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -217,9 +232,11 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Type)) {
-        if (isAbstract) {
+        if (isAbstract || isExtern) {
           this.diagnostics.error(
-            "'abstract' can only be used with classes",
+            isExtern
+              ? "'extern' can only be used with functions"
+              : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -231,6 +248,13 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Class)) {
+        if (isExtern) {
+          this.diagnostics.error(
+            "'extern' can only be used with functions",
+            this.peek().span,
+            "E0103",
+          );
+        }
         const decl = this.parseClassDeclaration(exported, isAbstract);
         if (decl) {
           body.push(decl);
@@ -245,14 +269,14 @@ export class Parser {
             "E0103",
           );
         }
-        const fn = this.parseFunctionDeclaration(exported);
+        const fn = this.parseFunctionDeclaration(exported, isExtern);
         if (fn) {
           body.push(fn);
         } else {
           break;
         }
       } else {
-        if (exported || isAbstract) {
+        if (exported || isAbstract || isExtern) {
           this.diagnostics.error(
             `Expected 'function', 'struct', 'enum', 'class', 'interface', or 'type' after modifiers, found '${this.peek().lexeme}'`,
             this.peek().span,
@@ -1290,7 +1314,10 @@ export class Parser {
     };
   }
 
-  private parseFunctionDeclaration(exported: boolean): FunctionDeclaration | null {
+  private parseFunctionDeclaration(
+    exported: boolean,
+    isExtern: boolean,
+  ): FunctionDeclaration | null {
     const start = this.peek().span.start;
 
     if (!this.expect(TokenKind.Function, "Expected 'function'")) {
@@ -1343,6 +1370,49 @@ export class Parser {
       return null;
     }
 
+    for (let i = 0; i < params.length; i += 1) {
+      const param = params[i]!;
+      if (param.isReceiver) {
+        if (i !== 0) {
+          this.diagnostics.error(
+            "Receiver parameter 'this' must be the first parameter",
+            param.span,
+            "E0102",
+          );
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        if (param.defaultValue !== null) {
+          this.diagnostics.error(
+            "Receiver parameter 'this' cannot have a default value",
+            param.span,
+            "E0102",
+          );
+          this.synchronizeToTopLevel();
+          return null;
+        }
+      }
+    }
+
+    if (isExtern) {
+      if (!this.expect(TokenKind.Semicolon, "Expected ';' after extern function declaration")) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      const end = this.previous().span.end;
+      return {
+        kind: "FunctionDeclaration",
+        exported,
+        isExtern: true,
+        name,
+        typeParams,
+        params,
+        returnType,
+        body: null,
+        span: { start, end },
+      };
+    }
+
     const body = this.parseBlock();
     if (!body) {
       this.synchronizeToTopLevel();
@@ -1352,6 +1422,7 @@ export class Parser {
     return {
       kind: "FunctionDeclaration",
       exported,
+      isExtern: false,
       name,
       typeParams,
       params,
@@ -1401,16 +1472,28 @@ export class Parser {
   }
 
   private parseParameter(): Parameter | null {
-    const nameToken = this.expect(TokenKind.Identifier, "Expected parameter name");
-    if (!nameToken) {
-      return null;
-    }
+    let isReceiver = false;
+    let name: Identifier;
 
-    const name: Identifier = {
-      kind: "Identifier",
-      name: nameToken.lexeme,
-      span: nameToken.span,
-    };
+    if (this.check(TokenKind.This)) {
+      const thisToken = this.advance();
+      isReceiver = true;
+      name = {
+        kind: "Identifier",
+        name: "this",
+        span: thisToken.span,
+      };
+    } else {
+      const nameToken = this.expect(TokenKind.Identifier, "Expected parameter name");
+      if (!nameToken) {
+        return null;
+      }
+      name = {
+        kind: "Identifier",
+        name: nameToken.lexeme,
+        span: nameToken.span,
+      };
+    }
 
     if (!this.expect(TokenKind.Colon, "Expected ':' after parameter name")) {
       return null;
@@ -1434,6 +1517,7 @@ export class Parser {
       name,
       typeAnnotation,
       defaultValue,
+      isReceiver,
       span: {
         start: name.span.start,
         end: defaultValue?.span.end ?? typeAnnotation.span.end,

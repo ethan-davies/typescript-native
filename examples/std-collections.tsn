@@ -1,0 +1,26 @@
+import { Stack, Queue, Set, List } from "std/collections";
+
+function main(): void {
+  let stack = new Stack<i32>();
+  stack.push(1);
+  stack.push(2);
+  print(stack.pop());
+  print(stack.peek());
+
+  let queue = new Queue<string>();
+  queue.enqueue("a");
+  queue.enqueue("b");
+  print(queue.dequeue());
+  print(queue.size());
+
+  let set = new Set<i32>();
+  print(set.add(1));
+  print(set.add(1));
+  print(set.has(1));
+
+  let list = new List<i32>();
+  list.add(10);
+  list.add(20);
+  print(list.get(1));
+  print(list.size());
+}

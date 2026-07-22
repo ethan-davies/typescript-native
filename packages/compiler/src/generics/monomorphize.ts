@@ -52,6 +52,8 @@ export interface TypecheckInstantiations {
   readonly callRewrites: ReadonlyMap<number, string>;
   /** span.start.offset → specialized method local name (property name) */
   readonly methodCallRewrites: ReadonlyMap<number, string>;
+  /** span.start.offset → mangled LLVM name for extension method calls */
+  readonly extensionCallRewrites: ReadonlyMap<number, string>;
   readonly newRewrites: ReadonlyMap<number, string>;
   readonly structLiteralRewrites: ReadonlyMap<number, string>;
   readonly typeRewrites: ReadonlyMap<number, string>;
@@ -405,7 +407,7 @@ function rewriteDeclBody(
         typeAnnotation: rewriteType(p.typeAnnotation, inst.typeRewrites),
       })),
       returnType: rewriteType(decl.returnType, inst.typeRewrites),
-      body: decl.body.map((s) => rewriteStatement(s, inst)),
+      body: decl.body ? decl.body.map((s) => rewriteStatement(s, inst)) : null,
     };
   }
   if (decl.kind === "StructDeclaration") {
@@ -637,6 +639,10 @@ export function monomorphizeModules(
           decl.kind === "FunctionDeclaration") &&
         decl.typeParams.length > 0
       ) {
+        // Keep generic extern declarations — they are C ABI imports, not templates to strip.
+        if (decl.kind === "FunctionDeclaration" && decl.isExtern) {
+          body.push(rewriteDeclBody(decl, instantiations));
+        }
         continue;
       }
       // Strip generic methods from concrete types; specialized copies are injected below.
@@ -751,6 +757,7 @@ export function emptyInstantiations(): TypecheckInstantiations {
     records: [],
     callRewrites: new Map(),
     methodCallRewrites: new Map(),
+    extensionCallRewrites: new Map(),
     newRewrites: new Map(),
     structLiteralRewrites: new Map(),
     typeRewrites: new Map(),

@@ -26,7 +26,7 @@ $(LIBRARY): $(OBJECTS)
 	$(AR) rcs $@ $(OBJECTS)
 
 $(SMOKE_BIN): $(TEST_DIR)/runtime_smoke.c $(LIBRARY)
-	$(CC) $(CFLAGS) $< $(LIBRARY) -o $@
+	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -o $@
 
 test: $(SMOKE_BIN)
 	./$(SMOKE_BIN)

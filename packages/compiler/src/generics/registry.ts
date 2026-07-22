@@ -46,6 +46,8 @@ export class InstantiationCollector {
   readonly records: InstantiationRecord[] = [];
   readonly callRewrites = new Map<number, string>();
   readonly methodCallRewrites = new Map<number, string>();
+  /** CallExpression span → mangled LLVM name of an extension method (receiver prepended at call). */
+  readonly extensionCallRewrites = new Map<number, string>();
   readonly newRewrites = new Map<number, string>();
   readonly structLiteralRewrites = new Map<number, string>();
   readonly typeRewrites = new Map<number, string>();
@@ -69,6 +71,7 @@ export class InstantiationCollector {
       records: [...this.records],
       callRewrites: new Map(this.callRewrites),
       methodCallRewrites: new Map(this.methodCallRewrites),
+      extensionCallRewrites: new Map(this.extensionCallRewrites),
       newRewrites: new Map(this.newRewrites),
       structLiteralRewrites: new Map(this.structLiteralRewrites),
       typeRewrites: new Map(this.typeRewrites),

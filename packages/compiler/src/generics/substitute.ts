@@ -425,11 +425,12 @@ export function specializeFunctionDecl(
   return {
     kind: "FunctionDeclaration",
     exported: decl.exported,
+    isExtern: decl.isExtern,
     name: { kind: "Identifier", name: instanceLocalName, span: decl.name.span },
     typeParams: [],
     params: substParams(decl.params, subst),
     returnType: substituteAnnotation(decl.returnType, subst),
-    body: substStatements(decl.body, subst),
+    body: decl.body ? substStatements(decl.body, subst) : null,
     span: decl.span,
   };
 }

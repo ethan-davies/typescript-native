@@ -1,14 +1,58 @@
-import { readFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Program } from "./ast/nodes.js";
 import { LlvmCodegen } from "./codegen/llvm.js";
 import { DiagnosticCollector, type Diagnostic } from "./diagnostics/diagnostic.js";
 import { monomorphizeModules, type TypecheckInstantiations } from "./generics/monomorphize.js";
 import { Lexer } from "./lexer/lexer.js";
-import { resolveModules, type ResolvedModule } from "./modules/resolve.js";
+import { attachPrelude, setPreludePathsProvider } from "./modules/prelude.js";
+import {
+  resolveModules,
+  setStdRootProvider,
+  type ResolvedModule,
+} from "./modules/resolve.js";
 import { Parser } from "./parser/parser.js";
-import { typecheck, typecheckModules } from "./typecheck.js";
-import { validate, validateModules } from "./validate.js";
+import { typecheckModules } from "./typecheck.js";
+import { validateModules } from "./validate.js";
+
+function discoverStdRoot(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    const std = require("@typescript-native/std") as {
+      getStdRoot: () => string;
+    };
+    return std.getStdRoot();
+  } catch {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      join(here, "..", "..", "std", "src"),
+      join(here, "..", "..", "..", "std", "src"),
+    ];
+    for (const root of candidates) {
+      if (existsSync(join(root, "prelude", "string.tsn"))) {
+        return root;
+      }
+    }
+    return null;
+  }
+}
+
+function discoverPreludePaths(): readonly string[] {
+  const root = discoverStdRoot();
+  if (!root) {
+    return [];
+  }
+  return [
+    join(root, "prelude", "string.tsn"),
+    join(root, "prelude", "array.tsn"),
+    join(root, "prelude", "io.tsn"),
+  ];
+}
+
+setStdRootProvider(discoverStdRoot);
+setPreludePathsProvider(discoverPreludePaths);
 
 export interface CompileOptions {
   /** Source file name used in diagnostics. */
@@ -26,6 +70,7 @@ export interface CompileResult {
 /**
  * Compile source text through lexer → parser → validate → typecheck → monomorphize → LLVM IR.
  * Imports are not supported here; use {@link compileFile} for multi-file programs.
+ * The standard-library prelude is still auto-attached.
  */
 export function compile(source: string, _options: CompileOptions = {}): CompileResult {
   const diagnostics = new DiagnosticCollector();
@@ -33,6 +78,16 @@ export function compile(source: string, _options: CompileOptions = {}): CompileR
   const tokens = lexer.tokenize();
   const parser = new Parser(tokens, diagnostics);
   const ast = parser.parse();
+
+  for (const decl of ast.body) {
+    if (decl.kind === "ImportDeclaration") {
+      diagnostics.error(
+        "Import declarations require compiling from a file path (use compileFile)",
+        decl.span,
+        "E0400",
+      );
+    }
+  }
 
   const synthetic: ResolvedModule = {
     path: "<source>",
@@ -43,19 +98,21 @@ export function compile(source: string, _options: CompileOptions = {}): CompileR
     imports: [],
   };
 
+  const modules = attachPrelude([synthetic], diagnostics);
+
   if (!diagnostics.hasErrors) {
-    validate(ast, diagnostics);
+    validateModules(modules, diagnostics);
   }
 
-  let monoModules: ResolvedModule[] = [synthetic];
+  let monoModules: ResolvedModule[] = modules;
 
   if (!diagnostics.hasErrors) {
-    const inst = typecheck(ast, diagnostics);
+    const inst = typecheckModules(modules, diagnostics);
     if (!diagnostics.hasErrors) {
-      monoModules = monomorphizeModules([synthetic], inst);
+      monoModules = monomorphizeModules(modules, inst);
       const ir = new LlvmCodegen().emitModules(monoModules, inst);
       return {
-        ast: monoModules[0]?.ast ?? ast,
+        ast: monoModules.find((m) => m.isEntry)?.ast ?? ast,
         modules: monoModules,
         ir,
         diagnostics: diagnostics.diagnostics,
@@ -67,7 +124,7 @@ export function compile(source: string, _options: CompileOptions = {}): CompileR
   if (diagnostics.hasErrors) {
     return {
       ast,
-      modules: [synthetic],
+      modules,
       ir: null,
       diagnostics: diagnostics.diagnostics,
       success: false,
@@ -76,7 +133,7 @@ export function compile(source: string, _options: CompileOptions = {}): CompileR
 
   const ir = new LlvmCodegen().emitModules(monoModules);
   return {
-    ast: monoModules[0]?.ast ?? ast,
+    ast: monoModules.find((m) => m.isEntry)?.ast ?? ast,
     modules: monoModules,
     ir,
     diagnostics: diagnostics.diagnostics,
@@ -101,7 +158,8 @@ export function compileFile(
   const absoluteEntry = resolvePath(entryPath);
 
   const resolved = resolveModules(absoluteEntry, readFile, diagnostics);
-  const entry = resolved.modules.find((m) => m.isEntry);
+  const modules = attachPrelude(resolved.modules, diagnostics, readFile);
+  const entry = modules.find((m) => m.isEntry);
   const emptyAst: Program = {
     kind: "Program",
     body: [],
@@ -114,28 +172,28 @@ export function compileFile(
   if (!resolved.success || diagnostics.hasErrors || !entry) {
     return {
       ast: entry?.ast ?? emptyAst,
-      modules: resolved.modules,
+      modules,
       ir: null,
       diagnostics: diagnostics.diagnostics,
       success: false,
     };
   }
 
-  validateModules(resolved.modules, diagnostics);
+  validateModules(modules, diagnostics);
 
-  let monoModules = resolved.modules;
+  let monoModules = modules;
   let inst: TypecheckInstantiations | undefined;
   if (!diagnostics.hasErrors) {
-    inst = typecheckModules(resolved.modules, diagnostics);
+    inst = typecheckModules(modules, diagnostics);
     if (!diagnostics.hasErrors) {
-      monoModules = monomorphizeModules(resolved.modules, inst);
+      monoModules = monomorphizeModules(modules, inst);
     }
   }
 
   if (diagnostics.hasErrors) {
     return {
       ast: entry.ast,
-      modules: resolved.modules,
+      modules,
       ir: null,
       diagnostics: diagnostics.diagnostics,
       success: false,

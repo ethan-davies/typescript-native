@@ -1,0 +1,30 @@
+import {
+  abs,
+  min,
+  max,
+  floor,
+  ceil,
+  round,
+  sqrt,
+  pow,
+  sin,
+  cos,
+  tan,
+  log,
+  exp,
+} from "std/math";
+
+function main(): void {
+  print(abs(-3.5));
+  print(min(2.0, 5.0));
+  print(max(2.0, 5.0));
+  print(floor(3.9));
+  print(ceil(3.1));
+  print(round(3.5));
+  print(sqrt(25.0));
+  print(pow(2.0, 10.0));
+  print(sin(0.0));
+  print(cos(0.0));
+  print(tan(0.0));
+  print(log(exp(1.0)));
+}

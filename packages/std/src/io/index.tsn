@@ -1,0 +1,5 @@
+// Polymorphic multi-arg `print` is a compiler intrinsic, available everywhere
+// through the prelude — no import and no wrapper required.
+//
+// This module is reserved for future I/O that is not globally ambient, e.g.
+// readLine, stdin / stdout / stderr handles.

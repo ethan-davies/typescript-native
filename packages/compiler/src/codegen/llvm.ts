@@ -52,6 +52,7 @@ import {
   isStructType,
   isTupleType,
   typesEqual,
+  typeToString,
   type EnumValueType,
   type FunctionValueType,
   type StructValueType,
@@ -142,6 +143,7 @@ interface FunctionSig {
   readonly mangledName: string;
   readonly params: ValueType[];
   readonly returnType: ValueType | "void";
+  readonly isExtern: boolean;
 }
 
 type ControlContext =
@@ -363,6 +365,11 @@ export class LlvmCodegen {
   private currentLambdaEnv: string | null = null;
   private currentLambdaEnvTypeName: string | null = null;
   private currentLambdaCaptureLayout: LambdaCaptureLowering[] = [];
+  /** CallExpression span → mangled name for extension method calls. */
+  private extensionCallRewrites = new Map<number, string>();
+  /** Extern symbols that need `declare` in the module. */
+  private readonly externDeclares = new Set<string>();
+  private needsTsnStrExtras = false;
 
   emit(program: Program): string {
     return this.emitModules([
@@ -388,6 +395,7 @@ export class LlvmCodegen {
     this.locals = new Map();
     this.functions.clear();
     this.lambdaCaptures = new Map(instantiations?.lambdaCaptures ?? []);
+    this.extensionCallRewrites = new Map(instantiations?.extensionCallRewrites ?? []);
     this.lambdaCounter = 0;
     this.emittedLambdas.clear();
     this.emittedTrampolines.clear();
@@ -411,6 +419,7 @@ export class LlvmCodegen {
     this.pendingEnvTypeInfos.length = 0;
     this.needsTsnAlloc = false;
     this.needsTsnString = false;
+    this.needsTsnStrExtras = false;
     this.needsTsnArray = false;
     this.needsTsnMap = false;
     this.needsTsnPrint = false;
@@ -420,6 +429,7 @@ export class LlvmCodegen {
     this.needsStrcmp = false;
     this.needsTsnException = false;
     this.needsIsInstance = false;
+    this.externDeclares.clear();
     this.registeredTuples.clear();
     this.typeAliases = new Map();
     this.genericTypeAliases = new Map();
@@ -618,6 +628,58 @@ export class LlvmCodegen {
         if (decl.kind !== "FunctionDeclaration") {
           continue;
         }
+        // Register all externs (including generic) under their C symbol name.
+        if (decl.isExtern) {
+          let params: ValueType[] = [];
+          let returnType: ValueType | "void" = "void";
+          if (decl.typeParams.length === 0) {
+            params = decl.params.map((p) => {
+              const t = this.resolveAnnotationInModule(
+                p.typeAnnotation,
+                localStructs,
+                localEnums,
+                localClasses,
+                localInterfaces,
+                new Map(),
+              );
+              if (!t) {
+                throw new Error(`Codegen: invalid parameter type for '${p.name.name}'`);
+              }
+              return t;
+            });
+            let resolvedReturn: ValueType | "void" | null =
+              decl.returnType.kind === "PrimitiveType" && decl.returnType.name === "void"
+                ? ("void" as const)
+                : this.resolveAnnotationInModule(
+                    decl.returnType,
+                    localStructs,
+                    localEnums,
+                    localClasses,
+                    localInterfaces,
+                    new Map(),
+                  );
+            if (resolvedReturn === null) {
+              throw new Error(`Codegen: invalid return type for '${decl.name.name}'`);
+            }
+            returnType = resolvedReturn;
+          } else {
+            // Generic extern: signature is ABI-specialized at the call site.
+            returnType =
+              decl.returnType.kind === "PrimitiveType" && decl.returnType.name === "void"
+                ? ("void" as const)
+                : "i32";
+          }
+          const sig: FunctionSig = {
+            name: decl.name.name,
+            mangledName: decl.name.name,
+            params,
+            returnType,
+            isExtern: true,
+          };
+          localFns.set(decl.name.name, sig);
+          this.functions.set(decl.name.name, sig);
+          continue;
+        }
         if (decl.typeParams.length > 0) {
           continue;
         }
@@ -657,6 +719,7 @@ export class LlvmCodegen {
           mangledName,
           params,
           returnType,
+          isExtern: false,
         };
         localFns.set(fn.name.name, sig);
         this.functions.set(mangledName, sig);
@@ -828,6 +891,9 @@ export class LlvmCodegen {
 
       for (const decl of mod.ast.body) {
         if (decl.kind === "FunctionDeclaration") {
+          if (decl.isExtern) {
+            continue;
+          }
           this.emitFunction(decl);
         } else if (decl.kind === "StructDeclaration") {
           const info = this.localStructs.get(decl.name.name);
@@ -945,6 +1011,26 @@ export class LlvmCodegen {
       typeId: 0,
       decl,
     };
+  }
+
+  /**
+   * Resolve a class by local name (current module) or by local/mangled name across all modules.
+   * Needed for monomorphized generics imported from another module (`new Stack__i32` after rewrite).
+   */
+  private lookupClass(name: string, namespace: string | null = null): ClassInfo | undefined {
+    if (namespace) {
+      return this.namespaces.get(namespace)?.classes.get(name);
+    }
+    const local = this.localClasses.get(name);
+    if (local) {
+      return local;
+    }
+    for (const info of this.classes.values()) {
+      if (info.localName === name || info.name === name) {
+        return info;
+      }
+    }
+    return undefined;
   }
 
   private allocateTypeId(): number {
@@ -2369,19 +2455,16 @@ export class LlvmCodegen {
     lines.push(retInstruction);
   }
 
-  private ensureGcExprRoot(lines: string[]): string {
-    if (this.gcExprRoot === null) {
-      this.gcExprRoot = "%gc.expr";
-      lines.push(`  ${this.gcExprRoot} = alloca ptr`);
-      lines.push(`  store ptr null, ptr ${this.gcExprRoot}`);
-      this.pushGcRoot(this.gcExprRoot, lines);
-    }
-    return this.gcExprRoot;
-  }
-
   /** Keep a heap pointer alive across subsequent allocating calls in this function. */
   private rootHeapPtr(ptr: string, lines: string[]): void {
-    const slot = this.ensureGcExprRoot(lines);
+    // Use a fresh alloca per root so the slot always dominates its stores.
+    // Reusing a single `%gc.expr` allocated inside a then-block breaks SSA dominance
+    // when a later block also needs to root a pointer.
+    this.needsGc = true;
+    const slot = this.nextTemp();
+    lines.push(`  ${slot} = alloca ptr`);
+    lines.push(`  store ptr null, ptr ${slot}`);
+    this.pushGcRoot(slot, lines);
     lines.push(`  store ptr ${ptr}, ptr ${slot}`);
   }
 
@@ -2705,6 +2788,70 @@ export class LlvmCodegen {
       declares.push("declare i32 @tsn_str_len(ptr noundef) nounwind");
       declares.push("declare ptr @tsn_str_concat(ptr noundef, ptr noundef) nounwind");
     }
+    if (this.needsTsnStrExtras) {
+      declares.push("declare i1 @tsn_str_contains(ptr noundef, ptr noundef) nounwind");
+      declares.push("declare i1 @tsn_str_starts_with(ptr noundef, ptr noundef) nounwind");
+      declares.push("declare i1 @tsn_str_ends_with(ptr noundef, ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_substring(ptr noundef, i32 noundef, i32 noundef) nounwind");
+      declares.push("declare ptr @tsn_str_trim(ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_to_upper(ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_to_lower(ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_replace(ptr noundef, ptr noundef, ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_split(ptr noundef, ptr noundef) nounwind");
+      declares.push("declare i32 @tsn_str_index_of(ptr noundef, ptr noundef) nounwind");
+      declares.push("declare i8 @tsn_str_char_at(ptr noundef, i32 noundef) nounwind");
+      declares.push("declare ptr @tsn_str_repeat(ptr noundef, i32 noundef) nounwind");
+      declares.push("declare ptr @tsn_str_pad_start(ptr noundef, i32 noundef, ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_pad_end(ptr noundef, i32 noundef, ptr noundef) nounwind");
+      declares.push("declare ptr @tsn_str_join(ptr noundef, ptr noundef) nounwind");
+      declares.push("declare i32 @tsn_str_last_index_of(ptr noundef, ptr noundef) nounwind");
+    }
+    // Declares for other extern symbols used from TSN.
+    const hardcodedExterns = new Set([
+      "tsn_str_len",
+      "tsn_str_concat",
+      "tsn_str_contains",
+      "tsn_str_starts_with",
+      "tsn_str_ends_with",
+      "tsn_str_substring",
+      "tsn_str_trim",
+      "tsn_str_to_upper",
+      "tsn_str_to_lower",
+      "tsn_str_replace",
+      "tsn_str_split",
+      "tsn_str_index_of",
+      "tsn_str_char_at",
+      "tsn_str_repeat",
+      "tsn_str_pad_start",
+      "tsn_str_pad_end",
+      "tsn_str_join",
+      "tsn_str_last_index_of",
+      "tsn_array_new",
+      "tsn_array_push",
+      "tsn_array_pop",
+      "tsn_array_index_of",
+      "tsn_print_i32",
+      "tsn_print_i64",
+      "tsn_print_f32",
+      "tsn_print_f64",
+      "tsn_print_bool",
+      "tsn_print_char",
+      "tsn_print_str",
+      "tsn_print_space",
+      "tsn_print_newline",
+    ]);
+    for (const name of this.externDeclares) {
+      if (hardcodedExterns.has(name)) {
+        continue;
+      }
+      const sig = this.functions.get(name);
+      if (!sig) {
+        continue;
+      }
+      const ret = sig.returnType === "void" ? "void" : toLlvmType(sig.returnType);
+      const params = sig.params.map((t) => `${toLlvmType(t)} noundef`).join(", ");
+      declares.push(`declare ${ret} @${name}(${params}) nounwind`);
+    }
     if (this.needsStrcmp) {
       declares.push("declare i32 @strcmp(ptr noundef, ptr noundef) nounwind");
     }
@@ -2797,6 +2944,7 @@ export class LlvmCodegen {
   private emitStructMethod(struct: StructInfo, method: StructMethodInfo): void {
     this.locals = new Map();
     this.tempCounter = 0;
+    this.labelCounter = 0;
     this.controlStack.length = 0;
     const gcScope = this.beginGcFunctionScope();
     this.thisPtr = "%this";
@@ -2859,6 +3007,7 @@ export class LlvmCodegen {
   private emitClassConstructor(info: ClassInfo): void {
     this.locals = new Map();
     this.tempCounter = 0;
+    this.labelCounter = 0;
     this.controlStack.length = 0;
     const gcScope = this.beginGcFunctionScope();
     this.thisPtr = "%this";
@@ -2933,6 +3082,7 @@ export class LlvmCodegen {
     }
     this.locals = new Map();
     this.tempCounter = 0;
+    this.labelCounter = 0;
     this.controlStack.length = 0;
     const gcScope = this.beginGcFunctionScope();
     this.thisPtr = method.isStatic ? null : "%this";
@@ -2980,9 +3130,7 @@ export class LlvmCodegen {
   private emitNewExpression(expr: NewExpression, lines: string[]): EmittedValue {
     this.needsTsnAlloc = true;
     this.needsGc = true;
-    const classInfo = expr.namespace
-      ? this.namespaces.get(expr.namespace.name)?.classes.get(expr.className.name)
-      : this.localClasses.get(expr.className.name);
+    const classInfo = this.lookupClass(expr.className.name, expr.namespace?.name ?? null);
     if (!classInfo) {
       throw new Error(`Codegen: unknown class '${expr.className.name}'`);
     }
@@ -3010,8 +3158,12 @@ export class LlvmCodegen {
   }
 
   private emitFunction(fn: FunctionDeclaration): void {
+    if (fn.isExtern || !fn.body) {
+      return;
+    }
     this.locals = new Map();
     this.tempCounter = 0;
+    this.labelCounter = 0;
     this.controlStack.length = 0;
     const gcScope = this.beginGcFunctionScope();
     this.boxedNames = this.collectBoxedNamesInStmts(fn.body);
@@ -3020,6 +3172,7 @@ export class LlvmCodegen {
     const lines: string[] = [];
 
     const isMain = fn.name.name === "main";
+    const isExtension = fn.params[0]?.isReceiver === true;
     const header = isMain ? "define i32 @main() {" : this.emitFunctionHeader(fn);
 
     lines.push(header);
@@ -3029,9 +3182,23 @@ export class LlvmCodegen {
       lines.push("  call void @tsn_init_typeinfo()");
     }
 
+    this.thisPtr = null;
+    this.thisType = null;
+
     if (!isMain) {
       for (let i = 0; i < fn.params.length; i += 1) {
-        this.emitParameter(fn.params[i]!, i, lines);
+        const param = fn.params[i]!;
+        if (param.isReceiver) {
+          const type = this.resolveAnnotation(param.typeAnnotation);
+          if (!type) {
+            throw new Error("Codegen: invalid extension receiver type");
+          }
+          // Receiver is a by-value parameter (string/array are ptrs).
+          this.thisType = type;
+          this.thisPtr = `%arg${i}`;
+          continue;
+        }
+        this.emitParameter(param, i, lines);
       }
     }
 
@@ -3057,8 +3224,11 @@ export class LlvmCodegen {
     lines.push("");
     this.functionBodies.push(...lines);
     this.currentReturnType = null;
+    this.thisPtr = null;
+    this.thisType = null;
     this.boxedNames = new Set();
     this.endGcFunctionScope(gcScope);
+    void isExtension;
   }
 
   /**
@@ -4186,9 +4356,7 @@ export class LlvmCodegen {
         return { kind: "struct", name: def.name };
       }
       case "NewExpression": {
-        const info = expr.namespace
-          ? this.namespaces.get(expr.namespace.name)?.classes.get(expr.className.name)
-          : this.localClasses.get(expr.className.name);
+        const info = this.lookupClass(expr.className.name, expr.namespace?.name ?? null);
         if (!info) {
           throw new Error(`Codegen: unknown class '${expr.className.name}'`);
         }
@@ -4388,6 +4556,14 @@ export class LlvmCodegen {
             }
           }
           const method = expr.callee.property.name;
+          const extMangled = this.extensionCallRewrites.get(expr.span.start.offset);
+          if (extMangled) {
+            const sig = this.functions.get(extMangled);
+            if (!sig || sig.returnType === "void") {
+              throw new Error(`Codegen: unexpected extension '${extMangled}' in inference`);
+            }
+            return wrapOptionalCallType(sig.returnType);
+          }
           let objectType = this.inferExpressionType(expr.callee.object);
           if (expr.optional && (includesNull(objectType) || objectType === "null")) {
             if (objectType === "null") {
@@ -4411,19 +4587,17 @@ export class LlvmCodegen {
             }
             return wrapOptionalCallType(m.returnType);
           }
-          if (!isArrayType(objectType)) {
-            throw new Error("Codegen: method on non-array");
+          if (isInterfaceType(objectType)) {
+            const def = this.interfaces.get(objectType.name);
+            const m = def?.methods.find((x) => x.name === method);
+            if (!m || m.returnType === "void") {
+              throw new Error("Codegen: unexpected interface method in inference");
+            }
+            return wrapOptionalCallType(m.returnType);
           }
-          if (method === "pop") {
-            return wrapOptionalCallType(objectType.element);
-          }
-          if (method === "includes") {
-            return wrapOptionalCallType("bool");
-          }
-          if (method === "indexOf") {
-            return wrapOptionalCallType("i32");
-          }
-          throw new Error(`Codegen: unexpected method '${method}' in inference`);
+          throw new Error(
+            `Codegen: unexpected method '${method}' on '${typeToString(objectType)}' in inference`,
+          );
         }
         if (expr.callee.kind !== "Identifier") {
           // Indirect / lambda call — use expected or i32 fallback for inference
@@ -5336,6 +5510,26 @@ export class LlvmCodegen {
     }
     const callee = call.callee;
 
+    // Extension method: lower to free-function call with receiver as arg0.
+    const extMangled = this.extensionCallRewrites.get(call.span.start.offset);
+    if (extMangled) {
+      const sig = this.functions.get(extMangled);
+      if (!sig) {
+        throw new Error(`Codegen: unknown extension target '${extMangled}'`);
+      }
+      const object = objectOverride ?? this.emitExpression(callee.object, lines);
+      if (objectOverride) {
+        const rest = asExpressions(call.args);
+        const emitted: EmittedValue[] = [object];
+        for (let i = 0; i < rest.length; i += 1) {
+          emitted.push(this.emitExpression(rest[i]!, lines, sig.params[i + 1]));
+        }
+        return this.emitCallWithEmittedArgs(sig, emitted, lines, asStatement);
+      }
+      const args: Expression[] = [callee.object, ...asExpressions(call.args)];
+      return this.emitCallWithSig(sig, args, lines, asStatement);
+    }
+
     // Static method: ClassName.method(...)
     if (callee.object.kind === "Identifier" && !this.locals.has(callee.object.name)) {
       const classInfo = this.localClasses.get(callee.object.name);
@@ -5495,41 +5689,19 @@ export class LlvmCodegen {
       return { llvm: tmp, type: method.returnType };
     }
 
-    const object = objectOverride ?? this.emitExpression(callee.object, lines);
-    if (!isArrayType(object.type)) {
-      throw new Error("Codegen: method on non-array");
-    }
-
-    const method = callee.property.name;
-    const elementType = object.type.element;
-
-    switch (method) {
-      case "push":
-        this.emitArrayPush(object.llvm, asExpressions(call.args)[0]!, elementType, lines);
-        if (!asStatement) {
-          throw new Error("Codegen: push used as value");
-        }
-        return { llvm: "void", type: "i32" };
-      case "pop":
-        return this.emitArrayPop(object.llvm, elementType, lines);
-      case "includes":
-        return this.emitArrayIncludes(object.llvm, asExpressions(call.args)[0]!, elementType, lines);
-      case "indexOf":
-        return this.emitArrayIndexOf(object.llvm, asExpressions(call.args)[0]!, elementType, lines);
-      default:
-        throw new Error(`Codegen: unknown method '${method}'`);
-    }
+    throw new Error(
+      `Codegen: unknown method '${callee.property.name}' on '${typeToString(objectType)}'`,
+    );
   }
 
   private emitArrayPush(
     header: string,
-    arg: Expression,
+    value: EmittedValue,
     elementType: ValueType,
     lines: string[],
   ): void {
     this.needsTsnArray = true;
     const elemLlvm = toLlvmType(elementType);
-    const value = this.emitExpression(arg, lines, elementType);
     const valuePtr = this.nextTemp();
     lines.push(`  ${valuePtr} = alloca ${elemLlvm}`);
     lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${valuePtr}`);
@@ -5554,11 +5726,11 @@ export class LlvmCodegen {
 
   private emitArrayIncludes(
     header: string,
-    arg: Expression,
+    needle: EmittedValue,
     elementType: ValueType,
     lines: string[],
   ): EmittedValue {
-    const index = this.emitArrayIndexOf(header, arg, elementType, lines);
+    const index = this.emitArrayIndexOf(header, needle, elementType, lines);
     const cmp = this.nextTemp();
     lines.push(`  ${cmp} = icmp sge i32 ${index.llvm}, 0`);
     return { llvm: cmp, type: "bool" };
@@ -5566,12 +5738,11 @@ export class LlvmCodegen {
 
   private emitArrayIndexOf(
     header: string,
-    arg: Expression,
+    needle: EmittedValue,
     elementType: ValueType,
     lines: string[],
   ): EmittedValue {
     this.needsTsnArray = true;
-    const needle = this.emitExpression(arg, lines, elementType);
     const cmpKind = this.tsnCmpKindForType(elementType);
     const elemLlvm = toLlvmType(elementType);
     const needlePtr = this.nextTemp();
@@ -5978,7 +6149,11 @@ export class LlvmCodegen {
     asStatement: boolean,
   ): EmittedValue {
     if (call.callee.kind === "Identifier") {
-      const sig = this.localFunctions.get(call.callee.name);
+      let sig = this.localFunctions.get(call.callee.name);
+      if (!sig) {
+        // Extern / runtime symbols are keyed by unmangled C name across modules.
+        sig = this.functions.get(call.callee.name);
+      }
       if (sig) {
         return this.emitCallWithSig(sig, asExpressions(call.args), lines, asStatement);
       }
@@ -6454,6 +6629,47 @@ export class LlvmCodegen {
     for (let i = 0; i < args.length; i += 1) {
       emittedArgs.push(this.emitExpression(args[i]!, lines, sig.params[i]));
     }
+    return this.emitCallWithEmittedArgs(sig, emittedArgs, lines, asStatement);
+  }
+
+  private emitCallWithEmittedArgs(
+    sig: FunctionSig,
+    emittedArgs: EmittedValue[],
+    lines: string[],
+    asStatement: boolean,
+  ): EmittedValue {
+    // Well-known array runtime helpers: inject elem_size / cmp_kind.
+    if (sig.mangledName === "tsn_array_push" && emittedArgs.length >= 2) {
+      const arr = emittedArgs[0]!;
+      const value = emittedArgs[1]!;
+      if (!isArrayType(arr.type)) {
+        throw new Error("Codegen: tsn_array_push expects array receiver");
+      }
+      this.emitArrayPush(arr.llvm, value, arr.type.element, lines);
+      if (!asStatement) {
+        throw new Error("Codegen: tsn_array_push used as value");
+      }
+      return { llvm: "void", type: "i32" };
+    }
+    if (sig.mangledName === "tsn_array_pop" && emittedArgs.length >= 1) {
+      const arr = emittedArgs[0]!;
+      if (!isArrayType(arr.type)) {
+        throw new Error("Codegen: tsn_array_pop expects array receiver");
+      }
+      return this.emitArrayPop(arr.llvm, arr.type.element, lines);
+    }
+    if (sig.mangledName === "tsn_array_index_of" && emittedArgs.length >= 2) {
+      const arr = emittedArgs[0]!;
+      const needle = emittedArgs[1]!;
+      if (!isArrayType(arr.type)) {
+        throw new Error("Codegen: tsn_array_index_of expects array receiver");
+      }
+      return this.emitArrayIndexOf(arr.llvm, needle, arr.type.element, lines);
+    }
+
+    if (sig.isExtern) {
+      this.noteExternUse(sig);
+    }
 
     const argList = emittedArgs.map((a) => `${toLlvmType(a.type)} ${a.llvm}`).join(", ");
     const argSuffix = argList ? argList : "";
@@ -6470,6 +6686,25 @@ export class LlvmCodegen {
     const retTy = toLlvmType(sig.returnType);
     lines.push(`  ${tmp} = call ${retTy} @${sig.mangledName}(${argSuffix})`);
     return { llvm: tmp, type: sig.returnType };
+  }
+
+  private noteExternUse(sig: FunctionSig): void {
+    this.externDeclares.add(sig.mangledName);
+    if (sig.mangledName.startsWith("tsn_str_") && sig.mangledName !== "tsn_str_len" && sig.mangledName !== "tsn_str_concat") {
+      this.needsTsnStrExtras = true;
+    }
+    if (
+      sig.mangledName === "tsn_array_push" ||
+      sig.mangledName === "tsn_array_pop" ||
+      sig.mangledName === "tsn_array_index_of" ||
+      sig.mangledName === "tsn_array_new" ||
+      sig.mangledName === "tsn_array_length"
+    ) {
+      this.needsTsnArray = true;
+    }
+    if (sig.mangledName === "tsn_str_len" || sig.mangledName === "tsn_str_concat") {
+      this.needsTsnString = true;
+    }
   }
 
   private emitPrintCall(call: CallExpression, lines: string[]): void {

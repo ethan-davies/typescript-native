@@ -1584,7 +1584,8 @@ describe("modules / compileFile", () => {
   it("compiles import math and emits mangled calls", () => {
     const result = compileFile(join(modulesDir, "main.tsn"));
     expect(result.success).toBe(true);
-    expect(result.modules).toHaveLength(2);
+    const userModules = result.modules.filter((m) => !m.moduleId.startsWith("std_prelude_"));
+    expect(userModules).toHaveLength(2);
     expect(result.ir).toContain("define i32 @math__add(i32 %arg0, i32 %arg1)");
     expect(result.ir).toContain("define i32 @math__mul(i32 %arg0, i32 %arg1)");
     expect(result.ir).toContain("call i32 @math__add(i32 5, i32 10)");

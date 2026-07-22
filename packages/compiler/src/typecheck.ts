@@ -266,6 +266,8 @@ interface FunctionSig {
   readonly returnType: ReturnType;
   readonly decl: FunctionDeclaration;
   readonly exported: boolean;
+  readonly isExtern: boolean;
+  readonly isExtension: boolean;
 }
 
 export interface ModuleNamespace {
@@ -313,6 +315,16 @@ const EQUALITY_PRIMITIVES = new Set<PrimitiveValueType>([
   "string",
   "null",
 ]);
+
+/** Active extension methods available while type-checking a module (concrete + generic). */
+let activeExtensions: ExtensionEntry[] = [];
+
+interface ExtensionEntry {
+  readonly name: string;
+  readonly kind: "concrete" | "generic";
+  readonly sig: FunctionSig | null;
+  readonly template: GenericFunctionTemplate | null;
+}
 
 /** Active import namespaces while type-checking a module. */
 let activeNamespaces: Map<string, ModuleNamespace> = new Map();
@@ -542,9 +554,14 @@ export function typecheckModules(
     syntheticObjectStructs = new Map();
     aliasExpandStack = [];
     activeFunctions = functions;
+    activeExtensions = collectExtensionsFromMaps(functions, genericFunctions);
 
     for (const decl of mod.ast.body) {
       if (decl.kind === "FunctionDeclaration") {
+        if (decl.isExtern) {
+          // Extern declarations have no body to type-check.
+          continue;
+        }
         if (decl.typeParams.length > 0) {
           checkGenericFunctionTemplate(decl, functions, structs, enums, diagnostics);
         } else {
@@ -587,9 +604,28 @@ export function typecheckModules(
   activeGenericClasses = new Map();
   activeGenericInterfaces = new Map();
   activeGenericFunctions = new Map();
+  activeExtensions = [];
   allModuleSymbols = new Map();
 
   return instantiationCollector.snapshot();
+}
+
+function collectExtensionsFromMaps(
+  functions: Map<string, FunctionSig>,
+  genericFunctions: Map<string, GenericFunctionTemplate>,
+): ExtensionEntry[] {
+  const out: ExtensionEntry[] = [];
+  for (const sig of functions.values()) {
+    if (sig.isExtension) {
+      out.push({ name: sig.name, kind: "concrete", sig, template: null });
+    }
+  }
+  for (const tpl of genericFunctions.values()) {
+    if (tpl.decl.params[0]?.isReceiver) {
+      out.push({ name: tpl.decl.name.name, kind: "generic", sig: null, template: tpl });
+    }
+  }
+  return out;
 }
 
 type NamedExportKind =
@@ -930,11 +966,17 @@ function collectModuleSymbols(
 
     functions.set(fn.name.name, {
       name: fn.name.name,
-      mangledName: fn.name.name === "main" ? "main" : mangleSymbol(mod.moduleId, fn.name.name),
+      mangledName: fn.isExtern
+        ? fn.name.name
+        : fn.name.name === "main"
+          ? "main"
+          : mangleSymbol(mod.moduleId, fn.name.name),
       params,
       returnType,
       decl: fn,
       exported: fn.exported,
+      isExtern: fn.isExtern,
+      isExtension: fn.params[0]?.isReceiver === true,
     });
   }
 
@@ -3490,6 +3532,22 @@ function inferTypeArgs(
   paramAnns: readonly TypeAnnotation[],
   argTypes: readonly ValueType[],
 ): TypeAnnotation[] | null {
+  const partial = inferTypeArgsPartial(typeParams, paramAnns, argTypes);
+  if (!partial) {
+    return null;
+  }
+  if (partial.some((a) => a === null)) {
+    return null;
+  }
+  return partial as TypeAnnotation[];
+}
+
+/** Like inferTypeArgs but allows unsolved params as null slots. */
+function inferTypeArgsPartial(
+  typeParams: readonly TypeParameter[],
+  paramAnns: readonly TypeAnnotation[],
+  argTypes: readonly ValueType[],
+): (TypeAnnotation | null)[] | null {
   const solutions = new Map<string, ValueType>();
   const unify = (ann: TypeAnnotation, concrete: ValueType): boolean => {
     if (ann.kind === "PrimitiveType") {
@@ -3500,6 +3558,26 @@ function inferTypeArgs(
         return false;
       }
       return unify(ann.element, concrete.element);
+    }
+    if (ann.kind === "FunctionType") {
+      if (typeof concrete !== "object" || concrete.kind !== "function") {
+        return false;
+      }
+      if (ann.params.length !== concrete.params.length) {
+        return false;
+      }
+      for (let i = 0; i < ann.params.length; i += 1) {
+        if (!unify(ann.params[i]!, concrete.params[i]! as ValueType)) {
+          return false;
+        }
+      }
+      if (ann.returnType.kind === "PrimitiveType" && ann.returnType.name === "void") {
+        return concrete.returnType === "void";
+      }
+      if (concrete.returnType === "void") {
+        return false;
+      }
+      return unify(ann.returnType, concrete.returnType as ValueType);
     }
     if (ann.kind === "NamedType" && ann.namespace === null && ann.typeArgs.length === 0) {
       const isParam = typeParams.some((tp) => tp.name.name === ann.name);
@@ -3512,7 +3590,6 @@ function inferTypeArgs(
         return true;
       }
     }
-    // Named concrete types — accept if names match after resolving would be complex; skip deep unify.
     return true;
   };
 
@@ -3521,15 +3598,10 @@ function inferTypeArgs(
       return null;
     }
   }
-  const args: TypeAnnotation[] = [];
-  for (const tp of typeParams) {
+  return typeParams.map((tp) => {
     const sol = solutions.get(tp.name.name);
-    if (!sol) {
-      return null;
-    }
-    args.push(valueTypeToLocalAnnotation(sol));
-  }
-  return args;
+    return sol ? valueTypeToLocalAnnotation(sol) : null;
+  });
 }
 
 function checkGenericFunctionCall(
@@ -3617,16 +3689,18 @@ function checkGenericFunctionCall(
     if (!checkConstraints(tpl.decl.typeParams, typeArgs, structs, enums, diagnostics, expr.span)) {
       return null;
     }
-    const instanceLocal = mangleFunctionInstance(tpl.decl.name.name, typeArgs);
-    instantiationCollector.callRewrites.set(expr.span.start.offset, instanceLocal);
-    instantiationCollector.add({
-      kind: "function",
-      instanceLocalName: instanceLocal,
-      moduleId: tpl.moduleId,
-      modulePath: tpl.modulePath,
-      templateLocalName: tpl.decl.name.name,
-      typeArgs,
-    });
+    if (!tpl.decl.isExtern) {
+      const instanceLocal = mangleFunctionInstance(tpl.decl.name.name, typeArgs);
+      instantiationCollector.callRewrites.set(expr.span.start.offset, instanceLocal);
+      instantiationCollector.add({
+        kind: "function",
+        instanceLocalName: instanceLocal,
+        moduleId: tpl.moduleId,
+        modulePath: tpl.modulePath,
+        templateLocalName: tpl.decl.name.name,
+        typeArgs,
+      });
+    }
   }
 
   const subst = new Map<string, TypeAnnotation>();
@@ -3687,13 +3761,37 @@ function checkFunction(
   enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): void {
+  if (fn.isExtern || !fn.body) {
+    return;
+  }
+
   const scope = new Map<string, Binding>();
   const returnType = resolveReturnType(fn.returnType, structs, enums, diagnostics);
   if (returnType === undefined) {
     return;
   }
 
+  const isExtension = fn.params[0]?.isReceiver === true;
+  const prevMemberContext = memberContext;
+  if (isExtension) {
+    const receiverType = resolveAnnotation(fn.params[0]!.typeAnnotation, structs, enums, diagnostics);
+    if (receiverType === null) {
+      return;
+    }
+    memberContext = {
+      thisType: receiverType,
+      enclosingClass: null,
+      enclosingStruct: null,
+      isConstructor: false,
+      isStatic: false,
+    };
+  }
+
   for (const param of fn.params) {
+    if (param.isReceiver) {
+      // Receiver is accessed via `this` expression, not as a named binding.
+      continue;
+    }
     const paramType = resolveAnnotation(param.typeAnnotation, structs, enums, diagnostics);
     if (paramType === null) {
       continue;
@@ -3748,6 +3846,8 @@ function checkFunction(
       );
     }
   }
+
+  memberContext = prevMemberContext;
 }
 
 function checkStructMethods(
@@ -6163,7 +6263,7 @@ function checkExpression(
       }
       if (!memberContext || memberContext.isStatic) {
         diagnostics.error(
-          "'this' is only allowed in instance methods and constructors",
+          "'this' is only allowed in instance methods, constructors, and extension methods",
           expr.span,
           "E0360",
         );
@@ -7481,122 +7581,326 @@ function checkMethodCall(
     }
   }
 
-  if (!isArrayType(resolvedObjectType)) {
-    diagnostics.error(
-      `Methods are not available on type '${typeToString(resolvedObjectType)}'`,
-      callee.object.span,
-      "E0326",
-    );
+  // Extension methods (prelude / imported): receiver.method(args) → method(receiver, args)
+  const extensionResult = checkExtensionMethodCall(
+    expr,
+    callee.property.name,
+    resolvedObjectType,
+    scope,
+    functions,
+    structs,
+    enums,
+    diagnostics,
+    allowVoidCall,
+  );
+  if (extensionResult !== undefined) {
+    return wrapOptionalCall(extensionResult);
+  }
+
+  diagnostics.error(
+    `Unknown method '${callee.property.name}' on type '${typeToString(resolvedObjectType)}'`,
+    callee.property.span,
+    "E0324",
+  );
+  return null;
+}
+
+/**
+ * Try to resolve an extension method. Returns `undefined` if no extension matches the name
+ * (caller should report unknown method). Returns `null` if a match failed type-checking.
+ */
+function checkExtensionMethodCall(
+  expr: Extract<Expression, { kind: "CallExpression" }>,
+  methodName: string,
+  receiverType: ValueType,
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  allowVoidCall: boolean,
+): ValueType | null | undefined {
+  const candidates = activeExtensions.filter((e) => e.name === methodName);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  for (const entry of candidates) {
+    if (entry.kind === "concrete" && entry.sig) {
+      const sig = entry.sig;
+      const expectedReceiver = sig.params[0];
+      if (!expectedReceiver || !isAssignable(receiverType, expectedReceiver)) {
+        continue;
+      }
+      instantiationCollector.extensionCallRewrites.set(expr.span.start.offset, sig.mangledName);
+      const callParams = sig.params.slice(1);
+      const callParamDecls = sig.decl.params.slice(1);
+      return checkMethodArgs(
+        methodName,
+        callParams,
+        callParamDecls,
+        sig.returnType,
+        expr,
+        scope,
+        functions,
+        structs,
+        enums,
+        diagnostics,
+        allowVoidCall,
+      );
+    }
+
+    if (entry.kind === "generic" && entry.template) {
+      const result = checkGenericExtensionCall(
+        expr,
+        entry.template,
+        receiverType,
+        scope,
+        functions,
+        structs,
+        enums,
+        diagnostics,
+        allowVoidCall,
+      );
+      if (result !== undefined) {
+        return result;
+      }
+    }
+  }
+
+  // Name matched but no receiver type fit — treat as unknown for this type.
+  return undefined;
+}
+
+function checkGenericExtensionCall(
+  expr: Extract<Expression, { kind: "CallExpression" }>,
+  tpl: GenericFunctionTemplate,
+  receiverType: ValueType,
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  allowVoidCall: boolean,
+): ValueType | null | undefined {
+  const receiverAnn = tpl.decl.params[0]?.typeAnnotation;
+  if (!receiverAnn) {
+    return undefined;
+  }
+
+  // Build synthetic arg list: receiver + call args for inference against full param list.
+  const mapped = mapCallArgumentsToSlots(
+    expr.args,
+    "method",
+    tpl.decl.name.name,
+    tpl.decl.params.slice(1),
+    expr.span,
+    diagnostics,
+  );
+  if (!mapped) {
     return null;
   }
 
-  const method = callee.property.name;
-  const elementType = resolvedObjectType.element;
+  const providedAnns: TypeAnnotation[] = [receiverAnn];
+  const providedTypes: ValueType[] = [receiverType];
 
-  switch (method) {
-    case "push": {
-      if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
-        return null;
+  // Infer T (and any other non-callback params) from the receiver first.
+  const partialFromReceiver = inferTypeArgsPartial(
+    tpl.decl.typeParams,
+    [receiverAnn],
+    [receiverType],
+  );
+
+  for (let i = 1; i < tpl.decl.params.length; i += 1) {
+    const slot = mapped.slots[i - 1];
+    if (slot === undefined) {
+      continue;
+    }
+    const paramAnn = tpl.decl.params[i]!.typeAnnotation;
+    let t: ValueType | null = null;
+
+    // Untyped lambdas: contextualize params from partially inferred type args (receiver),
+    // then take the body return type as the function return (to solve U in (T) => U).
+    if (
+      slot.kind === "LambdaExpression" &&
+      paramAnn.kind === "FunctionType" &&
+      partialFromReceiver
+    ) {
+      const substEarly = new Map<string, TypeAnnotation>();
+      for (let ti = 0; ti < tpl.decl.typeParams.length; ti += 1) {
+        const sol = partialFromReceiver[ti];
+        if (sol) {
+          substEarly.set(tpl.decl.typeParams[ti]!.name.name, sol);
+        }
       }
-      if (expr.args.length !== 1) {
-        diagnostics.error(
-          `Method 'push' expects 1 argument, got ${expr.args.length}`,
-          expr.span,
-          "E0315",
-        );
-        return null;
+      const subEarly = (ann: TypeAnnotation): TypeAnnotation => substituteAnnotation(ann, substEarly);
+      const expectedParams: ValueType[] = [];
+      let paramsOk = true;
+      for (const pAnn of paramAnn.params) {
+        const substituted = subEarly(pAnn);
+        // Unsolved type params (e.g. U in reduce's `(U, T) => U`) cannot contextualize yet.
+        if (
+          substituted.kind === "NamedType" &&
+          substituted.namespace === null &&
+          substituted.typeArgs.length === 0 &&
+          tpl.decl.typeParams.some((tp) => tp.name.name === substituted.name)
+        ) {
+          paramsOk = false;
+          break;
+        }
+        const pt = resolveAnnotation(substituted, structs, enums, diagnostics);
+        if (!pt || (typeof pt === "object" && pt.kind === "typeParam")) {
+          paramsOk = false;
+          break;
+        }
+        expectedParams.push(pt);
       }
-      const arg = expr.args[0]! as Expression;
-      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-      if (!argType) {
-        return null;
+      if (paramsOk && slot.params.length === expectedParams.length) {
+        const childScope = new Map(scope);
+        let lambdaOk = true;
+        for (let pi = 0; pi < slot.params.length; pi += 1) {
+          const lp = slot.params[pi]!;
+          if (lp.typeAnnotation) {
+            const annotated = resolveAnnotation(lp.typeAnnotation, structs, enums, diagnostics);
+            if (!annotated || !typesEqual(annotated, expectedParams[pi]!)) {
+              lambdaOk = false;
+              break;
+            }
+          }
+          childScope.set(lp.name.name, { type: expectedParams[pi]!, mutable: false });
+        }
+        if (lambdaOk && slot.body.kind === "expression") {
+          lambdaDepth += 1;
+          const bodyType = checkExpression(
+            slot.body.expression,
+            childScope,
+            functions,
+            structs,
+            enums,
+            diagnostics,
+          );
+          lambdaDepth -= 1;
+          if (bodyType) {
+            t = {
+              kind: "function",
+              params: expectedParams,
+              returnType: bodyType,
+            };
+          }
+        }
       }
-      if (!valueMatchesBinding(arg, argType, elementType)) {
-        diagnostics.error(typeMismatchMessage(elementType, argType), arg.span, "E0303");
-        return null;
-      }
-      if (!allowVoidCall) {
-        diagnostics.error("'push' cannot be used as a value", expr.span, "E0309");
-      }
+    }
+
+    if (!t) {
+      t = checkExpression(slot, scope, functions, structs, enums, diagnostics);
+    }
+    if (!t) {
       return null;
     }
-    case "pop": {
-      if (expr.args.length !== 0) {
-        diagnostics.error(
-          `Method 'pop' expects 0 arguments, got ${expr.args.length}`,
-          expr.span,
-          "E0315",
-        );
-        return null;
-      }
-      return wrapOptionalCall(elementType);
-    }
-    case "includes": {
-      if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
-        return null;
-      }
-      if (expr.args.length !== 1) {
-        diagnostics.error(
-          `Method 'includes' expects 1 argument, got ${expr.args.length}`,
-          expr.span,
-          "E0315",
-        );
-        return null;
-      }
-      if (!supportsEquality(elementType)) {
-        diagnostics.error(
-          `Method 'includes' is not supported for element type '${typeToString(elementType)}'`,
-          expr.span,
-          "E0327",
-        );
-        return null;
-      }
-      const arg = expr.args[0]! as Expression;
-      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-      if (!argType) {
-        return null;
-      }
-      if (!valueMatchesBinding(arg, argType, elementType)) {
-        diagnostics.error(typeMismatchMessage(elementType, argType), arg.span, "E0303");
-        return null;
-      }
-      return "bool";
-    }
-    case "indexOf": {
-      if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
-        return null;
-      }
-      if (expr.args.length !== 1) {
-        diagnostics.error(
-          `Method 'indexOf' expects 1 argument, got ${expr.args.length}`,
-          expr.span,
-          "E0315",
-        );
-        return null;
-      }
-      if (!supportsEquality(elementType)) {
-        diagnostics.error(
-          `Method 'indexOf' is not supported for element type '${typeToString(elementType)}'`,
-          expr.span,
-          "E0327",
-        );
-        return null;
-      }
-      const arg = expr.args[0]! as Expression;
-      const argType = checkExpression(arg, scope, functions, structs, enums, diagnostics);
-      if (!argType) {
-        return null;
-      }
-      if (!valueMatchesBinding(arg, argType, elementType)) {
-        diagnostics.error(typeMismatchMessage(elementType, argType), arg.span, "E0303");
-        return null;
-      }
-      return "i32";
-    }
-    default:
-      diagnostics.error(`Unknown method '${method}'`, callee.property.span, "E0324");
-      return null;
+    providedAnns.push(paramAnn);
+    providedTypes.push(t);
   }
+
+  let typeArgs = expr.typeArgs;
+  if (typeArgs.length === 0) {
+    const inferred = inferTypeArgs(tpl.decl.typeParams, providedAnns, providedTypes);
+    if (inferred) {
+      typeArgs = inferred;
+    }
+  }
+
+  if (typeArgs.length === 0) {
+    return undefined;
+  }
+  if (!checkTypeArgArity(tpl.decl.name.name, tpl.decl.typeParams, typeArgs, expr.span, diagnostics)) {
+    return null;
+  }
+
+  const resolvedArgTypes: ValueType[] = [];
+  let hasTypeParamArg = false;
+  for (const arg of typeArgs) {
+    const vt = resolveAnnotation(arg, structs, enums, diagnostics);
+    if (vt === null) {
+      return null;
+    }
+    if (typeof vt === "object" && vt.kind === "typeParam") {
+      hasTypeParamArg = true;
+    }
+    resolvedArgTypes.push(vt);
+  }
+
+  if (!hasTypeParamArg) {
+    if (!checkConstraints(tpl.decl.typeParams, typeArgs, structs, enums, diagnostics, expr.span)) {
+      return null;
+    }
+    const instanceLocal = mangleFunctionInstance(tpl.decl.name.name, typeArgs);
+    const mangled = mangleSymbol(tpl.moduleId, instanceLocal);
+    instantiationCollector.extensionCallRewrites.set(expr.span.start.offset, mangled);
+    instantiationCollector.add({
+      kind: "function",
+      instanceLocalName: instanceLocal,
+      moduleId: tpl.moduleId,
+      modulePath: tpl.modulePath,
+      templateLocalName: tpl.decl.name.name,
+      typeArgs,
+    });
+  }
+
+  const subst = new Map<string, TypeAnnotation>();
+  for (let i = 0; i < tpl.decl.typeParams.length; i += 1) {
+    subst.set(tpl.decl.typeParams[i]!.name.name, typeArgs[i]!);
+  }
+  const sub = (ann: TypeAnnotation): TypeAnnotation => substituteAnnotation(ann, subst);
+
+  const expectedReceiver = resolveAnnotation(sub(receiverAnn), structs, enums, diagnostics);
+  if (expectedReceiver === null || !isAssignable(receiverType, expectedReceiver)) {
+    return undefined;
+  }
+
+  const callParamDecls = tpl.decl.params.slice(1);
+  const paramTypes: ValueType[] = [];
+  for (const param of callParamDecls) {
+    const expected = resolveAnnotation(sub(param.typeAnnotation), structs, enums, diagnostics);
+    if (expected === null) {
+      return null;
+    }
+    paramTypes.push(expected);
+  }
+
+  if (
+    !checkDeclarationCallArgs(
+      expr,
+      "method",
+      tpl.decl.name.name,
+      callParamDecls,
+      paramTypes,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      (defaultExpr) => substituteExpression(defaultExpr, subst),
+    )
+  ) {
+    return null;
+  }
+
+  const returnType = resolveReturnType(sub(tpl.decl.returnType), structs, enums, diagnostics);
+  if (returnType === undefined) {
+    return null;
+  }
+  if (returnType === "void") {
+    if (!allowVoidCall) {
+      diagnostics.error(
+        `Void method '${tpl.decl.name.name}' cannot be used as a value`,
+        expr.span,
+        "E0309",
+      );
+    }
+    return null;
+  }
+  void resolvedArgTypes;
+  return returnType;
 }
 
 function checkGenericMethodCall(

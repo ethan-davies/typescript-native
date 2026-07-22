@@ -148,6 +148,51 @@ void tsn_free(void *ptr);
 
 int32_t tsn_str_len(const char *s);
 char *tsn_str_concat(const char *left, const char *right);
+int32_t tsn_str_index_of(const char *haystack, const char *needle);
+bool tsn_str_contains(const char *haystack, const char *needle);
+bool tsn_str_starts_with(const char *s, const char *prefix);
+bool tsn_str_ends_with(const char *s, const char *suffix);
+char *tsn_str_substring(const char *s, int32_t start, int32_t end);
+char *tsn_str_trim(const char *s);
+char *tsn_str_to_upper(const char *s);
+char *tsn_str_to_lower(const char *s);
+char *tsn_str_replace(const char *s, const char *from, const char *to);
+/* Returns a GC-managed string[] (array header pointer). */
+char *tsn_str_split(const char *s, const char *sep);
+char tsn_str_char_at(const char *s, int32_t index);
+char *tsn_str_repeat(const char *s, int32_t count);
+char *tsn_str_pad_start(const char *s, int32_t target_len, const char *pad);
+char *tsn_str_pad_end(const char *s, int32_t target_len, const char *pad);
+/* Join a string[] with a separator. */
+char *tsn_str_join(void *parts, const char *sep);
+int32_t tsn_str_last_index_of(const char *haystack, const char *needle);
+
+/* Math (libm). Floating wrappers use f64; integer helpers are separate. */
+double tsn_math_abs(double x);
+double tsn_math_min(double a, double b);
+double tsn_math_max(double a, double b);
+double tsn_math_floor(double x);
+double tsn_math_ceil(double x);
+double tsn_math_round(double x);
+double tsn_math_sqrt(double x);
+double tsn_math_pow(double base, double exponent);
+double tsn_math_sin(double x);
+double tsn_math_cos(double x);
+double tsn_math_tan(double x);
+double tsn_math_log(double x);
+double tsn_math_exp(double x);
+int32_t tsn_math_abs_i32(int32_t x);
+int64_t tsn_math_abs_i64(int64_t x);
+int32_t tsn_math_min_i32(int32_t a, int32_t b);
+int32_t tsn_math_max_i32(int32_t a, int32_t b);
+int64_t tsn_math_min_i64(int64_t a, int64_t b);
+int64_t tsn_math_max_i64(int64_t a, int64_t b);
+
+/* Random number generation (seeded from time on first use). */
+void tsn_random_seed(int64_t seed);
+double tsn_random(void);
+int32_t tsn_random_int(int32_t min, int32_t max);
+double tsn_random_float(double min, double max);
 
 void *tsn_array_new(int64_t length, int64_t capacity, int64_t elem_size);
 int32_t tsn_array_length(void *arr);
