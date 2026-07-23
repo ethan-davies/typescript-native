@@ -2,8 +2,12 @@
 import { Command } from "commander";
 import { runBuild } from "./commands/build.js";
 import { runCompile } from "./commands/compile.js";
+import { runAdd, runInstall, runRemove, runUpdate } from "./commands/deps.js";
 import { runFmt } from "./commands/fmt.js";
 import { runInit } from "./commands/init.js";
+import { runLogin, runLogout } from "./commands/login.js";
+import { runPublish } from "./commands/publish.js";
+import { runInfo, runSearch } from "./commands/search.js";
 import { runRun } from "./commands/run.js";
 
 const program = new Command();
@@ -18,16 +22,11 @@ program
   .description("Create a new sn project with project.toml")
   .argument("[directory]", "project directory", ".")
   .option("-f, --force", "overwrite existing files", false)
-  .option("-n, --name <name>", "package name (default: directory name)")
-  .action((directory: string, options: { force: boolean; name?: string }) => {
-    const initOpts: { directory: string; force: boolean; name?: string } = {
+  .action((directory: string, options: { force: boolean }) => {
+    process.exitCode = runInit({
       directory,
       force: options.force,
-    };
-    if (options.name !== undefined) {
-      initOpts.name = options.name;
-    }
-    process.exitCode = runInit(initOpts);
+    });
   });
 
 program
@@ -91,6 +90,74 @@ program
   )
   .action((input: string | undefined, options: { output?: string }) => {
     process.exitCode = runCompile(input, options.output);
+  });
+
+program
+  .command("login")
+  .description("Log in to the Sonite registry via device code")
+  .action(async () => {
+    process.exitCode = await runLogin();
+  });
+
+program
+  .command("logout")
+  .description("Log out and revoke the local registry token")
+  .action(async () => {
+    process.exitCode = await runLogout();
+  });
+
+program
+  .command("search")
+  .description("Search packages on the registry")
+  .argument("[query]", "substring to match against package names")
+  .action(async (query: string | undefined) => {
+    process.exitCode = await runSearch(query);
+  });
+
+program
+  .command("info")
+  .description("Show registry package details and versions")
+  .argument("<name>", "package name")
+  .action(async (name: string) => {
+    process.exitCode = await runInfo(name);
+  });
+
+program
+  .command("add")
+  .description("Add a dependency to the current project")
+  .argument("<package>", "package name, optionally name@version")
+  .action(async (pkg: string) => {
+    process.exitCode = await runAdd(pkg);
+  });
+
+program
+  .command("remove")
+  .description("Remove a dependency from the current project")
+  .argument("<package>", "package name")
+  .action(async (pkg: string) => {
+    process.exitCode = await runRemove(pkg);
+  });
+
+program
+  .command("install")
+  .description("Install dependencies from project.toml / sn.lock")
+  .action(async () => {
+    process.exitCode = await runInstall();
+  });
+
+program
+  .command("update")
+  .description("Update dependencies to their latest versions")
+  .argument("[package]", "update only this package")
+  .action(async (pkg: string | undefined) => {
+    process.exitCode = await runUpdate(pkg);
+  });
+
+program
+  .command("publish")
+  .description("Publish the current project to the registry")
+  .action(async () => {
+    process.exitCode = await runPublish();
   });
 
 // `sn examples/hello.sn` is shorthand for `sn run examples/hello.sn`

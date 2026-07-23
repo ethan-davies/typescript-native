@@ -5,9 +5,10 @@ import { parse as parseToml } from "smol-toml";
 export interface ProjectPackage {
   readonly name: string;
   readonly version: string;
-  readonly description: string;
-  readonly license: string;
-  readonly authors: readonly string[];
+  /** Optional metadata — omitted from project.toml when unset. */
+  readonly description?: string;
+  readonly license?: string;
+  readonly authors?: readonly string[];
   readonly entry: string;
 }
 
@@ -20,6 +21,8 @@ export interface Project {
   readonly manifestPath: string;
   readonly package: ProjectPackage;
   readonly build: ProjectBuild;
+  /** Exact version pins from `[dependencies]`. */
+  readonly dependencies: Readonly<Record<string, string>>;
   /** Absolute path to the entry .sn file. */
   readonly entryPath: string;
   /** Absolute path to the build output directory. */
@@ -96,10 +99,11 @@ export function loadProjectFromManifest(manifestPath: string): Project {
   const name = requireString(pkgTable, "name", "package.name");
   const version = requireString(pkgTable, "version", "package.version");
   const entry = requireString(pkgTable, "entry", "package.entry");
-  const description = optionalString(pkgTable, "description") ?? "";
-  const license = optionalString(pkgTable, "license") ?? "MIT";
-  const authors = optionalStringArray(pkgTable, "authors") ?? [];
+  const description = optionalString(pkgTable, "description");
+  const license = optionalString(pkgTable, "license");
+  const authors = optionalStringArray(pkgTable, "authors");
   const outdir = optionalString(buildTable, "outdir") ?? "dist";
+  const dependencies = parseDependencies(table);
 
   if (!name.trim()) {
     throw new ProjectError("package.name must not be empty");
@@ -108,22 +112,53 @@ export function loadProjectFromManifest(manifestPath: string): Project {
     throw new ProjectError("package.entry must not be empty");
   }
 
+  const pkg: {
+    name: string;
+    version: string;
+    entry: string;
+    description?: string;
+    license?: string;
+    authors?: readonly string[];
+  } = { name, version, entry };
+  if (description !== undefined) {
+    pkg.description = description;
+  }
+  if (license !== undefined) {
+    pkg.license = license;
+  }
+  if (authors !== undefined) {
+    pkg.authors = authors;
+  }
+
   return {
     root,
     manifestPath: absoluteManifest,
-    package: {
-      name,
-      version,
-      description,
-      license,
-      authors,
-      entry,
-    },
+    package: pkg,
     build: { outdir },
+    dependencies,
     entryPath: resolve(root, entry),
     outdirPath: resolve(root, outdir),
     binaryName: name,
   };
+}
+
+function parseDependencies(
+  table: Record<string, unknown>,
+): Record<string, string> {
+  if (table.dependencies === undefined) {
+    return {};
+  }
+  const depsTable = requireTable(table, "dependencies");
+  const deps: Record<string, string> = {};
+  for (const [key, value] of Object.entries(depsTable)) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new ProjectError(
+        `project.toml: dependencies.${key} must be a non-empty version string`,
+      );
+    }
+    deps[key] = value.trim();
+  }
+  return deps;
 }
 
 function requireTable(

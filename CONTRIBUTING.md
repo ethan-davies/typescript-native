@@ -9,7 +9,7 @@ Please read the [Code of Conduct](./CODE_OF_CONDUCT.md) before participating. Se
 - [Node.js](https://nodejs.org/) 20+
 - [pnpm](https://pnpm.io/) 10+
 
-Native `sn build` / `sn run` link with clang. The CLI resolves clang from `SN_CLANG`, then `PATH`, then a cached LLVM download under `~/.cache/sn/` (no manual clang install required). Override the cache root with `SN_CACHE_DIR` if needed.
+Native `sn build` / `sn run` link with clang. The CLI resolves clang from `SN_CLANG`, then `PATH`, then a cached LLVM download under `~/.cache/sonite/` (no manual clang install required). Override the cache root with `SN_CACHE_DIR` if needed.
 
 ## Setup
 

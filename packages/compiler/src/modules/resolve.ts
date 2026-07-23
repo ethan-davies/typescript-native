@@ -46,7 +46,11 @@ export interface ResolveResult {
 
 export type StdRootProvider = () => string | null;
 
+/** Maps package name → absolute package root directory (contains project.toml). */
+export type PackageRootsProvider = () => ReadonlyMap<string, string> | null;
+
 let stdRootProvider: StdRootProvider | null = null;
+let packageRootsProvider: PackageRootsProvider | null = null;
 
 /** Provide the absolute path to `packages/std/src` (or null if unavailable). */
 export function setStdRootProvider(provider: StdRootProvider | null): void {
@@ -57,10 +61,117 @@ export function getStdRootPath(): string | null {
   return stdRootProvider?.() ?? null;
 }
 
+/** Provide installed registry packages (name → directory). */
+export function setPackageRootsProvider(
+  provider: PackageRootsProvider | null,
+): void {
+  packageRootsProvider = provider;
+}
+
+export function getPackageRoots(): ReadonlyMap<string, string> | null {
+  return packageRootsProvider?.() ?? null;
+}
+
 function isStdSpecifier(specifier: string): boolean {
   const spec = specifier.trim();
   return spec === "std" || spec.startsWith("std/");
 }
+
+/** Bare package name: no path separators, not std, not relative. */
+function isBarePackageSpecifier(specifier: string): boolean {
+  const spec = specifier.trim();
+  if (!spec || isStdSpecifier(spec)) {
+    return false;
+  }
+  if (spec.startsWith("./") || spec.startsWith("../")) {
+    return false;
+  }
+  if (spec.includes("/") || spec.includes("\\")) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Resolve entry `.sn` for an installed package directory.
+ * Reads `entry` from project.toml when present; else tries common fallbacks.
+ */
+export function resolvePackageEntry(packageDir: string): string | null {
+  const manifestPath = join(packageDir, "project.toml");
+  if (existsSync(manifestPath)) {
+    try {
+      const text = readFileSync(manifestPath, "utf8");
+      const match = text.match(/^\s*entry\s*=\s*"([^"]+)"\s*$/m);
+      if (match?.[1]) {
+        const entry = resolvePath(packageDir, match[1]);
+        if (existsSync(entry)) {
+          return entry;
+        }
+      }
+    } catch {
+      // fall through to defaults
+    }
+  }
+  for (const candidate of [
+    join(packageDir, "src", "main.sn"),
+    join(packageDir, "index.sn"),
+    join(packageDir, "main.sn"),
+  ]) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function resolvePackageSpecifier(specifier: string): string | null {
+  if (!isBarePackageSpecifier(specifier)) {
+    return null;
+  }
+  const roots = getPackageRoots();
+  if (!roots) {
+    return null;
+  }
+  const name = specifier.trim();
+  const dir = roots.get(name);
+  if (!dir) {
+    return null;
+  }
+  return resolvePackageEntry(dir);
+}
+
+/**
+ * Stable mangling id for files under an installed package root.
+ * e.g. package `hello` entry → `pkg_hello`; `hello/src/util.sn` → `pkg_hello_util`.
+ */
+export function moduleIdForPackagePath(absolutePath: string): string | null {
+  const roots = getPackageRoots();
+  if (!roots) {
+    return null;
+  }
+  const normalized = absolutePath.replace(/\\/g, "/");
+  for (const [name, dir] of roots) {
+    const rootNorm = dir.replace(/\\/g, "/").replace(/\/$/, "");
+    if (!normalized.startsWith(`${rootNorm}/`) && normalized !== rootNorm) {
+      continue;
+    }
+    let rel = normalized.slice(rootNorm.length + 1);
+    if (rel.toLowerCase().endsWith(".sn")) {
+      rel = rel.slice(0, -".sn".length);
+    }
+    if (rel.endsWith("/index")) {
+      rel = rel.slice(0, -"/index".length);
+    }
+    // Strip common entry prefixes for stable ids.
+    if (rel === "src/main" || rel === "main" || rel === "index" || rel === "") {
+      return `pkg_${name.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    }
+    const safeRel = rel.replace(/\//g, "_").replace(/[^a-zA-Z0-9_]/g, "_");
+    return `pkg_${name.replace(/[^a-zA-Z0-9_]/g, "_")}_${safeRel}`;
+  }
+  return null;
+}
+
 
 /**
  * Resolve a `std/...` specifier against the standard-library root.
@@ -128,7 +239,8 @@ export function moduleIdForStdPath(absolutePath: string): string | null {
 /**
  * Normalize an import specifier to an absolute `.sn` path.
  * Accepts `"math"`, `"./math"`, `"math.sn"`, `"./math.sn"`, `"math/vector"`,
- * and `"std/math"` (resolved against the standard library root).
+ * `"std/math"` (std root), and bare registry package names when package roots
+ * are registered.
  */
 export function resolveImportSpecifier(
   importerDir: string,
@@ -150,6 +262,11 @@ export function resolveImportSpecifier(
     return resolvePath(root, `${rest || "index"}.sn`);
   }
 
+  const packagePath = resolvePackageSpecifier(specifier);
+  if (packagePath) {
+    return packagePath;
+  }
+
   let spec = specifier.trim();
   if (spec.startsWith("./")) {
     spec = spec.slice(2);
@@ -161,6 +278,11 @@ export function resolveImportSpecifier(
 }
 
 function defaultNamespaceFromPath(absolutePath: string): string {
+  const pkgId = moduleIdForPackagePath(absolutePath);
+  if (pkgId) {
+    const parts = pkgId.replace(/^pkg_/, "").split("_");
+    return parts[0] || "pkg";
+  }
   const stdId = moduleIdForStdPath(absolutePath);
   if (stdId) {
     const parts = stdId.replace(/^std_/, "").split("_");
@@ -187,7 +309,11 @@ export function resolveModules(
     absolutePath: string,
     preferRealFs: boolean,
   ): string {
-    if (preferRealFs || moduleIdForStdPath(absolutePath) !== null) {
+    if (
+      preferRealFs ||
+      moduleIdForStdPath(absolutePath) !== null ||
+      moduleIdForPackagePath(absolutePath) !== null
+    ) {
       return readFileSync(absolutePath, "utf8");
     }
     return readFile(absolutePath);
@@ -214,9 +340,10 @@ export function resolveModules(
     diagnostics.setFile(absolutePath);
 
     const isStdModule = moduleIdForStdPath(absolutePath) !== null;
+    const isPackageModule = moduleIdForPackagePath(absolutePath) !== null;
     let source: string;
     try {
-      source = readModuleSource(absolutePath, isStdModule);
+      source = readModuleSource(absolutePath, isStdModule || isPackageModule);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       diagnostics.error(
@@ -247,9 +374,15 @@ export function resolveModules(
     for (const decl of importDecls) {
       const resolved = resolveImportSpecifier(importerDir, decl.source.value);
       const stdImport = isStdSpecifier(decl.source.value);
+      const packageImport = resolvePackageSpecifier(decl.source.value) !== null;
 
       try {
-        if (stdImport || moduleIdForStdPath(resolved) !== null) {
+        if (
+          stdImport ||
+          packageImport ||
+          moduleIdForStdPath(resolved) !== null ||
+          moduleIdForPackagePath(resolved) !== null
+        ) {
           if (!existsSync(resolved)) {
             throw new Error("ENOENT");
           }
@@ -325,7 +458,9 @@ export function resolveModules(
       source,
       ast,
       moduleId:
-        moduleIdForStdPath(absolutePath) ?? moduleIdFromPath(absolutePath),
+        moduleIdForStdPath(absolutePath) ??
+        moduleIdForPackagePath(absolutePath) ??
+        moduleIdFromPath(absolutePath),
       isEntry,
       imports: bindings,
     };

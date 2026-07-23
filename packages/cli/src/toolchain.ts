@@ -9,8 +9,9 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { getCacheDir } from "./config.js";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -65,9 +66,7 @@ export async function resolveClang(): Promise<ResolvedClang> {
 }
 
 export function llvmCacheRoot(): string {
-  const override = process.env.SN_CACHE_DIR?.trim();
-  const base = override || join(homedir(), ".cache", "sn");
-  return join(base, `llvm-${PINNED_LLVM_VERSION}`);
+  return join(getCacheDir(), `llvm-${PINNED_LLVM_VERSION}`);
 }
 
 function clangBinaryName(): string {

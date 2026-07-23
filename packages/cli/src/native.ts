@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { compileFile, formatDiagnostics } from "@sonite/compiler";
 import { getRuntimeLibraryPath } from "@sonite/runtime";
+import { applyProjectPackageRoots } from "./deps/roots.js";
 import { resolveClang } from "./toolchain.js";
 
 export interface CompileToIrResult {
@@ -13,6 +14,7 @@ export interface CompileToIrResult {
 
 export function compileSourceFile(inputPath: string): CompileToIrResult | null {
   const absoluteInput = resolve(inputPath);
+  applyProjectPackageRoots(dirname(absoluteInput));
   const fileName = basename(absoluteInput);
   const result = compileFile(absoluteInput);
 

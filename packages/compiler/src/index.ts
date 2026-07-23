@@ -34,9 +34,12 @@ export {
   moduleIdFromPath,
   resolveImportSpecifier,
   resolveModules,
+  setPackageRootsProvider,
+  setStdRootProvider,
 } from "./modules/index.js";
 export type {
   ModuleImportBinding,
+  PackageRootsProvider,
   ReadFileFn,
   ResolveResult,
   ResolvedModule,

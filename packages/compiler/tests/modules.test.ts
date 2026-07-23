@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { DiagnosticCollector } from "../src/diagnostics/index.js";
 import {
   moduleIdFromPath,
   resolveImportSpecifier,
   resolveModules,
+  setPackageRootsProvider,
 } from "../src/modules/index.js";
 
 describe("module resolution", () => {
+  afterEach(() => {
+    setPackageRootsProvider(null);
+  });
+
   it("normalizes import specifiers to .sn paths", () => {
     const dir = "/proj";
     expect(resolveImportSpecifier(dir, "math")).toBe("/proj/math.sn");
@@ -16,6 +24,29 @@ describe("module resolution", () => {
     expect(resolveImportSpecifier(dir, "math/vector")).toBe(
       "/proj/math/vector.sn",
     );
+  });
+
+  it("resolves bare package names from registered package roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "sn-pkg-resolve-"));
+    const pkgDir = join(root, "hello");
+    mkdirSync(join(pkgDir, "src"), { recursive: true });
+    writeFileSync(
+      join(pkgDir, "project.toml"),
+      `[package]\nname = "hello"\nversion = "1.0.0"\nentry = "src/main.sn"\n`,
+      "utf8",
+    );
+    writeFileSync(
+      join(pkgDir, "src", "main.sn"),
+      `export function greet(): void {}\n`,
+      "utf8",
+    );
+
+    setPackageRootsProvider(() => new Map([["hello", pkgDir]]));
+    expect(resolveImportSpecifier("/proj", "hello")).toBe(
+      join(pkgDir, "src", "main.sn"),
+    );
+    // Unregistered bare name still resolves relatively.
+    expect(resolveImportSpecifier("/proj", "math")).toBe("/proj/math.sn");
   });
 
   it("derives module ids from file basenames", () => {
