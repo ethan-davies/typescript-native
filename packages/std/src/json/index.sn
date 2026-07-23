@@ -1,0 +1,191 @@
+extern function sn_str_concat(left: string, right: string): string;
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_f64_to_string(value: f64): string;
+extern function sn_i32_to_string(value: i32): string;
+extern function sn_i64_to_string(value: i64): string;
+extern function sn_str_replace_all(s: string, needle: string, replacement: string): string;
+
+/**
+ * Minimal JSON values for `stringify`.
+ * Supports null, bool, number, string, arrays, and objects (string keys).
+ */
+export class Json {
+  private kind: i32;
+  private b: bool;
+  private n: f64;
+  private s: string;
+  private items: Json[];
+  private keys: string[];
+  private vals: Json[];
+
+  constructor() {
+    this.kind = 0;
+    this.b = false;
+    this.n = 0.0;
+    this.s = "";
+    let empty: Json[] = [];
+    this.items = empty;
+    let ks: string[] = [];
+    this.keys = ks;
+    let vs: Json[] = [];
+    this.vals = vs;
+  }
+
+  static nullValue(): Json {
+    return new Json();
+  }
+
+  static bool(v: bool): Json {
+    let j = new Json();
+    j.kind = 1;
+    j.b = v;
+    return j;
+  }
+
+  static number(v: f64): Json {
+    let j = new Json();
+    j.kind = 2;
+    j.n = v;
+    return j;
+  }
+
+  static string(v: string): Json {
+    let j = new Json();
+    j.kind = 3;
+    j.s = v;
+    return j;
+  }
+
+  static array(items: Json[]): Json {
+    let j = new Json();
+    j.kind = 4;
+    j.items = items;
+    return j;
+  }
+
+  static object(): Json {
+    let j = new Json();
+    j.kind = 5;
+    return j;
+  }
+
+  /** Build an object from a string→string map. */
+  static fromStringMap(map: { [key: string]: string | null }): Json {
+    let j = Json.object();
+    let keys = sn_map_keys(map);
+    let i: i32 = 0;
+    while (i < keys.length) {
+      let v = sn_map_get(map, keys[i]);
+      if (v == null) {
+        j.set(keys[i], Json.nullValue());
+      } else {
+        j.set(keys[i], Json.string(v));
+      }
+      i = i + 1;
+    }
+    return j;
+  }
+
+  set(key: string, value: Json): Json {
+    sn_array_push(this.keys, key);
+    sn_array_push(this.vals, value);
+    return this;
+  }
+
+  push(value: Json): Json {
+    sn_array_push(this.items, value);
+    return this;
+  }
+
+  stringify(): string {
+    if (this.kind == 0) {
+      return "null";
+    }
+    if (this.kind == 1) {
+      if (this.b) {
+        return "true";
+      }
+      return "false";
+    }
+    if (this.kind == 2) {
+      return sn_f64_to_string(this.n);
+    }
+    if (this.kind == 3) {
+      return sn_str_concat("\"", sn_str_concat(escapeJson(this.s), "\""));
+    }
+    if (this.kind == 4) {
+      let out = "[";
+      let i: i32 = 0;
+      while (i < this.items.length) {
+        if (i > 0) {
+          out = sn_str_concat(out, ",");
+        }
+        out = sn_str_concat(out, this.items[i].stringify());
+        i = i + 1;
+      }
+      return sn_str_concat(out, "]");
+    }
+    let out2 = "{";
+    let j: i32 = 0;
+    while (j < this.keys.length) {
+      if (j > 0) {
+        out2 = sn_str_concat(out2, ",");
+      }
+      out2 = sn_str_concat(
+        out2,
+        sn_str_concat(
+          "\"",
+          sn_str_concat(escapeJson(this.keys[j]), sn_str_concat("\":", this.vals[j].stringify()))
+        )
+      );
+      j = j + 1;
+    }
+    return sn_str_concat(out2, "}");
+  }
+}
+
+extern function sn_map_keys(map: { [key: string]: string | null }): string[];
+extern function sn_map_get(map: { [key: string]: string | null }, key: string): string | null;
+
+function escapeJson(s: string): string {
+  let t = sn_str_replace_all(s, "\\", "\\\\");
+  t = sn_str_replace_all(t, "\"", "\\\"");
+  t = sn_str_replace_all(t, "\n", "\\n");
+  t = sn_str_replace_all(t, "\r", "\\r");
+  t = sn_str_replace_all(t, "\t", "\\t");
+  return t;
+}
+
+export function stringify(value: Json): string {
+  return value.stringify();
+}
+
+export function stringifyString(s: string): string {
+  return Json.string(s).stringify();
+}
+
+export function stringifyNumber(n: f64): string {
+  return Json.number(n).stringify();
+}
+
+export function stringifyBool(b: bool): string {
+  return Json.bool(b).stringify();
+}
+
+export function stringifyNull(): string {
+  return "null";
+}
+
+export function stringifyStringMap(map: { [key: string]: string | null }): string {
+  return Json.fromStringMap(map).stringify();
+}
+
+export function stringifyStringArray(items: string[]): string {
+  let arr = Json.array([]);
+  let i: i32 = 0;
+  while (i < items.length) {
+    arr.push(Json.string(items[i]));
+    i = i + 1;
+  }
+  return arr.stringify();
+}

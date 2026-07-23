@@ -77,7 +77,17 @@ export async function linkNative(options: LinkOptions): Promise<number> {
 
     const clang = spawnSync(
       clangPath,
-      [llPath, runtimeLibrary, "-lm", "-o", binPath, "-Wno-override-module"],
+      [
+        llPath,
+        runtimeLibrary,
+        "-lm",
+        "-lpthread",
+        "-lssl",
+        "-lcrypto",
+        "-o",
+        binPath,
+        "-Wno-override-module",
+      ],
       { encoding: "utf8" },
     );
 
@@ -106,6 +116,7 @@ export async function linkNative(options: LinkOptions): Promise<number> {
 export async function compileLinkAndRun(
   inputPath: string,
   args: readonly string[] = [],
+  options: { cwd?: string } = {},
 ): Promise<number> {
   const compiled = compileSourceFile(inputPath);
   if (!compiled) {
@@ -124,7 +135,10 @@ export async function compileLinkAndRun(
       return status;
     }
 
-    const run = spawnSync(binPath, [...args], { stdio: "inherit" });
+    const run = spawnSync(binPath, [...args], {
+      stdio: "inherit",
+      cwd: options.cwd,
+    });
     if (run.error) {
       console.error(`error: failed to run program: ${run.error.message}`);
       return 1;

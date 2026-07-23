@@ -1,0 +1,1221 @@
+import { TcpListener, TcpStream } from "std/net";
+import { TlsStream } from "std/tls";
+import { sleep, spawn, race } from "std/async";
+
+extern function sn_str_to_lower(s: string): string;
+extern function sn_str_concat(left: string, right: string): string;
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_str_split(s: string, sep: string): string[];
+extern function sn_str_index_of(haystack: string, needle: string): i32;
+extern function sn_str_substring(s: string, start: i32, end: i32): string;
+extern function sn_str_len(s: string): i32;
+extern function sn_str_parse_i32(s: string): i32;
+extern function sn_i32_to_string(value: i32): string;
+extern function sn_i64_to_string(value: i64): string;
+extern function sn_str_trim(s: string): string;
+extern function sn_str_starts_with(s: string, prefix: string): bool;
+extern function sn_str_ends_with(s: string, suffix: string): bool;
+extern function sn_bytes_from_cstr(s: string): i64;
+extern function sn_bytes_to_utf8(handle: i64): string | null;
+extern function sn_bytes_len(handle: i64): i64;
+extern function sn_bytes_slice(handle: i64, start: i32, end: i32): i64;
+extern function sn_bytes_concat(left: i64, right: i64): i64;
+extern function sn_bytes_new(length: i64): i64;
+extern function sn_map_keys(map: { [key: string]: string | null }): string[];
+extern function sn_map_set(map: { [key: string]: string | null }, key: string, val: string): void;
+extern function sn_map_get(map: { [key: string]: string | null }, key: string): string | null;
+extern function sn_map_remove(map: { [key: string]: string | null }, key: string): bool;
+extern function sn_map_contains(map: { [key: string]: string | null }, key: string): bool;
+extern function sn_map_new(): { [key: string]: string | null };
+extern function sn_tcp_read(conn: i64, maxBytes: i32): Future<i64>;
+extern function sn_tcp_write(conn: i64, bytesHandle: i64): Future<void>;
+extern function sn_tcp_close_i64(handle: i64): void;
+extern function sn_tls_read(tlsHandle: i64, maxBytes: i32): Future<i64>;
+extern function sn_tls_write(tlsHandle: i64, bytesHandle: i64): Future<void>;
+extern function sn_tls_close_i64(handle: i64): void;
+extern function sn_time_now_ms(): i64;
+
+export class Headers {
+  private store: { [key: string]: string | null };
+
+  constructor() {
+    this.store = sn_map_new();
+  }
+
+  private key(name: string): string {
+    return sn_str_to_lower(name);
+  }
+
+  set(name: string, value: string): void {
+    sn_map_set(this.store, this.key(name), value);
+  }
+
+  append(name: string, value: string): void {
+    let k = this.key(name);
+    let existing = sn_map_get(this.store, k);
+    if (existing == null) {
+      sn_map_set(this.store, k, value);
+    } else {
+      sn_map_set(this.store, k, sn_str_concat(existing, sn_str_concat(", ", value)));
+    }
+  }
+
+  get(name: string): string | null {
+    return sn_map_get(this.store, this.key(name));
+  }
+
+  has(name: string): bool {
+    return sn_map_contains(this.store, this.key(name));
+  }
+
+  delete(name: string): void {
+    sn_map_remove(this.store, this.key(name));
+  }
+
+  keys(): string[] {
+    return sn_map_keys(this.store);
+  }
+}
+
+export class URL {
+  scheme: string;
+  host: string;
+  port: i32;
+  path: string;
+  query: string;
+  fragment: string;
+  private queryMap: { [key: string]: string | null };
+
+  constructor() {
+    this.scheme = "";
+    this.host = "";
+    this.port = 0;
+    this.path = "/";
+    this.query = "";
+    this.fragment = "";
+    this.queryMap = sn_map_new();
+  }
+
+  static parse(input: string): URL {
+    let url = new URL();
+    let s = input;
+    let fragIdx = sn_str_index_of(s, "#");
+    if (fragIdx >= 0) {
+      url.fragment = sn_str_substring(s, fragIdx + 1, sn_str_len(s));
+      s = sn_str_substring(s, 0, fragIdx);
+    }
+    let queryIdx = sn_str_index_of(s, "?");
+    if (queryIdx >= 0) {
+      url.query = sn_str_substring(s, queryIdx + 1, sn_str_len(s));
+      s = sn_str_substring(s, 0, queryIdx);
+      url.parseQuery(url.query);
+    }
+    let schemeIdx = sn_str_index_of(s, "://");
+    if (schemeIdx >= 0) {
+      url.scheme = sn_str_substring(s, 0, schemeIdx);
+      s = sn_str_substring(s, schemeIdx + 3, sn_str_len(s));
+    }
+    let pathIdx = sn_str_index_of(s, "/");
+    let authority = s;
+    if (pathIdx >= 0) {
+      authority = sn_str_substring(s, 0, pathIdx);
+      url.path = sn_str_substring(s, pathIdx, sn_str_len(s));
+    } else {
+      url.path = "/";
+    }
+    let colon = sn_str_index_of(authority, ":");
+    if (colon >= 0) {
+      url.host = sn_str_substring(authority, 0, colon);
+      url.port = sn_str_parse_i32(sn_str_substring(authority, colon + 1, sn_str_len(authority)));
+    } else {
+      url.host = authority;
+      if (url.scheme == "https") {
+        url.port = 443;
+      } elseif (url.scheme == "http") {
+        url.port = 80;
+      }
+    }
+    return url;
+  }
+
+  private parseQuery(q: string): void {
+    if (sn_str_len(q) == 0) {
+      return;
+    }
+    let parts = sn_str_split(q, "&");
+    let i: i32 = 0;
+    while (i < parts.length) {
+      let p = parts[i];
+      let eq = sn_str_index_of(p, "=");
+      if (eq >= 0) {
+        sn_map_set(this.queryMap, sn_str_substring(p, 0, eq), sn_str_substring(p, eq + 1, sn_str_len(p)));
+      } else {
+        sn_map_set(this.queryMap, p, "");
+      }
+      i = i + 1;
+    }
+  }
+
+  queryParam(name: string): string | null {
+    return sn_map_get(this.queryMap, name);
+  }
+
+  href(): string {
+    let out = sn_str_concat(this.scheme, sn_str_concat("://", this.host));
+    let defaultPort = 80;
+    if (this.scheme == "https") {
+      defaultPort = 443;
+    }
+    if (this.port != 0 && this.port != defaultPort) {
+      out = sn_str_concat(out, sn_str_concat(":", sn_i32_to_string(this.port)));
+    }
+    out = sn_str_concat(out, this.path);
+    if (sn_str_len(this.query) > 0) {
+      out = sn_str_concat(out, sn_str_concat("?", this.query));
+    }
+    if (sn_str_len(this.fragment) > 0) {
+      out = sn_str_concat(out, sn_str_concat("#", this.fragment));
+    }
+    return out;
+  }
+}
+
+export class Body {
+  private dataHandle: i64;
+  private consumed: bool;
+
+  constructor(dataHandle: i64) {
+    this.dataHandle = dataHandle;
+    this.consumed = false;
+  }
+
+  static empty(): Body {
+    return new Body(sn_bytes_new(0));
+  }
+
+  static fromString(s: string): Body {
+    return new Body(sn_bytes_from_cstr(s));
+  }
+
+  static fromHandle(h: i64): Body {
+    return new Body(h);
+  }
+
+  static fromBytes(b: Bytes): Body {
+    return new Body(b.rawHandle());
+  }
+
+  rawHandle(): i64 {
+    return this.dataHandle;
+  }
+
+  bytes(): Bytes {
+    return Bytes.fromHandle(this.dataHandle);
+  }
+
+  text(): string {
+    let s = sn_bytes_to_utf8(this.dataHandle);
+    if (s == null) {
+      return "";
+    }
+    return s;
+  }
+
+  /**
+   * Streaming read of the buffered body. First call returns up to `maxBytes`
+   * (or the full buffer); subsequent calls return null (EOF).
+   */
+  read(maxBytes: i32): Bytes | null {
+    if (this.consumed) {
+      return null;
+    }
+    this.consumed = true;
+    let len = sn_bytes_len(this.dataHandle);
+    let zero: i64 = 0;
+    if (len == zero) {
+      return null;
+    }
+    return Bytes.fromHandle(sn_bytes_slice(this.dataHandle, 0, maxBytes));
+  }
+}
+
+export class Request {
+  method: string;
+  url: URL;
+  headers: Headers;
+  body: Body;
+  params: Headers;
+
+  constructor(method: string, url: URL) {
+    this.method = method;
+    this.url = url;
+    this.headers = new Headers();
+    this.body = Body.empty();
+    this.params = new Headers();
+  }
+}
+
+export class Response {
+  status: i32;
+  headers: Headers;
+  body: Body;
+
+  constructor(status: i32) {
+    this.status = status;
+    this.headers = new Headers();
+    this.body = Body.empty();
+  }
+
+  static text(text: string): Response {
+    let r = new Response(200);
+    r.headers.set("content-type", "text/plain; charset=utf-8");
+    r.body = Body.fromString(text);
+    return r;
+  }
+
+  static json(text: string): Response {
+    let r = new Response(200);
+    r.headers.set("content-type", "application/json; charset=utf-8");
+    r.body = Body.fromString(text);
+    return r;
+  }
+
+  static status(code: i32): Response {
+    return new Response(code);
+  }
+}
+
+function statusText(code: i32): string {
+  if (code == 200) { return "OK"; }
+  if (code == 400) { return "Bad Request"; }
+  if (code == 401) { return "Unauthorized"; }
+  if (code == 403) { return "Forbidden"; }
+  if (code == 404) { return "Not Found"; }
+  if (code == 405) { return "Method Not Allowed"; }
+  if (code == 500) { return "Internal Server Error"; }
+  return "Unknown";
+}
+
+export function formatResponse(response: Response): Bytes {
+  let bodyHandle = response.body.rawHandle();
+  response.headers.set("content-length", sn_i64_to_string(sn_bytes_len(bodyHandle)));
+  let head = sn_str_concat(
+    "HTTP/1.1 ",
+    sn_str_concat(sn_i32_to_string(response.status), sn_str_concat(" ", sn_str_concat(statusText(response.status), "\r\n")))
+  );
+  let keys = response.headers.keys();
+  let i: i32 = 0;
+  while (i < keys.length) {
+    let v = response.headers.get(keys[i]);
+    if (v != null) {
+      head = sn_str_concat(head, sn_str_concat(keys[i], sn_str_concat(": ", sn_str_concat(v, "\r\n"))));
+    }
+    i = i + 1;
+  }
+  head = sn_str_concat(head, "\r\n");
+  return Bytes.fromHandle(sn_bytes_concat(sn_bytes_from_cstr(head), bodyHandle));
+}
+
+export class ParsedRequest {
+  ok: bool;
+  request: Request | null;
+  error: string;
+
+  constructor() {
+    this.ok = false;
+    this.request = null;
+    this.error = "";
+  }
+}
+
+export function parseRequest(raw: string): ParsedRequest {
+  let result = new ParsedRequest();
+  let sep = sn_str_index_of(raw, "\r\n\r\n");
+  if (sep < 0) {
+    result.error = "incomplete headers";
+    return result;
+  }
+  let head = sn_str_substring(raw, 0, sep);
+  let bodyStr = sn_str_substring(raw, sep + 4, sn_str_len(raw));
+  let lines = sn_str_split(head, "\r\n");
+  if (lines.length < 1) {
+    result.error = "missing request line";
+    return result;
+  }
+  let parts = sn_str_split(lines[0], " ");
+  if (parts.length < 3) {
+    result.error = "malformed request line";
+    return result;
+  }
+  let url = URL.parse(sn_str_concat("http://localhost", parts[1]));
+  let req = new Request(parts[0], url);
+  let i: i32 = 1;
+  while (i < lines.length) {
+    let line = lines[i];
+    let colon = sn_str_index_of(line, ":");
+    if (colon > 0) {
+      req.headers.append(
+        sn_str_trim(sn_str_substring(line, 0, colon)),
+        sn_str_trim(sn_str_substring(line, colon + 1, sn_str_len(line)))
+      );
+    }
+    i = i + 1;
+  }
+  req.body = Body.fromString(bodyStr);
+  result.ok = true;
+  result.request = req;
+  return result;
+}
+
+export function parseResponse(raw: string): Response {
+  let sep = sn_str_index_of(raw, "\r\n\r\n");
+  if (sep < 0) {
+    throw new Error("incomplete response");
+  }
+  let head = sn_str_substring(raw, 0, sep);
+  let bodyStr = sn_str_substring(raw, sep + 4, sn_str_len(raw));
+  let lines = sn_str_split(head, "\r\n");
+  let parts = sn_str_split(lines[0], " ");
+  let resp = new Response(sn_str_parse_i32(parts[1]));
+  let i: i32 = 1;
+  while (i < lines.length) {
+    let line = lines[i];
+    let colon = sn_str_index_of(line, ":");
+    if (colon > 0) {
+      resp.headers.append(
+        sn_str_trim(sn_str_substring(line, 0, colon)),
+        sn_str_trim(sn_str_substring(line, colon + 1, sn_str_len(line)))
+      );
+    }
+    i = i + 1;
+  }
+  let te = resp.headers.get("transfer-encoding");
+  if (te != null && sn_str_to_lower(te).contains("chunked")) {
+    resp.body = Body.fromString(decodeChunked(bodyStr));
+  } else {
+    resp.body = Body.fromString(bodyStr);
+  }
+  return resp;
+}
+
+function decodeChunked(raw: string): string {
+  let out = "";
+  let s = raw;
+  while (sn_str_len(s) > 0) {
+    let lineEnd = sn_str_index_of(s, "\r\n");
+    if (lineEnd < 0) {
+      break;
+    }
+    let sizeLine = sn_str_substring(s, 0, lineEnd);
+    let size = sn_str_parse_i32(sizeLine);
+    if (size <= 0) {
+      break;
+    }
+    let start = lineEnd + 2;
+    let end = start + size;
+    if (end > sn_str_len(s)) {
+      break;
+    }
+    out = sn_str_concat(out, sn_str_substring(s, start, end));
+    s = sn_str_substring(s, end + 2, sn_str_len(s));
+  }
+  return out;
+}
+
+class Route {
+  method: string;
+  pattern: string;
+  isStatic: bool;
+  hasHandler: bool;
+  body: string;
+  contentType: string;
+  handler: (Request) => Response;
+
+  constructor(
+    method: string,
+    pattern: string,
+    isStatic: bool,
+    hasHandler: bool,
+    body: string,
+    contentType: string,
+    handler: (Request) => Response
+  ) {
+    this.method = method;
+    this.pattern = pattern;
+    this.isStatic = isStatic;
+    this.hasHandler = hasHandler;
+    this.body = body;
+    this.contentType = contentType;
+    this.handler = handler;
+  }
+}
+
+function fallbackHandler(req: Request): Response {
+  return Response.status(500);
+}
+
+function defaultErrFn(req: Request, code: i32): Response {
+  if (code == 400) {
+    let bad = Response.text("Bad Request");
+    bad.status = 400;
+    return bad;
+  }
+  if (code == 401) {
+    let unauth = Response.text("Unauthorized");
+    unauth.status = 401;
+    return unauth;
+  }
+  if (code == 403) {
+    let forbid = Response.text("Forbidden");
+    forbid.status = 403;
+    return forbid;
+  }
+  if (code == 404) {
+    let missing = Response.text("Not Found");
+    missing.status = 404;
+    return missing;
+  }
+  if (code == 405) {
+    let method = Response.text("Method Not Allowed");
+    method.status = 405;
+    return method;
+  }
+  let fail = Response.text("Internal Server Error");
+  fail.status = 500;
+  return fail;
+}
+
+export class Server {
+  private routes: Route[];
+  private middlewares: ((Request, (Request) => Response) => Response)[];
+  private mwNames: string[];
+  private mwValues: string[];
+  private certPem: string;
+  private keyPem: string;
+  private useTls: bool;
+  private errorHandlerSet: bool;
+  private errorHandler: (Request, i32) => Response;
+
+  constructor() {
+    let empty: Route[] = [];
+    this.routes = empty;
+    let mws: ((Request, (Request) => Response) => Response)[] = [];
+    this.middlewares = mws;
+    let names: string[] = [];
+    let values: string[] = [];
+    this.mwNames = names;
+    this.mwValues = values;
+    this.certPem = "";
+    this.keyPem = "";
+    this.useTls = false;
+    this.errorHandlerSet = false;
+    this.errorHandler = defaultErrFn;
+  }
+
+  static https(certPem: string, keyPem: string): Server {
+    let s = new Server();
+    s.useTls = true;
+    s.certPem = certPem;
+    s.keyPem = keyPem;
+    return s;
+  }
+
+  /** HTTPS server from PEM strings (Certificate/PrivateKey `.pem` fields). */
+  static httpsPem(certificatePem: string, privateKeyPem: string): Server {
+    return Server.https(certificatePem, privateKeyPem);
+  }
+
+  /** Onion middleware: A → B → handler → B → A (sync setup only). */
+  use(mw: (Request, (Request) => Response) => Response): void {
+    sn_array_push(this.middlewares, mw);
+  }
+
+  /** Header middleware that does not allocate closures (safe in async main). */
+  useHeader(name: string, value: string): void {
+    sn_array_push(this.mwNames, name);
+    sn_array_push(this.mwValues, value);
+  }
+
+  onError(handler: (Request, i32) => Response): void {
+    this.errorHandler = handler;
+    this.errorHandlerSet = true;
+  }
+
+  get(pattern: string, handler: (Request) => Response): void {
+    this.addHandlerRoute("GET", pattern, handler);
+  }
+
+  post(pattern: string, handler: (Request) => Response): void {
+    this.addHandlerRoute("POST", pattern, handler);
+  }
+
+  put(pattern: string, handler: (Request) => Response): void {
+    this.addHandlerRoute("PUT", pattern, handler);
+  }
+
+  delete(pattern: string, handler: (Request) => Response): void {
+    this.addHandlerRoute("DELETE", pattern, handler);
+  }
+
+  getText(pattern: string, body: string): void {
+    this.addStaticRoute("GET", pattern, body, "text/plain; charset=utf-8");
+  }
+
+  getJson(pattern: string, body: string): void {
+    this.addStaticRoute("GET", pattern, body, "application/json; charset=utf-8");
+  }
+
+  postText(pattern: string, body: string): void {
+    this.addStaticRoute("POST", pattern, body, "text/plain; charset=utf-8");
+  }
+
+  private addHandlerRoute(method: string, pattern: string, handler: (Request) => Response): void {
+    let norm = normalizePath(pattern);
+    this.ensureUnique(method, norm);
+    sn_array_push(
+      this.routes,
+      new Route(method, norm, !hasParam(norm), true, "", "", handler)
+    );
+  }
+
+  private addStaticRoute(method: string, pattern: string, body: string, contentType: string): void {
+    let norm = normalizePath(pattern);
+    this.ensureUnique(method, norm);
+    sn_array_push(
+      this.routes,
+      new Route(method, norm, !hasParam(norm), false, body, contentType, fallbackHandler)
+    );
+  }
+
+  private ensureUnique(method: string, norm: string): void {
+    let i: i32 = 0;
+    while (i < this.routes.length) {
+      let existing = this.routes[i];
+      if (existing.method == method && existing.pattern == norm) {
+        throw new Error("duplicate route");
+      }
+      i = i + 1;
+    }
+  }
+
+  getRoutes(): Route[] {
+    return this.routes;
+  }
+
+  getMiddlewares(): ((Request, (Request) => Response) => Response)[] {
+    return this.middlewares;
+  }
+
+  getMwNames(): string[] { return this.mwNames; }
+  getMwValues(): string[] { return this.mwValues; }
+
+  getErrorHandler(): (Request, i32) => Response {
+    return this.errorHandler;
+  }
+
+  hasErrorHandler(): bool {
+    return this.errorHandlerSet;
+  }
+
+  isTls(): bool { return this.useTls; }
+  getCertPem(): string { return this.certPem; }
+  getKeyPem(): string { return this.keyPem; }
+
+  listen(port: i32): Future<void> {
+    return serverListen(this, "0.0.0.0", port);
+  }
+
+  listenOn(host: string, port: i32): Future<void> {
+    return serverListen(this, host, port);
+  }
+
+  handle(request: Request): Response {
+    return dispatch(this, request);
+  }
+}
+
+function normalizePath(path: string): string {
+  if (sn_str_len(path) == 0) {
+    return "/";
+  }
+  if (sn_str_ends_with(path, "/") && sn_str_len(path) > 1) {
+    return sn_str_substring(path, 0, sn_str_len(path) - 1);
+  }
+  return path;
+}
+
+function hasParam(pattern: string): bool {
+  let parts = sn_str_split(pattern, "/");
+  let i: i32 = 0;
+  while (i < parts.length) {
+    if (sn_str_starts_with(parts[i], ":") || parts[i] == "*") {
+      return true;
+    }
+    i = i + 1;
+  }
+  return false;
+}
+
+function matchRoute(pattern: string, path: string, params: Headers): bool {
+  let pp = sn_str_split(pattern, "/");
+  let tp = sn_str_split(path, "/");
+  let i: i32 = 0;
+  while (i < pp.length) {
+    let p = pp[i];
+    if (p == "*") {
+      return true;
+    }
+    if (i >= tp.length) {
+      return false;
+    }
+    if (sn_str_starts_with(p, ":")) {
+      params.set(sn_str_substring(p, 1, sn_str_len(p)), tp[i]);
+    } elseif (p != tp[i]) {
+      return false;
+    }
+    i = i + 1;
+  }
+  return i == tp.length;
+}
+
+function dispatch(server: Server, request: Request): Response {
+  let path = normalizePath(request.url.path);
+  let routes = server.getRoutes();
+  let found = false;
+  let methodMatched = false;
+  let chosenIdx: i32 = -1;
+
+  let i: i32 = 0;
+  while (i < routes.length) {
+    let routeA = routes[i];
+    if (routeA.isStatic && routeA.method == request.method && routeA.pattern == path) {
+      chosenIdx = i;
+      found = true;
+      break;
+    }
+    i = i + 1;
+  }
+
+  if (!found) {
+    i = 0;
+    while (i < routes.length) {
+      let routeB = routes[i];
+      if (!routeB.isStatic) {
+        let params = new Headers();
+        if (matchRoute(routeB.pattern, path, params)) {
+          if (routeB.method == request.method) {
+            let keys = params.keys();
+            let k: i32 = 0;
+            while (k < keys.length) {
+              let val = params.get(keys[k]);
+              if (val != null) {
+                request.params.set(keys[k], val);
+              }
+              k = k + 1;
+            }
+            chosenIdx = i;
+            found = true;
+            break;
+          }
+          methodMatched = true;
+        }
+      } elseif (routeB.pattern == path) {
+        methodMatched = true;
+      }
+      i = i + 1;
+    }
+  }
+
+  let response: Response;
+  if (found && chosenIdx >= 0) {
+    let route = routes[chosenIdx];
+    if (route.hasHandler) {
+      let h = route.handler;
+      response = h(request);
+    } else {
+      let out = route.body;
+      let id = request.params.get("id");
+      if (id != null) {
+        out = sn_str_concat(out, id);
+      }
+      response = Response.text(out);
+      response.headers.set("content-type", route.contentType);
+    }
+  } elseif (methodMatched) {
+    response = defaultError(server, request, 405);
+  } else {
+    response = defaultError(server, request, 404);
+  }
+
+  let mws = server.getMiddlewares();
+  if (mws.length > 0) {
+    let handler: (Request) => Response = (req: Request): Response => {
+      return response;
+    };
+    let chain: (Request) => Response = handler;
+    let m: i32 = mws.length - 1;
+    while (m >= 0) {
+      let mw = mws[m];
+      let inner = chain;
+      chain = (r: Request): Response => {
+        return mw(r, inner);
+      };
+      m = m - 1;
+    }
+    response = chain(request);
+  }
+
+  let names = server.getMwNames();
+  let values = server.getMwValues();
+  let hi: i32 = 0;
+  while (hi < names.length) {
+    response.headers.set(names[hi], values[hi]);
+    hi = hi + 1;
+  }
+  return response;
+}
+
+function defaultError(server: Server, request: Request, code: i32): Response {
+  if (server.hasErrorHandler()) {
+    let custom = server.getErrorHandler();
+    return custom(request, code);
+  }
+  return defaultErrFn(request, code);
+}
+
+async function handleConnection(server: Server, tcpHandle: i64): void {
+  let zeroI64: i64 = 0;
+  let tlsHandle: i64 = 0;
+  let useTls = false;
+  let rawHandle = sn_bytes_new(0);
+  let guard: i32 = 0;
+  while (guard < 64) {
+    let chunk = await sn_tcp_read(tcpHandle, 65536);
+    rawHandle = sn_bytes_concat(rawHandle, chunk);
+    let textLoop = "";
+    let decodedLoop = sn_bytes_to_utf8(rawHandle);
+    if (decodedLoop != null) {
+      textLoop = decodedLoop;
+    }
+    if (textLoop.contains("\r\n\r\n")) {
+      break;
+    }
+    if (sn_bytes_len(chunk) == zeroI64) {
+      break;
+    }
+    guard = guard + 1;
+  }
+  let textFinal = "";
+  let decodedFinal = sn_bytes_to_utf8(rawHandle);
+  if (decodedFinal != null) {
+    textFinal = decodedFinal;
+  }
+  let parsed = parseRequest(textFinal);
+  let response: Response;
+  let parsedReq = parsed.request;
+  if (!parsed.ok || parsedReq == null) {
+    response = defaultError(server, new Request("GET", URL.parse("http://localhost/")), 400);
+  } else {
+    response = dispatch(server, parsedReq);
+  }
+  let out = formatResponse(response);
+  await sn_tcp_write(tcpHandle, out.rawHandle());
+  sn_tcp_close_i64(tcpHandle);
+}
+
+async function handleTlsConnection(server: Server, tlsHandle: i64): void {
+  let zeroI64: i64 = 0;
+  let rawHandle = sn_bytes_new(0);
+  let guard: i32 = 0;
+  while (guard < 64) {
+    let chunk = await sn_tls_read(tlsHandle, 65536);
+    rawHandle = sn_bytes_concat(rawHandle, chunk);
+    let textLoop = "";
+    let decodedLoop = sn_bytes_to_utf8(rawHandle);
+    if (decodedLoop != null) {
+      textLoop = decodedLoop;
+    }
+    if (textLoop.contains("\r\n\r\n")) {
+      break;
+    }
+    if (sn_bytes_len(chunk) == zeroI64) {
+      break;
+    }
+    guard = guard + 1;
+  }
+  let textFinal = "";
+  let decodedFinal = sn_bytes_to_utf8(rawHandle);
+  if (decodedFinal != null) {
+    textFinal = decodedFinal;
+  }
+  let parsed = parseRequest(textFinal);
+  let response: Response;
+  let parsedReq = parsed.request;
+  if (!parsed.ok || parsedReq == null) {
+    response = defaultError(server, new Request("GET", URL.parse("http://localhost/")), 400);
+  } else {
+    response = dispatch(server, parsedReq);
+  }
+  let out = formatResponse(response);
+  await sn_tls_write(tlsHandle, out.rawHandle());
+  sn_tls_close_i64(tlsHandle);
+}
+
+async function serverListen(server: Server, host: string, port: i32): void {
+  let listener = await TcpListener.bind(host, port);
+  if (server.isTls()) {
+    while (true) {
+      let tls = await TlsStream.acceptListener(listener.rawHandle(), server.getCertPem(), server.getKeyPem());
+      spawn(handleTlsConnection(server, tls.rawHandle()));
+    }
+  } else {
+    while (true) {
+      let conn = await listener.accept();
+      spawn(handleConnection(server, conn.rawHandle()));
+    }
+  }
+}
+
+class PoolEntry {
+  key: string;
+  handle: i64;
+  secure: bool;
+  alive: bool;
+
+  constructor(key: string, handle: i64, secure: bool) {
+    this.key = key;
+    this.handle = handle;
+    this.secure = secure;
+    this.alive = true;
+  }
+}
+
+class ConnectGate {
+  done: bool;
+  timedOut: bool;
+  handle: i64;
+  secure: bool;
+  error: string;
+
+  constructor() {
+    this.done = false;
+    this.timedOut = false;
+    this.handle = 0;
+    this.secure = false;
+    this.error = "";
+  }
+}
+
+export class HttpClient {
+  private redirectLimit: i32;
+  private insecureSkipVerify: bool;
+  private connectTimeoutMs: i64;
+  private readTimeoutMs: i64;
+  private maxPoolSize: i32;
+  private pool: PoolEntry[];
+
+  constructor() {
+    this.redirectLimit = 5;
+    this.insecureSkipVerify = false;
+    this.connectTimeoutMs = 10000;
+    this.readTimeoutMs = 30000;
+    this.maxPoolSize = 8;
+    let empty: PoolEntry[] = [];
+    this.pool = empty;
+  }
+
+  setInsecureSkipVerify(v: bool): void {
+    this.insecureSkipVerify = v;
+  }
+
+  getInsecureSkipVerify(): bool {
+    return this.insecureSkipVerify;
+  }
+
+  setConnectTimeoutMs(ms: i64): void {
+    this.connectTimeoutMs = ms;
+  }
+
+  setReadTimeoutMs(ms: i64): void {
+    this.readTimeoutMs = ms;
+  }
+
+  setMaxPoolSize(n: i32): void {
+    this.maxPoolSize = n;
+  }
+
+  getConnectTimeoutMs(): i64 { return this.connectTimeoutMs; }
+  getReadTimeoutMs(): i64 { return this.readTimeoutMs; }
+  getMaxPoolSize(): i32 { return this.maxPoolSize; }
+  getPool(): PoolEntry[] { return this.pool; }
+
+  fetch(input: string): Future<Response> {
+    return clientFetch(this, input, "GET", new Headers(), sn_bytes_new(0));
+  }
+
+  fetchWith(input: string, method: string, headers: Headers, bodyHandle: i64): Future<Response> {
+    return clientFetch(this, input, method, headers, bodyHandle);
+  }
+
+  getRedirectLimit(): i32 {
+    return this.redirectLimit;
+  }
+}
+
+async function gatedConnect(gate: ConnectGate, host: string, port: i32, secure: bool, insecure: bool): void {
+  if (secure) {
+    let tls = await TlsStream.connectWithConfig(host, port, insecure, "");
+    gate.handle = tls.rawHandle();
+    gate.secure = true;
+  } else {
+    let tcp = await TcpStream.connect(host, port);
+    gate.handle = tcp.rawHandle();
+    gate.secure = false;
+  }
+  gate.done = true;
+}
+
+async function gatedTimeout(gate: ConnectGate, ms: i64): void {
+  await sleep(ms);
+  if (!gate.done) {
+    gate.timedOut = true;
+  }
+}
+
+async function connectWithTimeout(
+  client: HttpClient,
+  host: string,
+  port: i32,
+  secure: bool
+): ConnectGate {
+  let gate = new ConnectGate();
+  let insecure = client.getInsecureSkipVerify();
+  let c = spawn(gatedConnect(gate, host, port, secure, insecure));
+  let t = spawn(gatedTimeout(gate, client.getConnectTimeoutMs()));
+  let arr: Future<void>[] = [];
+  sn_array_push(arr, c);
+  sn_array_push(arr, t);
+  await race(arr);
+  if (!gate.done) {
+    gate.error = "connect timed out";
+  }
+  return gate;
+}
+
+function poolKey(scheme: string, host: string, port: i32): string {
+  return sn_str_concat(scheme, sn_str_concat("://", sn_str_concat(host, sn_str_concat(":", sn_i32_to_string(port)))));
+}
+
+function takePool(client: HttpClient, key: string): PoolEntry | null {
+  let pool = client.getPool();
+  let i: i32 = 0;
+  while (i < pool.length) {
+    let e = pool[i];
+    if (e.alive && e.key == key) {
+      e.alive = false;
+      return e;
+    }
+    i = i + 1;
+  }
+  return null;
+}
+
+function returnPool(client: HttpClient, entry: PoolEntry): void {
+  let pool = client.getPool();
+  let i: i32 = 0;
+  while (i < pool.length) {
+    if (pool[i] == entry) {
+      let aliveCount: i32 = 0;
+      let j: i32 = 0;
+      while (j < pool.length) {
+        if (pool[j].alive) {
+          aliveCount = aliveCount + 1;
+        }
+        j = j + 1;
+      }
+      if (aliveCount >= client.getMaxPoolSize()) {
+        if (entry.secure) {
+          sn_tls_close_i64(entry.handle);
+        } else {
+          sn_tcp_close_i64(entry.handle);
+        }
+        entry.alive = false;
+        return;
+      }
+      entry.alive = true;
+      return;
+    }
+    i = i + 1;
+  }
+  let aliveCount2: i32 = 0;
+  let k: i32 = 0;
+  while (k < pool.length) {
+    if (pool[k].alive) {
+      aliveCount2 = aliveCount2 + 1;
+    }
+    k = k + 1;
+  }
+  if (aliveCount2 >= client.getMaxPoolSize()) {
+    if (entry.secure) {
+      sn_tls_close_i64(entry.handle);
+    } else {
+      sn_tcp_close_i64(entry.handle);
+    }
+    return;
+  }
+  entry.alive = true;
+  sn_array_push(pool, entry);
+}
+
+async function clientFetch(
+  client: HttpClient,
+  input: string,
+  method: string,
+  headers: Headers,
+  bodyHandle: i64
+): Response {
+  let zeroI64: i64 = 0;
+  let redirects: i32 = 0;
+  let url = URL.parse(input);
+  let currentMethod = method;
+  let currentBody = bodyHandle;
+  while (redirects <= client.getRedirectLimit()) {
+    let secure = url.scheme == "https";
+    let port = url.port;
+    if (port == 0) {
+      if (secure) { port = 443; } else { port = 80; }
+    }
+    let scheme = "http";
+    if (secure) { scheme = "https"; }
+    let key = poolKey(scheme, url.host, port);
+    let pooled = takePool(client, key);
+    let connHandle: i64 = 0;
+    let tlsHandle: i64 = 0;
+    let fromPool = false;
+    if (pooled != null) {
+      fromPool = true;
+      if (pooled.secure) {
+        tlsHandle = pooled.handle;
+      } else {
+        connHandle = pooled.handle;
+      }
+    } else {
+      let gate = await connectWithTimeout(client, url.host, port, secure);
+      if (sn_str_len(gate.error) > 0) {
+        throw new Error(gate.error);
+      }
+      if (gate.secure) {
+        tlsHandle = gate.handle;
+      } else {
+        connHandle = gate.handle;
+      }
+    }
+    let path = url.path;
+    if (sn_str_len(url.query) > 0) {
+      path = sn_str_concat(path, sn_str_concat("?", url.query));
+    }
+    let req = sn_str_concat(currentMethod, sn_str_concat(" ", sn_str_concat(path, " HTTP/1.1\r\n")));
+    req = sn_str_concat(req, sn_str_concat("host: ", sn_str_concat(url.host, "\r\n")));
+    req = sn_str_concat(req, "connection: keep-alive\r\n");
+    if (!headers.has("content-length") && sn_bytes_len(currentBody) > zeroI64) {
+      headers.set("content-length", sn_i64_to_string(sn_bytes_len(currentBody)));
+    }
+    let keys = headers.keys();
+    let i: i32 = 0;
+    while (i < keys.length) {
+      let v = headers.get(keys[i]);
+      if (v != null) {
+        req = sn_str_concat(req, sn_str_concat(keys[i], sn_str_concat(": ", sn_str_concat(v, "\r\n"))));
+      }
+      i = i + 1;
+    }
+    req = sn_str_concat(req, "\r\n");
+    let payload = sn_bytes_concat(sn_bytes_from_cstr(req), currentBody);
+    if (secure) {
+      await sn_tls_write(tlsHandle, payload);
+    } else {
+      await sn_tcp_write(connHandle, payload);
+    }
+    let raw = sn_bytes_new(0);
+    let guard: i32 = 0;
+    let readDeadline = client.getReadTimeoutMs();
+    let readStart = sn_time_now_ms();
+    while (guard < 64) {
+      if (sn_time_now_ms() - readStart > readDeadline) {
+        throw new Error("read timed out");
+      }
+      let chunk: i64;
+      if (secure) {
+        chunk = await sn_tls_read(tlsHandle, 65536);
+      } else {
+        chunk = await sn_tcp_read(connHandle, 65536);
+      }
+      raw = sn_bytes_concat(raw, chunk);
+      let decodedLoop = sn_bytes_to_utf8(raw);
+      let textLoop = "";
+      if (decodedLoop != null) { textLoop = decodedLoop; }
+      if (textLoop.contains("\r\n\r\n")) { break; }
+      if (sn_bytes_len(chunk) == zeroI64) { break; }
+      guard = guard + 1;
+    }
+    let decodedFinal = sn_bytes_to_utf8(raw);
+    if (decodedFinal == null) {
+      throw new Error("invalid response encoding");
+    }
+    let resp = parseResponse(decodedFinal);
+    let connHdr = resp.headers.get("connection");
+    let keepAlive = true;
+    if (connHdr != null && sn_str_to_lower(connHdr) == "close") {
+      keepAlive = false;
+    }
+    if (keepAlive) {
+      let entry = new PoolEntry(key, 0, secure);
+      if (secure) { entry.handle = tlsHandle; }
+      else { entry.handle = connHandle; }
+      returnPool(client, entry);
+    } else {
+      if (secure) { sn_tls_close_i64(tlsHandle); }
+      else { sn_tcp_close_i64(connHandle); }
+    }
+    if (resp.status == 301 || resp.status == 302 || resp.status == 307 || resp.status == 308) {
+      let loc = resp.headers.get("location");
+      if (loc == null) { return resp; }
+      url = URL.parse(loc);
+      if (resp.status == 301 || resp.status == 302) {
+        currentMethod = "GET";
+        currentBody = sn_bytes_new(0);
+      }
+      redirects = redirects + 1;
+      continue;
+    }
+    return resp;
+  }
+  throw new Error("too many redirects");
+}
+
+export function fetch(input: string): Future<Response> {
+  let client = new HttpClient();
+  return client.fetch(input);
+}
+
+export function fetchWith(input: string, method: string, headers: Headers, bodyHandle: i64): Future<Response> {
+  let client = new HttpClient();
+  return client.fetchWith(input, method, headers, bodyHandle);
+}
+
+/** Fetch using a Request object (method/headers/body from the request). */
+export function fetchRequest(request: Request): Future<Response> {
+  let client = new HttpClient();
+  return client.fetchWith(
+    request.url.href(),
+    request.method,
+    request.headers,
+    request.body.rawHandle()
+  );
+}
+
+/** Fetch with explicit method/headers/body Bytes. */
+export function fetchInit(input: string, method: string, headers: Headers, body: Bytes): Future<Response> {
+  let client = new HttpClient();
+  return client.fetchWith(input, method, headers, body.rawHandle());
+}

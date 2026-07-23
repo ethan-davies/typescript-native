@@ -3,6 +3,7 @@
 #include "async_internal.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -10,6 +11,7 @@
 
 #if defined(__linux__)
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #define SN_USE_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <sys/event.h>
@@ -36,12 +38,31 @@ static int reactor_ready = 0;
 static SnFdEntry *fds = NULL;
 static int32_t fds_len = 0;
 static int32_t fds_cap = 0;
+static int wake_rfd = -1;
+static int wake_wfd = -1;
 
 #if defined(SN_USE_EPOLL)
 static int epfd = -1;
 #elif defined(SN_USE_KQUEUE)
 static int kqfd = -1;
 #endif
+
+static void wake_cb(void *userdata, int events) {
+  (void)userdata;
+  (void)events;
+  if (wake_rfd < 0) {
+    return;
+  }
+#if defined(__linux__)
+  uint64_t n = 0;
+  while (read(wake_rfd, &n, sizeof(n)) > 0) {
+  }
+#else
+  char buf[64];
+  while (read(wake_rfd, buf, sizeof(buf)) > 0) {
+  }
+#endif
+}
 
 static void *sys_xrealloc(void *p, size_t n) {
   void *next = realloc(p, n);
@@ -77,11 +98,45 @@ void sn_reactor_init(void) {
     abort();
   }
 #endif
+#if defined(__linux__)
+  wake_rfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  wake_wfd = wake_rfd;
+  if (wake_rfd < 0) {
+    abort();
+  }
+#else
+  {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+      abort();
+    }
+    int fl0 = fcntl(pipefd[0], F_GETFL, 0);
+    int fl1 = fcntl(pipefd[1], F_GETFL, 0);
+    if (fl0 >= 0) {
+      fcntl(pipefd[0], F_SETFL, fl0 | O_NONBLOCK);
+    }
+    if (fl1 >= 0) {
+      fcntl(pipefd[1], F_SETFL, fl1 | O_NONBLOCK);
+    }
+    wake_rfd = pipefd[0];
+    wake_wfd = pipefd[1];
+  }
+#endif
+  sn_reactor_add_fd(wake_rfd, SN_REACTOR_READ, wake_cb, NULL);
 }
 
 void sn_reactor_shutdown(void) {
   if (!reactor_ready) {
     return;
+  }
+  if (wake_rfd >= 0) {
+    sn_reactor_del_fd(wake_rfd);
+    close(wake_rfd);
+    if (wake_wfd >= 0 && wake_wfd != wake_rfd) {
+      close(wake_wfd);
+    }
+    wake_rfd = -1;
+    wake_wfd = -1;
   }
 #if defined(SN_USE_EPOLL)
   if (epfd >= 0) {
@@ -102,7 +157,16 @@ void sn_reactor_shutdown(void) {
 }
 
 void sn_reactor_wake(void) {
-  /* No-op for now; event loop always rechecks runnable queue. */
+  if (wake_wfd < 0) {
+    return;
+  }
+#if defined(__linux__)
+  uint64_t one = 1;
+  (void)write(wake_wfd, &one, sizeof(one));
+#else
+  char b = 1;
+  (void)write(wake_wfd, &b, 1);
+#endif
 }
 
 static void ensure_fd_cap(void) {
@@ -142,7 +206,8 @@ void sn_reactor_add_fd(int fd, int events, SnReactorIoCb cb, void *userdata) {
   if (events & SN_REACTOR_WRITE) {
     ev.events |= EPOLLOUT;
   }
-  ev.events |= EPOLLET;
+  ev.events |= EPOLLERR | EPOLLHUP;
+  /* Level-triggered: TLS/OpenSSL WANT_READ/WRITE races badly with edge trigger. */
   ev.data.fd = fd;
   if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
     /* fall through; poll path not used */
@@ -184,7 +249,8 @@ void sn_reactor_mod_fd(int fd, int events, SnReactorIoCb cb, void *userdata) {
   if (events & SN_REACTOR_WRITE) {
     ev.events |= EPOLLOUT;
   }
-  ev.events |= EPOLLET;
+  ev.events |= EPOLLERR | EPOLLHUP;
+  /* Level-triggered: TLS/OpenSSL WANT_READ/WRITE races badly with edge trigger. */
   ev.data.fd = fd;
   epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);
 #elif defined(SN_USE_KQUEUE)

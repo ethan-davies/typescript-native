@@ -1,32 +1,313 @@
-/* Opaque connection/listener handles are runtime pointers stored as i64. */
-
 extern function sn_tcp_listen(host: string, port: i32): Future<i64>;
 extern function sn_tcp_accept(listener: i64): Future<i64>;
 extern function sn_tcp_connect(host: string, port: i32): Future<i64>;
-extern function sn_tcp_read(conn: i64, maxBytes: i32): Future<string>;
-extern function sn_tcp_write(conn: i64, data: string): Future<void>;
+extern function sn_tcp_read(conn: i64, maxBytes: i32): Future<i64>;
+extern function sn_tcp_write(conn: i64, bytesHandle: i64): Future<void>;
+extern function sn_tcp_flush(conn: i64): Future<void>;
 extern function sn_tcp_close_i64(handle: i64): void;
+extern function sn_udp_bind(host: string, port: i32): Future<i64>;
+extern function sn_udp_send(socket: i64, bytesHandle: i64, host: string, port: i32): Future<void>;
+extern function sn_udp_receive(socket: i64, maxBytes: i32): Future<i64>;
+extern function sn_udp_close_i64(handle: i64): void;
+extern function sn_udp_packet_bytes(packet: i64): i64;
+extern function sn_udp_packet_host(packet: i64): string;
+extern function sn_udp_packet_port(packet: i64): i32;
+extern function sn_dns_resolve(host: string): Future<string[]>;
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_i32_to_string(value: i32): string;
+extern function sn_str_concat(left: string, right: string): string;
+extern function sn_str_split(s: string, sep: string): string[];
+extern function sn_str_index_of(haystack: string, needle: string): i32;
+extern function sn_str_substring(s: string, start: i32, end: i32): string;
+extern function sn_str_len(s: string): i32;
+extern function sn_str_parse_i32(s: string): i32;
 
-export async function listen(host: string, port: i32): i64 {
-  return await sn_tcp_listen(host, port);
+export class Ipv4Address {
+  private a: i32;
+  private b: i32;
+  private c: i32;
+  private d: i32;
+
+  constructor(a: i32, b: i32, c: i32, d: i32) {
+    this.a = a;
+    this.b = b;
+    this.c = c;
+    this.d = d;
+  }
+
+  static parse(s: string): Ipv4Address {
+    let parts = sn_str_split(s, ".");
+    if (parts.length != 4) {
+      throw new Error("invalid ipv4 address");
+    }
+    let a = sn_str_parse_i32(parts[0]);
+    let b = sn_str_parse_i32(parts[1]);
+    let c = sn_str_parse_i32(parts[2]);
+    let d = sn_str_parse_i32(parts[3]);
+    if (a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255) {
+      throw new Error("invalid ipv4 address");
+    }
+    return new Ipv4Address(a, b, c, d);
+  }
+
+  format(): string {
+    return sn_str_concat(
+      sn_str_concat(sn_str_concat(sn_i32_to_string(this.a), "."), sn_str_concat(sn_i32_to_string(this.b), ".")),
+      sn_str_concat(sn_i32_to_string(this.c), sn_str_concat(".", sn_i32_to_string(this.d)))
+    );
+  }
 }
 
-export async function accept(listener: i64): i64 {
-  return await sn_tcp_accept(listener);
+export class Ipv6Address {
+  private literal: string;
+
+  constructor(literal: string) {
+    this.literal = literal;
+  }
+
+  static parse(s: string): Ipv6Address {
+    if (sn_str_index_of(s, ":") < 0) {
+      throw new Error("invalid ipv6 address");
+    }
+    return new Ipv6Address(s);
+  }
+
+  format(): string {
+    return this.literal;
+  }
 }
 
-export async function connect(host: string, port: i32): i64 {
-  return await sn_tcp_connect(host, port);
+export class IpAddress {
+  private literal: string;
+  private kind: i32;
+
+  constructor() {
+    this.literal = "";
+    this.kind = 0;
+  }
+
+  static fromV4(addr: Ipv4Address): IpAddress {
+    let ip = new IpAddress();
+    ip.literal = addr.format();
+    ip.kind = 4;
+    return ip;
+  }
+
+  static fromV6(addr: Ipv6Address): IpAddress {
+    let ip = new IpAddress();
+    ip.literal = addr.format();
+    ip.kind = 6;
+    return ip;
+  }
+
+  static parse(s: string): IpAddress {
+    if (sn_str_index_of(s, ":") >= 0) {
+      return IpAddress.fromV6(Ipv6Address.parse(s));
+    }
+    return IpAddress.fromV4(Ipv4Address.parse(s));
+  }
+
+  isV4(): bool {
+    return this.kind == 4;
+  }
+
+  isV6(): bool {
+    return this.kind == 6;
+  }
+
+  format(): string {
+    return this.literal;
+  }
 }
 
-export async function read(conn: i64, maxBytes: i32): string {
-  return await sn_tcp_read(conn, maxBytes);
+export class SocketAddress {
+  private host_: string;
+  private port_: i32;
+
+  constructor(host: string, port: i32) {
+    this.host_ = host;
+    this.port_ = port;
+  }
+
+  static parse(s: string): SocketAddress {
+    let idx = sn_str_index_of(s, ":");
+    if (idx < 0) {
+      throw new Error("invalid socket address");
+    }
+    let host = sn_str_substring(s, 0, idx);
+    let portStr = sn_str_substring(s, idx + 1, sn_str_len(s));
+    return new SocketAddress(host, sn_str_parse_i32(portStr));
+  }
+
+  host(): string {
+    return this.host_;
+  }
+
+  port(): i32 {
+    return this.port_;
+  }
+
+  format(): string {
+    return sn_str_concat(this.host_, sn_str_concat(":", sn_i32_to_string(this.port_)));
+  }
 }
 
-export async function write(conn: i64, data: string): void {
-  await sn_tcp_write(conn, data);
+/** Shared stream shape for TCP/TLS (async methods return Futures). */
+export interface ByteStream {
+  rawHandle(): i64;
+  read(maxBytes: i32): Future<Bytes>;
+  write(data: Bytes): Future<void>;
+  flush(): Future<void>;
+  close(): Future<void>;
 }
 
-export function close(handle: i64): void {
+export class TcpStream implements ByteStream {
+  private handle: i64;
+
+  constructor(handle: i64) {
+    this.handle = handle;
+  }
+
+  static connect(host: string, port: i32): Future<TcpStream> {
+    return tcpConnect(host, port);
+  }
+
+  rawHandle(): i64 {
+    return this.handle;
+  }
+
+  read(maxBytes: i32): Future<Bytes> {
+    return tcpReadBytes(this.handle, maxBytes);
+  }
+
+  write(data: Bytes): Future<void> {
+    return sn_tcp_write(this.handle, data.rawHandle());
+  }
+
+  flush(): Future<void> {
+    return sn_tcp_flush(this.handle);
+  }
+
+  close(): Future<void> {
+    return tcpClose(this.handle);
+  }
+}
+
+export class TcpListener {
+  private handle: i64;
+
+  constructor(handle: i64) {
+    this.handle = handle;
+  }
+
+  static bind(host: string, port: i32): Future<TcpListener> {
+    return tcpBind(host, port);
+  }
+
+  accept(): Future<TcpStream> {
+    return tcpAccept(this.handle);
+  }
+
+  close(): void {
+    sn_tcp_close_i64(this.handle);
+    this.handle = 0;
+  }
+
+  rawHandle(): i64 {
+    return this.handle;
+  }
+}
+
+export class UdpPacket {
+  data: Bytes;
+  host: string;
+  port: i32;
+
+  constructor(data: Bytes, host: string, port: i32) {
+    this.data = data;
+    this.host = host;
+    this.port = port;
+  }
+}
+
+export class UdpSocket {
+  private handle: i64;
+
+  constructor(handle: i64) {
+    this.handle = handle;
+  }
+
+  static bind(host: string, port: i32): Future<UdpSocket> {
+    return udpBind(host, port);
+  }
+
+  send(data: Bytes, host: string, port: i32): Future<void> {
+    return sn_udp_send(this.handle, data.rawHandle(), host, port);
+  }
+
+  receive(maxBytes: i32): Future<UdpPacket> {
+    return udpReceive(this.handle, maxBytes);
+  }
+
+  close(): void {
+    sn_udp_close_i64(this.handle);
+    this.handle = 0;
+  }
+}
+
+async function tcpConnect(host: string, port: i32): TcpStream {
+  let h = await sn_tcp_connect(host, port);
+  return new TcpStream(h);
+}
+
+async function tcpBind(host: string, port: i32): TcpListener {
+  let h = await sn_tcp_listen(host, port);
+  return new TcpListener(h);
+}
+
+async function tcpAccept(handle: i64): TcpStream {
+  let h = await sn_tcp_accept(handle);
+  return new TcpStream(h);
+}
+
+async function tcpClose(handle: i64): void {
   sn_tcp_close_i64(handle);
+}
+
+async function tcpReadBytes(handle: i64, maxBytes: i32): Bytes {
+  let h = await sn_tcp_read(handle, maxBytes);
+  return Bytes.fromHandle(h);
+}
+
+async function udpBind(host: string, port: i32): UdpSocket {
+  let h = await sn_udp_bind(host, port);
+  return new UdpSocket(h);
+}
+
+async function udpReceive(handle: i64, maxBytes: i32): UdpPacket {
+  let packet = await sn_udp_receive(handle, maxBytes);
+  return new UdpPacket(
+    Bytes.fromHandle(sn_udp_packet_bytes(packet)),
+    sn_udp_packet_host(packet),
+    sn_udp_packet_port(packet)
+  );
+}
+
+async function resolveAsync(host: string): IpAddress[] {
+  let hosts = await sn_dns_resolve(host);
+  let out: IpAddress[] = [];
+  let i: i32 = 0;
+  while (i < hosts.length) {
+    sn_array_push(out, IpAddress.parse(hosts[i]));
+    i = i + 1;
+  }
+  return out;
+}
+
+export function resolve(host: string): Future<IpAddress[]> {
+  return resolveAsync(host);
+}
+
+export function lookupHost(host: string): Future<string[]> {
+  return sn_dns_resolve(host);
 }

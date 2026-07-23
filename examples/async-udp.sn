@@ -1,0 +1,20 @@
+import { UdpSocket } from "std/net";
+import { spawn } from "std/async";
+
+async function sender(port: i32): void {
+  let sock = await UdpSocket.bind("127.0.0.1", 19052);
+  await sock.send(Bytes.fromString("ping"), "127.0.0.1", port);
+  sock.close();
+}
+
+async function main(): void {
+  let port: i32 = 19051;
+  // Bind and arm receive before the sender runs (UDP has no backlog).
+  let sock = await UdpSocket.bind("127.0.0.1", port);
+  let recvFut = sock.receive(64);
+  let s = spawn(sender(port));
+  let packet = await recvFut;
+  print(packet.data.decode("utf8"));
+  sock.close();
+  await s;
+}

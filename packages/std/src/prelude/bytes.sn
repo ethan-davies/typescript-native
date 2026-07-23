@@ -1,0 +1,68 @@
+extern function sn_bytes_new(length: i64): i64;
+extern function sn_bytes_with_capacity(capacity: i64): i64;
+extern function sn_bytes_len(handle: i64): i64;
+extern function sn_bytes_get(handle: i64, index: i32): i32;
+extern function sn_bytes_set(handle: i64, index: i32, value: i32): void;
+extern function sn_bytes_slice(handle: i64, start: i32, end: i32): i64;
+extern function sn_bytes_from_cstr(s: string): i64;
+extern function sn_bytes_to_utf8(handle: i64): string | null;
+extern function sn_bytes_concat(left: i64, right: i64): i64;
+
+export class Bytes {
+  private handle: i64;
+
+  constructor(handle: i64) {
+    this.handle = handle;
+  }
+
+  static empty(): Bytes {
+    return new Bytes(sn_bytes_new(0));
+  }
+
+  static withCapacity(capacity: i64): Bytes {
+    return new Bytes(sn_bytes_with_capacity(capacity));
+  }
+
+  static fromString(s: string): Bytes {
+    return new Bytes(sn_bytes_from_cstr(s));
+  }
+
+  static fromHandle(handle: i64): Bytes {
+    return new Bytes(handle);
+  }
+
+  rawHandle(): i64 {
+    return this.handle;
+  }
+
+  length(): i64 {
+    return sn_bytes_len(this.handle);
+  }
+
+  get(index: i32): i32 {
+    return sn_bytes_get(this.handle, index);
+  }
+
+  set(index: i32, value: i32): void {
+    sn_bytes_set(this.handle, index, value);
+  }
+
+  slice(start: i32, end: i32): Bytes {
+    return new Bytes(sn_bytes_slice(this.handle, start, end));
+  }
+
+  decode(encoding: string): string {
+    if (encoding != "utf8" && encoding != "utf-8") {
+      throw new Error("unsupported encoding");
+    }
+    let s = sn_bytes_to_utf8(this.handle);
+    if (s == null) {
+      throw new Error("invalid utf8");
+    }
+    return s;
+  }
+
+  concat(other: Bytes): Bytes {
+    return new Bytes(sn_bytes_concat(this.handle, other.handle));
+  }
+}

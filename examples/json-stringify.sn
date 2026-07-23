@@ -1,0 +1,18 @@
+import { Json, stringify } from "std/json";
+
+extern function sn_array_push<T>(arr: T[], value: T): void;
+
+function main(): void {
+  let obj = Json.object();
+  obj.set("name", Json.string("sonite"));
+  obj.set("ok", Json.bool(true));
+  obj.set("n", Json.number(3.0));
+  let items: Json[] = [];
+  sn_array_push(items, Json.string("a"));
+  sn_array_push(items, Json.nullValue());
+  obj.set("items", Json.array(items));
+  let out = stringify(obj);
+  print(out.contains("\"name\":\"sonite\""));
+  print(out.contains("\"ok\":true"));
+  print(out.contains("\"items\":[\"a\",null]"));
+}

@@ -1,0 +1,67 @@
+import { formatResponse, parseRequest, Server } from "std/http";
+import { TcpListener } from "std/net";
+import { TlsStream } from "std/tls";
+import { spawn } from "std/async";
+import { readFile, exists } from "std/fs";
+import { Json, stringify } from "std/json";
+
+extern function sn_str_concat(a: string, b: string): string;
+
+/**
+ * Full HTTPS round-trip: client keeps the connection open and reads the
+ * response while the server accepts, routes, and writes (stackless await).
+ */
+async function client(port: i32): void {
+  let tls = await TlsStream.connectWithConfig("127.0.0.1", port, true, "");
+  await tls.write(
+    Bytes.fromString("GET /users/7 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+  );
+  let chunk = await tls.read(4096);
+  let text = chunk.decode("utf8");
+  print(text.contains("user:7"));
+  print(text.contains("x-powered-by: sonite"));
+  await tls.close();
+}
+
+function pem(name: string): string {
+  let a = sn_str_concat("examples/certs/", name);
+  if (exists(a)) {
+    return readFile(a);
+  }
+  let b = sn_str_concat("certs/", name);
+  if (exists(b)) {
+    return readFile(b);
+  }
+  return readFile(sn_str_concat("../examples/certs/", name));
+}
+
+async function main(): void {
+  let port: i32 = 19150;
+  let cert = pem("cert.pem");
+  let key = pem("key.pem");
+
+  let server = Server.https(cert, key);
+  server.useHeader("x-powered-by", "sonite");
+  server.getText("/", "hello-https");
+  let payload = Json.object();
+  payload.set("ok", Json.bool(true));
+  server.getJson("/api/hello", stringify(payload));
+  server.getText("/users/:id", "user:");
+
+  let listener = await TcpListener.bind("127.0.0.1", port);
+  let c = spawn(client(port));
+  let tls = await TlsStream.acceptListener(listener.rawHandle(), cert, key);
+  let reqBytes = await tls.read(4096);
+  let parsed = parseRequest(reqBytes.decode("utf8"));
+  let req = parsed.request;
+  if (!parsed.ok || req == null) {
+    print("parse-fail");
+  } else {
+    let response = server.handle(req);
+    print(response.body.text());
+    await tls.write(formatResponse(response));
+  }
+  await tls.close();
+  await c;
+  listener.close();
+}

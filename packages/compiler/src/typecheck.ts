@@ -1041,6 +1041,48 @@ interface NamedImportMaps {
   genericTypeAliases: Map<string, TypeAliasDeclaration>;
 }
 
+/**
+ * Inject named imports whose origin modules are already in `allModuleSymbols`.
+ * Used during collectModuleSymbols so signatures can resolve prelude / dependency
+ * types (e.g. `Bytes` in `std/net`) before the body-checking pass.
+ */
+function injectAvailableImportsFromCollected(
+  mod: ResolvedModule,
+  maps: NamedImportMaps,
+): void {
+  for (const binding of mod.imports) {
+    if (binding.kind !== "named") {
+      continue;
+    }
+    const origin = allModuleSymbols.get(binding.modulePath);
+    if (!origin) {
+      continue;
+    }
+    const resolved = lookupExport(origin, binding.exportName);
+    if (!resolved) {
+      continue;
+    }
+    // Do not overwrite a local binding with the same name.
+    const already =
+      maps.classes.has(binding.localName) ||
+      maps.interfaces.has(binding.localName) ||
+      maps.structs.has(binding.localName) ||
+      maps.enums.has(binding.localName) ||
+      maps.typeAliases.has(binding.localName) ||
+      maps.functions.has(binding.localName) ||
+      maps.values.has(binding.localName) ||
+      maps.genericClasses.has(binding.localName) ||
+      maps.genericInterfaces.has(binding.localName) ||
+      maps.genericStructs.has(binding.localName) ||
+      maps.genericFunctions.has(binding.localName) ||
+      maps.genericTypeAliases.has(binding.localName);
+    if (already) {
+      continue;
+    }
+    injectNamedImport(binding.localName, resolved, maps);
+  }
+}
+
 function injectNamedImport(
   localName: string,
   resolved: NamedExportKind,
@@ -1602,6 +1644,61 @@ function collectModuleSymbols(
     }
   }
 
+  // Resolve signatures against imports already collected (prelude + earlier deps).
+  const importedFunctions = new Map<string, FunctionSig>();
+  const importedStructs = new Map<string, StructDef>();
+  const importedEnums = new Map<string, EnumDef>();
+  const importedClasses = new Map<string, ClassDef>();
+  const importedInterfaces = new Map<string, InterfaceDef>();
+  const importedTypeAliases = new Map<string, TypeAliasDef>();
+  const importedValues = new Map<string, ModuleValueDef>();
+  const importedGenericStructs = new Map<string, GenericStructTemplate>();
+  const importedGenericClasses = new Map<string, GenericClassTemplate>();
+  const importedGenericInterfaces = new Map<string, GenericInterfaceTemplate>();
+  const importedGenericFunctions = new Map<string, GenericFunctionTemplate>();
+  const importedGenericTypeAliases = new Map<string, TypeAliasDeclaration>();
+  injectAvailableImportsFromCollected(mod, {
+    functions: importedFunctions,
+    structs: importedStructs,
+    enums: importedEnums,
+    classes: importedClasses,
+    interfaces: importedInterfaces,
+    typeAliases: importedTypeAliases,
+    values: importedValues,
+    genericStructs: importedGenericStructs,
+    genericClasses: importedGenericClasses,
+    genericInterfaces: importedGenericInterfaces,
+    genericFunctions: importedGenericFunctions,
+    genericTypeAliases: importedGenericTypeAliases,
+  });
+
+  const prevClasses = activeClasses;
+  const prevInterfaces = activeInterfaces;
+  const prevAliases = activeTypeAliases;
+  const prevGenericStructs = activeGenericStructs;
+  const prevGenericClasses = activeGenericClasses;
+  const prevGenericInterfaces = activeGenericInterfaces;
+  const prevGenericTypeAliases = activeGenericTypeAliases;
+  activeClasses = new Map(importedClasses);
+  activeInterfaces = new Map(importedInterfaces);
+  activeTypeAliases = new Map(importedTypeAliases);
+  activeGenericStructs = new Map([
+    ...importedGenericStructs,
+    ...genericStructs,
+  ]);
+  activeGenericClasses = new Map([
+    ...importedGenericClasses,
+    ...genericClasses,
+  ]);
+  activeGenericInterfaces = new Map([
+    ...importedGenericInterfaces,
+    ...genericInterfaces,
+  ]);
+  activeGenericTypeAliases = new Map([
+    ...importedGenericTypeAliases,
+    ...genericTypeAliases,
+  ]);
+
   const structs = collectStructs(
     mod.ast,
     mod.moduleId,
@@ -1609,12 +1706,20 @@ function collectModuleSymbols(
     diagnostics,
     genericStructs,
   );
+  // Merge local structs into imported structs for field resolution in later types.
+  void importedStructs;
+  void importedEnums;
+  void importedFunctions;
+  void importedValues;
+
   const typeAliases = collectTypeAliases(
     mod.ast,
     mod.moduleId,
     diagnostics,
     genericTypeAliases,
   );
+  activeTypeAliases = new Map([...importedTypeAliases, ...typeAliases]);
+
   const interfaces = collectInterfaces(
     mod.ast,
     mod.moduleId,
@@ -1623,6 +1728,8 @@ function collectModuleSymbols(
     diagnostics,
     genericInterfaces,
   );
+  activeInterfaces = new Map([...importedInterfaces, ...interfaces]);
+
   const classes = collectClasses(
     mod.ast,
     mod.moduleId,
@@ -1631,15 +1738,15 @@ function collectModuleSymbols(
     interfaces,
     diagnostics,
     genericClasses,
+    importedClasses,
+    importedInterfaces,
   );
+
   const functions = new Map<string, FunctionSig>();
 
-  const prevClasses = activeClasses;
-  const prevInterfaces = activeInterfaces;
-  const prevAliases = activeTypeAliases;
-  activeClasses = classes;
-  activeInterfaces = interfaces;
-  activeTypeAliases = typeAliases;
+  activeClasses = new Map([...importedClasses, ...classes]);
+  activeInterfaces = new Map([...importedInterfaces, ...interfaces]);
+  activeTypeAliases = new Map([...importedTypeAliases, ...typeAliases]);
 
   for (const decl of mod.ast.body) {
     if (decl.kind !== "FunctionDeclaration" || decl.typeParams.length > 0) {
@@ -1846,6 +1953,10 @@ function collectModuleSymbols(
   activeClasses = prevClasses;
   activeInterfaces = prevInterfaces;
   activeTypeAliases = prevAliases;
+  activeGenericStructs = prevGenericStructs;
+  activeGenericClasses = prevGenericClasses;
+  activeGenericInterfaces = prevGenericInterfaces;
+  activeGenericTypeAliases = prevGenericTypeAliases;
 
   return {
     moduleId: mod.moduleId,
@@ -2499,6 +2610,8 @@ function collectClasses(
   interfaces: Map<string, InterfaceDef>,
   diagnostics: DiagnosticCollector,
   genericClasses: Map<string, GenericClassTemplate>,
+  importedClasses: Map<string, ClassDef> = new Map(),
+  importedInterfaces: Map<string, InterfaceDef> = new Map(),
 ): Map<string, ClassDef> {
   const declarations: ClassDeclaration[] = [];
   const byLocal = new Map<string, ClassDeclaration>();
@@ -2582,10 +2695,11 @@ function collectClasses(
   }
 
   // Temporarily expose for resolveAnnotation / superclass resolution within module.
+  // Include imported classes/interfaces (e.g. prelude Bytes, std/net ByteStream).
   const prevActive = activeClasses;
   const prevInterfaces = activeInterfaces;
-  activeClasses = classes;
-  activeInterfaces = interfaces;
+  activeClasses = new Map([...importedClasses, ...classes]);
+  activeInterfaces = new Map([...importedInterfaces, ...interfaces]);
 
   const visiting = new Set<string>();
   const done = new Set<string>();
@@ -3042,6 +3156,7 @@ function collectClasses(
       exported: decl.exported,
     };
     classes.set(localName, def);
+    activeClasses.set(localName, def);
     classesByMangled.set(mangled, def);
     return def;
   };

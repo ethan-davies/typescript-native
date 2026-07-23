@@ -22,10 +22,15 @@ Single-threaded cooperative concurrency:
 
 - **Scheduler / event loop** — `sn_task_spawn`, runnable queue, `sn_event_loop_run` / `sn_future_await_run`
 - **Timers** — `sn_timer_sleep_ms` → `Future<void>`
-- **TCP** — non-blocking listen/accept/connect/read/write registered with the platform reactor (epoll/kqueue/poll)
+- **Bytes** — length-prefixed `SnBytes` buffers (`sn_bytes_*`)
+- **TCP / UDP** — non-blocking sockets registered with the platform reactor (epoll)
+- **DNS** — `sn_dns_resolve` via a worker thread + Future completion
+- **TLS** — OpenSSL client/server (`sn_tls_*`); handshakes run on detached threads so they compose with nested `await_run`, then I/O returns to the non-blocking reactor
 - **Compose** — `sn_future_all` / `sn_future_race` over `Future*[]`
 
-See `src/async.c`, `reactor.c`, `timer.c`, `net.c`, and `tests/async_smoke.c`.
+See `src/async.c`, `reactor.c`, `timer.c`, `net.c`, `udp.c`, `dns.c`, `tls.c`, `bytes.c`, and `tests/async_smoke.c`.
+
+Linking native programs requires `-lpthread -lssl -lcrypto` in addition to `libsn_runtime.a` (the `sn` CLI adds these automatically).
 
 ## Heap & GC
 

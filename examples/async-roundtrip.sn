@@ -1,0 +1,31 @@
+import { TcpListener, TcpStream } from "std/net";
+import { spawn } from "std/async";
+
+// Client: connect, send a request, then AWAIT the response read. This is the
+// classic deadlock case — the client is parked on `read` while the server must
+// make progress on the same event loop to accept, read and reply.
+async function client(port: i32): void {
+  const conn = await TcpStream.connect("127.0.0.1", port);
+  await conn.write(Bytes.fromString("ping"));
+  const reply = await conn.read(64);
+  print(reply.decode("utf8"));
+  await conn.close();
+}
+
+async function main(): void {
+  const port: i32 = 19245;
+  const listener = await TcpListener.bind("127.0.0.1", port);
+  const c = spawn(client(port));
+
+  // Server: accept, read the request, write a response — all while the client
+  // is suspended awaiting that response.
+  const server = await listener.accept();
+  const req = await server.read(64);
+  print(req.decode("utf8"));
+  await server.write(Bytes.fromString("pong"));
+  await server.close();
+
+  await c;
+  listener.close();
+  print("done");
+}

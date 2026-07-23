@@ -18,5 +18,6 @@ export function getPreludePaths(): readonly string[] {
     join(root, "prelude", "bool.sn"),
     join(root, "prelude", "nullable.sn"),
     join(root, "prelude", "io.sn"),
+    join(root, "prelude", "bytes.sn"),
   ];
 }

@@ -76,7 +76,18 @@ typedef enum SnRefClass {
 #define SN_TYPEID_ENV 5
 #define SN_TYPEID_FUTURE 6
 #define SN_TYPEID_TASK 7
+/* Async task frame: a heap block of pointer-sized slots, conservatively scanned.
+ * Layout produced by codegen: { ptr result_fut, i64 state, params..., locals..., await_tmp }. */
+#define SN_TYPEID_FRAME 8
+#define SN_TYPEID_BYTES 10
 #define SN_TYPEID_CLASS_BASE 256
+
+/* Length-prefixed byte buffer (GC-managed). Layout matches SnArray header. */
+typedef struct SnBytes {
+  int64_t length;
+  int64_t capacity;
+  uint8_t *data;
+} SnBytes;
 
 /* Future lifecycle states. */
 #define SN_FUTURE_PENDING 0
@@ -299,6 +310,7 @@ char *sn_hex_encode(const char *data);
 char *sn_hex_decode(const char *data); /* NULL on invalid input */
 int32_t sn_utf8_byte_len(const char *s);
 bool sn_utf8_is_valid(const char *s);
+int32_t sn_str_parse_i32(const char *s); /* 0 on invalid */
 
 bool sn_random_bool(void);
 
@@ -345,13 +357,52 @@ void sn_event_loop_poll(void);
 void *sn_timer_sleep_ms(int64_t ms);
 void sn_timer_cancel(void *fut);
 
+/* Bytes (length-prefixed binary buffers). Handles are i64-encoded pointers. */
+void *sn_bytes_new(int64_t length);
+void *sn_bytes_with_capacity(int64_t capacity);
+int64_t sn_bytes_len(int64_t handle);
+int32_t sn_bytes_get(int64_t handle, int32_t index);
+void sn_bytes_set(int64_t handle, int32_t index, int32_t value);
+int64_t sn_bytes_slice(int64_t handle, int32_t start, int32_t end);
+int64_t sn_bytes_from_cstr(const char *s);
+char *sn_bytes_to_utf8(int64_t handle); /* NULL if invalid UTF-8 */
+int64_t sn_bytes_concat(int64_t left, int64_t right);
+int64_t sn_bytes_from_ptr(void *bytes); /* SnBytes* → i64 handle */
+void *sn_bytes_to_ptr(int64_t handle);
+int64_t sn_bytes_copy_from(const void *data, int64_t length);
+
 /* Non-blocking TCP. Handles are i64-encoded pointers in Future values. */
 void *sn_tcp_listen(const char *host, int32_t port); /* Future<i64> */
 void *sn_tcp_accept(int64_t listener);                 /* Future<i64> */
 void *sn_tcp_connect(const char *host, int32_t port); /* Future<i64> */
-void *sn_tcp_read(int64_t conn, int32_t max_bytes);    /* Future<string> */
-void *sn_tcp_write(int64_t conn, const char *data);    /* Future<void> */
+void *sn_tcp_read(int64_t conn, int32_t max_bytes);    /* Future<i64> Bytes handle */
+void *sn_tcp_write(int64_t conn, int64_t bytes_handle); /* Future<void> */
 void sn_tcp_close_i64(int64_t handle);
+void *sn_tcp_flush(int64_t conn); /* Future<void> — currently completes immediately */
+
+/* Non-blocking UDP. */
+void *sn_udp_bind(const char *host, int32_t port); /* Future<i64> */
+void *sn_udp_send(int64_t socket, int64_t bytes_handle, const char *host, int32_t port); /* Future<void> */
+void *sn_udp_receive(int64_t socket, int32_t max_bytes); /* Future: [bytes_handle, host, port] boxed */
+void sn_udp_close_i64(int64_t handle);
+
+int64_t sn_udp_packet_bytes(int64_t packet_handle);
+char *sn_udp_packet_host(int64_t packet_handle);
+int32_t sn_udp_packet_port(int64_t packet_handle);
+
+/* Async DNS (worker thread + Future). Returns Future of string[] of IP literals. */
+void *sn_dns_resolve(const char *host);
+void sn_dns_poll_results(void);
+void sn_tls_poll_results(void);
+
+/* TLS (OpenSSL). Config flags: bit0 = insecure_skip_verify. */
+void *sn_tls_connect(const char *host, int32_t port, int32_t flags, const char *ca_file);
+void *sn_tls_accept(int64_t tcp_handle, int32_t flags, const char *cert_pem, const char *key_pem);
+/* TCP accept on listener then TLS handshake; Future<i64> TLS handle. */
+void *sn_tls_accept_listener(int64_t listener_handle, const char *cert_pem, const char *key_pem);
+void *sn_tls_read(int64_t tls_handle, int32_t max_bytes);  /* Future<i64> Bytes */
+void *sn_tls_write(int64_t tls_handle, int64_t bytes_handle); /* Future<void> */
+void sn_tls_close_i64(int64_t handle);
 
 #ifdef __cplusplus
 }

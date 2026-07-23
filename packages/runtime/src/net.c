@@ -44,8 +44,7 @@ typedef struct SnReadReq {
 typedef struct SnWriteReq {
   SnTcpConn *conn;
   SnFuture *future;
-  char *data;
-  size_t len;
+  SnBytes *bytes;
   size_t sent;
 } SnWriteReq;
 
@@ -142,7 +141,7 @@ static void read_cb(void *userdata, int events) {
     return;
   }
   int32_t maxb = req->max_bytes > 0 ? req->max_bytes : 4096;
-  char *buf = (char *)malloc((size_t)maxb + 1);
+  uint8_t *buf = (uint8_t *)malloc((size_t)maxb);
   if (buf == NULL) {
     abort();
   }
@@ -151,17 +150,15 @@ static void read_cb(void *userdata, int events) {
   if (n < 0) {
     free(buf);
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      /* re-arm */
       sn_reactor_add_fd(req->conn->fd, SN_REACTOR_READ, read_cb, req);
       return;
     }
     sn_future_fail(req->future, make_error("read failed"));
     return;
   }
-  buf[n] = '\0';
-  char *s = sn_str_concat(buf, "");
+  int64_t handle = sn_bytes_copy_from(buf, n);
   free(buf);
-  sn_future_complete(req->future, s);
+  sn_future_complete(req->future, box_i64(handle));
 }
 
 static void write_cb(void *userdata, int events) {
@@ -172,8 +169,10 @@ static void write_cb(void *userdata, int events) {
   if (!(events & (SN_REACTOR_WRITE | SN_REACTOR_ERROR))) {
     return;
   }
-  while (req->sent < req->len) {
-    ssize_t n = write(req->conn->fd, req->data + req->sent, req->len - req->sent);
+  size_t len = req->bytes != NULL ? (size_t)req->bytes->length : 0;
+  const uint8_t *data = req->bytes != NULL ? req->bytes->data : NULL;
+  while (req->sent < len) {
+    ssize_t n = write(req->conn->fd, data + req->sent, len - req->sent);
     if (n < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         return;
@@ -334,7 +333,7 @@ void *sn_tcp_read(int64_t conn_handle, int32_t max_bytes) {
   return fut;
 }
 
-void *sn_tcp_write(int64_t conn_handle, const char *data) {
+void *sn_tcp_write(int64_t conn_handle, int64_t bytes_handle) {
   sn_async_ensure_init();
   SnFuture *fut = (SnFuture *)sn_future_new();
   SnTcpConn *conn = (SnTcpConn *)i64_to_handle(conn_handle);
@@ -342,17 +341,17 @@ void *sn_tcp_write(int64_t conn_handle, const char *data) {
     sn_future_fail(fut, make_error("invalid connection"));
     return fut;
   }
-  const char *payload = data != NULL ? data : "";
-  size_t len = strlen(payload);
+  SnBytes *bytes = (SnBytes *)sn_bytes_to_ptr(bytes_handle);
   SnWriteReq *req = (SnWriteReq *)sn_alloc((int64_t)sizeof(SnWriteReq));
   req->conn = conn;
   req->future = fut;
-  req->data = sn_str_concat(payload, "");
-  req->len = len;
+  req->bytes = bytes;
   req->sent = 0;
 
-  while (req->sent < req->len) {
-    ssize_t n = write(conn->fd, req->data + req->sent, req->len - req->sent);
+  size_t len = bytes != NULL ? (size_t)bytes->length : 0;
+  const uint8_t *data = bytes != NULL ? bytes->data : NULL;
+  while (req->sent < len) {
+    ssize_t n = write(conn->fd, data + req->sent, len - req->sent);
     if (n < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         sn_reactor_add_fd(conn->fd, SN_REACTOR_WRITE, write_cb, req);
@@ -363,6 +362,14 @@ void *sn_tcp_write(int64_t conn_handle, const char *data) {
     }
     req->sent += (size_t)n;
   }
+  sn_future_complete_void(fut);
+  return fut;
+}
+
+void *sn_tcp_flush(int64_t conn_handle) {
+  (void)conn_handle;
+  sn_async_ensure_init();
+  SnFuture *fut = (SnFuture *)sn_future_new();
   sn_future_complete_void(fut);
   return fut;
 }

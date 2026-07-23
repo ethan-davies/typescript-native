@@ -1,25 +1,20 @@
-import { listen, accept, connect, read, write, close } from "std/net";
+import { TcpListener, TcpStream } from "std/net";
 import { spawn } from "std/async";
 
-/**
- * Concurrent TCP with the await_run runtime: the client must not wait on the
- * server (e.g. read a response) while the server is still blocked in `accept`
- * on the same OS stack. Write-then-close from the client is safe.
- */
 async function client(port: i32): void {
-  const conn = await connect("127.0.0.1", port);
-  await write(conn, "hi");
-  close(conn);
+  const conn = await TcpStream.connect("127.0.0.1", port);
+  await conn.write(Bytes.fromString("hi"));
+  await conn.close();
 }
 
 async function main(): void {
   const port: i32 = 19031;
-  const listener = await listen("127.0.0.1", port);
+  const listener = await TcpListener.bind("127.0.0.1", port);
   const c = spawn(client(port));
-  const server = await accept(listener);
-  const msg = await read(server, 64);
-  print(msg);
-  close(server);
+  const server = await listener.accept();
+  const msg = await server.read(64);
+  print(msg.decode("utf8"));
+  await server.close();
   await c;
-  close(listener);
+  listener.close();
 }

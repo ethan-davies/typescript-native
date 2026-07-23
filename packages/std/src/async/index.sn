@@ -1,6 +1,8 @@
 extern function sn_timer_sleep_ms(ms: i64): Future<void>;
-extern function sn_future_all(futures: Future<null>[]): Future<null>;
-extern function sn_future_race(futures: Future<null>[]): Future<null>;
+extern function sn_future_all(futures: Future<void>[]): Future<void>;
+extern function sn_future_race(futures: Future<void>[]): Future<void>;
+extern function sn_future_is_ready(fut: Future<void>): bool;
+extern function sn_array_push<T>(arr: T[], value: T): void;
 
 /** Suspend the current async task for `ms` milliseconds. */
 export async function sleep(ms: i64): void {
@@ -15,16 +17,27 @@ export function spawn<T>(fut: Future<T>): Future<T> {
   return fut;
 }
 
-/**
- * Wait until every future in `futures` settles. Element type is erased to
- * `Future<null>` at the ABI boundary; prefer awaiting typed handles when you
- * need each result.
- */
-export function all(futures: Future<null>[]): Future<null> {
+/** Wait until every future in `futures` settles. */
+export function all(futures: Future<void>[]): Future<void> {
   return sn_future_all(futures);
 }
 
-/** Resolve with the first future in `futures` that settles. */
-export function race(futures: Future<null>[]): Future<null> {
+/** Resolve when the first future in `futures` settles. */
+export function race(futures: Future<void>[]): Future<void> {
   return sn_future_race(futures);
+}
+
+/**
+ * Await `work`, or fail if it does not complete within `ms` milliseconds.
+ * The losing side may still run in the background (cooperative runtime).
+ */
+export async function timeout(work: Future<void>, ms: i64): void {
+  let timed = sn_timer_sleep_ms(ms);
+  let arr: Future<void>[] = [];
+  sn_array_push(arr, work);
+  sn_array_push(arr, timed);
+  await sn_future_race(arr);
+  if (!sn_future_is_ready(work)) {
+    throw new Error("operation timed out");
+  }
 }

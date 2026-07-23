@@ -4,7 +4,7 @@ Currently supported features:
 
 - A single top-level `function main(): void` or `async function main(): void` with no parameters (return type required)
 - Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, `null`, arrays `T[]`, tuples `[T, U]`, `struct`, `enum`, `class`, `interface`, and `Future<T>` types
-- Async/await: `async function`, `await` expressions (async functions only), cooperative single-threaded tasks, timers, and TCP via the event loop
+- Async/await: `async function`, `await` expressions (async functions only), cooperative single-threaded tasks, timers, TCP/UDP/DNS/TLS via the event loop (OpenSSL; link `-lpthread -lssl -lcrypto`)
 - Generics: type parameters on structs, classes, interfaces, functions, and methods; constraints (`T extends I`); nested type arguments; call-site inference; compile-time monomorphization (no runtime generics)
 - Type aliases (`type Name = ...`), including generic aliases, unions (`|`), intersections (`&`), literal types, `keyof` / `typeof` type operators, conditional and mapped types
 - Control-flow narrowing via `typeof` checks, `== null` / `!= null`, and `is` type checks on union / nullable values; early `return` / `break` / `continue` refine types in subsequent code
@@ -27,9 +27,15 @@ Currently supported features:
   - `std/fs` — file/directory/path helpers
   - `std/process` — `args`, `getEnv`, `setEnv`, `cwd`, `exit`
   - `std/time` — `Instant`, `Duration`, async `sleep`, `sleepSync`, `now`
-  - `std/async` — `sleep`, `spawn`, `all`, `race`
-  - `std/net` — async TCP `listen` / `accept` / `connect` / `read` / `write` / `close`
+  - `std/async` — `sleep`, `spawn`, `all`, `race`, `timeout`
+  - `std/bytes` — length-prefixed binary buffers (`Bytes`; also available via prelude)
+  - `std/net` — async TCP/UDP, DNS (`TcpStream`, `TcpListener`, `UdpSocket`, `resolve`), address types
+  - `std/tls` — OpenSSL-backed `TlsStream` client/server (certificate verification by default)
+  - `std/http` — HTTP/1.1 `fetch` / `fetchRequest` / `fetchInit` client (connect/read timeouts, keep-alive pool, redirects), `Server` (handlers, onion `use` / `useHeader`, static `getText`/`getJson`, wildcards, HTTPS), `Request`/`Response`/`Headers`/`URL`/`Body` (streaming `read`), parser
+  - `std/json` — `Json` values and `stringify` (no parser yet)
   - `std/encoding` — UTF-8 helpers, base64, hex
+- Async I/O uses stackless task suspension (`sn_task_await_suspend`) so concurrent client/server round-trips work without nested `await_run` deadlocks
+- Network stream APIs take/return prelude `Bytes` (`TcpStream`/`UdpSocket`/`TlsStream` read/write)
 - Modules / imports:
   - Relative imports require `./` or `../` (e.g. `import { User } from "./models"`)
   - Core std via `std/…`; installed packages via bare name or `pkg/subpath` (versions from `project.lock`)

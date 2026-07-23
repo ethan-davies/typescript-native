@@ -324,8 +324,40 @@ static void mark_object(void *ptr) {
     mark_array(obj);
     return;
   }
+  if (type_id == SN_TYPEID_BYTES) {
+    /* Same header shape as SnArray: mark the data buffer allocation. */
+    mark_array(obj);
+    return;
+  }
   if (type_id == SN_TYPEID_MAP) {
     mark_map(obj);
+    return;
+  }
+  if (type_id == SN_TYPEID_TASK) {
+    /* Layout must match SnTask in async_internal.h. */
+    typedef struct SnTaskMark {
+      void *result;
+      void *frame;
+      void *resume;
+      void *awaiting;
+      int32_t state;
+      int32_t cancelled;
+    } SnTaskMark;
+    SnTaskMark *task = (SnTaskMark *)ptr;
+    mark_object(task->result);
+    mark_object(task->frame);
+    mark_object(task->awaiting);
+    return;
+  }
+  if (type_id == SN_TYPEID_FRAME) {
+    /* Conservative scan: treat every pointer-sized slot as a potential heap
+     * pointer. Non-pointer slots (state, scalars) resolve to NULL in heap_get
+     * and are ignored, so this is safe (may over-retain, never crashes). */
+    int64_t slots = obj->size / (int64_t)sizeof(void *);
+    void **words = (void **)ptr;
+    for (int64_t i = 0; i < slots; i += 1) {
+      mark_object(words[i]);
+    }
     return;
   }
   if (type_id == SN_TYPEID_FUTURE) {

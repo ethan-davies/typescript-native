@@ -22,7 +22,8 @@ async function main(): void {
     expect(result.ir).toContain("sn_future_new");
     expect(result.ir).toContain("sn_task_spawn");
     expect(result.ir).toContain("sn_event_loop_run");
-    expect(result.ir).toContain("sn_future_await_run");
+    // Await now lowers to a stackless suspend point rather than a blocking drive.
+    expect(result.ir).toContain("sn_task_await_suspend");
   });
 
   it("rejects await outside async", () => {
@@ -91,7 +92,7 @@ async function main(): void {
     const result = compileFile(path.join(root, "examples/async-sleep.sn"));
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     expect(result.ir).toContain("sn_timer_sleep_ms");
-    expect(result.ir).toContain("sn_future_await_run");
+    expect(result.ir).toContain("sn_task_await_suspend");
   });
 
   it("compiles examples/async-concurrent.sn", () => {
@@ -99,7 +100,7 @@ async function main(): void {
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     expect(result.ir).toContain("sn_timer_sleep_ms");
     expect(result.ir).toContain("sn_task_spawn");
-    expect(result.ir).toContain("sn_future_await_run");
+    expect(result.ir).toContain("sn_task_await_suspend");
   });
 
   it("emits await for expression statements", () => {
@@ -119,7 +120,9 @@ async function main(): void {
       result.ir!.indexOf("define void @main__async__body"),
       result.ir!.indexOf("define ptr @main__async()"),
     );
-    expect(body).toContain("sn_future_await_run");
+    // The task body suspends cooperatively at the await instead of blocking.
+    expect(body).toContain("sn_task_await_suspend");
+    expect(body).not.toContain("sn_future_await_run");
   });
 
   it("compiles examples/async-tcp.sn", () => {
@@ -128,6 +131,6 @@ async function main(): void {
     expect(result.ir).toContain("sn_tcp_listen");
     expect(result.ir).toContain("sn_tcp_accept");
     expect(result.ir).toContain("sn_tcp_connect");
-    expect(result.ir).toContain("sn_future_await_run");
+    expect(result.ir).toContain("sn_task_await_suspend");
   });
 });

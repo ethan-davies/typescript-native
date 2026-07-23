@@ -50,4 +50,103 @@ describe.runIf(clangAvailable())("async sn run integration", () => {
     },
     30_000,
   );
+
+  it(
+    "runs async-udp.sn",
+    async () => {
+      const code = await compileLinkAndRun(join(examples, "async-udp.sn"), []);
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs async-dns.sn",
+    async () => {
+      const code = await compileLinkAndRun(join(examples, "async-dns.sn"), []);
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs async-tls.sn",
+    async () => {
+      const code = await compileLinkAndRun(join(examples, "async-tls.sn"), [], {
+        cwd: repoRoot,
+      });
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs http-server.sn",
+    async () => {
+      const code = await compileLinkAndRun(join(examples, "http-server.sn"), []);
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs http-handlers.sn",
+    async () => {
+      const code = await compileLinkAndRun(
+        join(examples, "http-handlers.sn"),
+        [],
+      );
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs json-stringify.sn",
+    async () => {
+      const code = await compileLinkAndRun(
+        join(examples, "json-stringify.sn"),
+        [],
+      );
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs https-server.sn",
+    async () => {
+      const code = await compileLinkAndRun(
+        join(examples, "https-server.sn"),
+        [],
+        { cwd: repoRoot },
+      );
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs http-fetch.sn",
+    async () => {
+      const code = await compileLinkAndRun(
+        join(examples, "http-fetch.sn"),
+        [],
+      );
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
+
+  it(
+    "runs async-roundtrip.sn",
+    async () => {
+      const code = await compileLinkAndRun(
+        join(examples, "async-roundtrip.sn"),
+        [],
+      );
+      expect(code).toBe(0);
+    },
+    30_000,
+  );
 });

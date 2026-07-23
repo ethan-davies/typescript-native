@@ -1,0 +1,29 @@
+import { formatResponse, Response } from "std/http";
+import { TcpListener, TcpStream } from "std/net";
+import { spawn } from "std/async";
+
+async function client(port: i32): void {
+  let conn = await TcpStream.connect("127.0.0.1", port);
+  await conn.write(
+    Bytes.fromString("GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+  );
+  let chunk = await conn.read(4096);
+  let text = chunk.decode("utf8");
+  print(text.contains("Hello, Sonite!"));
+  await conn.close();
+}
+
+async function main(): void {
+  let port: i32 = 19043;
+  let listener = await TcpListener.bind("127.0.0.1", port);
+  let c = spawn(client(port));
+  let conn = await listener.accept();
+  let chunk = await conn.read(4096);
+  let text = chunk.decode("utf8");
+  print(text.contains("GET /"));
+  let out = formatResponse(Response.text("Hello, Sonite!"));
+  await conn.write(out);
+  await conn.close();
+  await c;
+  listener.close();
+}

@@ -1,6 +1,7 @@
 import type {
   AssignmentStatement,
   BinaryExpression,
+  BindingPattern,
   CallArgument,
   CallExpression,
   ClassDeclaration,
@@ -287,6 +288,7 @@ const SN_TYPEID_STRING = 1;
 const SN_TYPEID_ARRAY = 2;
 const SN_TYPEID_MAP = 3;
 const SN_TYPEID_CLOSURE = 4;
+const SN_TYPEID_FRAME = 8;
 const SN_TYPEID_CLASS_BASE = 256;
 
 const SN_KIND_CLASS = 1;
@@ -367,6 +369,21 @@ export class LlvmCodegen {
   private needsAsync = false;
   /** When emitting an async task body, IR value of the result Future*. */
   private asyncResultFut: string | null = null;
+  /**
+   * Active async state-machine context while emitting a resumable task body.
+   * Locals/params live in heap frame slots (persist across suspension); each
+   * `await` becomes a state boundary that can `ret void` and be re-entered.
+   */
+  private asyncFrame: {
+    /** GEP pointers (defined in entry, dominate all states) keyed by var name. */
+    readonly slotPtr: Map<string, string>;
+    /** Pointer to the i32/i64 state slot. */
+    readonly stateSlot: string;
+    /** Scratch pointer slot used to hold the awaited Future across suspension. */
+    readonly awaitSlot: string;
+    /** Number of states created so far (>= 1); also next state index. */
+    stateCount: number;
+  } | null = null;
   /** Deferred return through a finally block. */
   private pendingReturn: {
     readonly llvm: string;
@@ -564,6 +581,17 @@ export class LlvmCodegen {
           this.classes.set(info.name, info);
         }
       }
+
+      // Make imports from already-emitted modules visible for signature resolution
+      // (prelude Bytes, dependency classes, etc.).
+      this.seedImportsFromCollected(mod, moduleSymbols, {
+        functions: localFns,
+        structs: localStructs,
+        enums: localEnums,
+        classes: localClasses,
+        interfaces: localInterfaces,
+        values: new Map(),
+      });
 
       // Resolve interface methods / extends (within module).
       for (const decl of mod.ast.body) {
@@ -1166,6 +1194,81 @@ export class LlvmCodegen {
       typeId: 0,
       decl,
     };
+  }
+
+  /**
+   * Copy named imports from modules already registered in `moduleSymbols` into
+   * the current module's local maps so annotation resolution can see them.
+   */
+  private seedImportsFromCollected(
+    mod: ResolvedModule,
+    moduleSymbols: Map<
+      string,
+      {
+        functions: Map<string, FunctionSig>;
+        structs: Map<string, StructInfo>;
+        enums: Map<string, EnumInfo>;
+        classes: Map<string, ClassInfo>;
+        interfaces: Map<string, InterfaceInfo>;
+        values: Map<string, ModuleValueInfo>;
+      }
+    >,
+    locals: {
+      functions: Map<string, FunctionSig>;
+      structs: Map<string, StructInfo>;
+      enums: Map<string, EnumInfo>;
+      classes: Map<string, ClassInfo>;
+      interfaces: Map<string, InterfaceInfo>;
+      values: Map<string, ModuleValueInfo>;
+    },
+  ): void {
+    for (const binding of mod.imports) {
+      if (binding.kind !== "named") {
+        continue;
+      }
+      const origin = moduleSymbols.get(binding.modulePath);
+      if (!origin) {
+        continue;
+      }
+      const name = binding.localName;
+      const exportName = binding.exportName;
+      if (!locals.classes.has(name)) {
+        const cl = origin.classes.get(exportName);
+        if (cl) {
+          locals.classes.set(name, cl);
+        }
+      }
+      if (!locals.interfaces.has(name)) {
+        const iface = origin.interfaces.get(exportName);
+        if (iface) {
+          locals.interfaces.set(name, iface);
+        }
+      }
+      if (!locals.structs.has(name)) {
+        const st = origin.structs.get(exportName);
+        if (st) {
+          locals.structs.set(name, st);
+        }
+      }
+      if (!locals.enums.has(name)) {
+        const en = origin.enums.get(exportName);
+        if (en) {
+          locals.enums.set(name, en);
+        }
+      }
+      if (!locals.functions.has(name)) {
+        const fn = origin.functions.get(exportName);
+        if (fn) {
+          locals.functions.set(name, fn);
+        }
+      }
+      if (!locals.values.has(name)) {
+        const val = origin.values.get(exportName);
+        if (val) {
+          locals.values.set(name, val);
+        }
+      }
+    }
   }
 
   /**
@@ -3368,6 +3471,7 @@ export class LlvmCodegen {
       declares.push("declare ptr @sn_future_value(ptr noundef) nounwind");
       declares.push("declare ptr @sn_future_error(ptr noundef) nounwind");
       declares.push("declare void @sn_future_await_run(ptr noundef) nounwind");
+      declares.push("declare i1 @sn_task_await_suspend(ptr noundef) nounwind");
       declares.push(
         "declare ptr @sn_task_spawn(ptr noundef, ptr noundef, ptr noundef) nounwind",
       );
@@ -3763,10 +3867,21 @@ export class LlvmCodegen {
   }
 
   /**
-   * Async function lowering (await_run model):
-   * - Start stub allocates a Future, packs params into a frame, spawns a task, returns Future*.
-   * - Task body runs the user statements; `await` calls sn_future_await_run; `return` completes the Future.
-   * - `async function main` also emits `i32 @main` that drives sn_event_loop_run.
+   * Async function lowering (stackless resumable state-machine model):
+   * - Start stub allocates a Future + heap frame, packs params, spawns a task, returns Future*.
+   * - Task body is a resume function: an entry block computes frame-slot pointers
+   *   and `switch`es on the saved state to the correct resume point. Each `await`
+   *   is a state boundary: it stores the pending Future into a frame slot, calls
+   *   `sn_task_await_suspend`, and either `ret void` (task suspended, re-entered
+   *   later by the scheduler) or falls through to extract the ready value.
+   * - Locals + params live in heap frame slots so they survive across suspension.
+   * - `return` completes the result Future; `async function main` also emits an
+   *   `i32 @main` that drives `sn_event_loop_run`.
+   *
+   * Known limitation: values that must stay live across an `await` are only
+   * preserved when they live in a named local (all locals are spilled to the
+   * frame). Raw temporaries produced mid-expression around an inline `await`
+   * (e.g. `f(g(), await h())` or `(await a()) + (await b())`) are not spilled.
    */
   private emitAsyncFunction(fn: FunctionDeclaration): void {
     if (!fn.body) {
@@ -3789,7 +3904,19 @@ export class LlvmCodegen {
           : (sig.returnType.inner as ValueType)
         : sig.returnType;
 
-    // --- task body ---
+    // Frame layout (all slots pointer-sized / 8 bytes):
+    //   slot 0            : result Future*
+    //   slot 1            : state (i32 stored in an 8-byte slot)
+    //   slots 2..2+P-1    : params
+    //   slots 2+P..       : spilled locals (one per distinct declared name)
+    //   final slot        : scratch for the awaited Future across suspension
+    const paramCount = fn.params.length;
+    const localNames = this.collectAsyncLocalNames(fn.body);
+    const localBase = 2 + paramCount;
+    const awaitSlotIndex = localBase + localNames.length;
+    const totalSlots = awaitSlotIndex + 1;
+
+    // --- task body (resume function) ---
     this.locals = new Map();
     this.tempCounter = 0;
     this.labelCounter = 0;
@@ -3797,63 +3924,82 @@ export class LlvmCodegen {
     const bodyGc = this.beginGcFunctionScope();
     this.boxedNames = this.collectBoxedNamesInStmts(fn.body);
     this.currentReturnType = declaredRet;
-    const bodyLines: string[] = [];
-    bodyLines.push(`define void @${bodyName}(ptr %frame) {`);
-    bodyLines.push("entry:");
 
-    // Frame layout: { ptr result_fut, params... }
+    const entryLines: string[] = [];
+    entryLines.push(`define void @${bodyName}(ptr %frame) {`);
+    entryLines.push("entry:");
+
+    // result Future*
     const futSlot = this.nextTemp();
-    bodyLines.push(`  ${futSlot} = getelementptr ptr, ptr %frame, i64 0`);
+    entryLines.push(`  ${futSlot} = getelementptr ptr, ptr %frame, i64 0`);
     const futLoaded = this.nextTemp();
-    bodyLines.push(`  ${futLoaded} = load ptr, ptr ${futSlot}`);
+    entryLines.push(`  ${futLoaded} = load ptr, ptr ${futSlot}`);
     this.asyncResultFut = futLoaded;
-    this.rootHeapPtr(futLoaded, bodyLines);
+    // Capture the shadow-stack checkpoint in the entry block so suspension paths
+    // (which `ret void` from arbitrary state blocks) can restore it under SSA
+    // dominance rules.
+    this.ensureGcEntryCheckpoint(entryLines);
 
-    this.thisPtr = null;
-    this.thisType = null;
-    let paramIndex = 0;
+    // state + await scratch slot pointers (defined in entry → dominate all states)
+    const stateSlot = this.nextTemp();
+    entryLines.push(`  ${stateSlot} = getelementptr ptr, ptr %frame, i64 1`);
+    const awaitSlot = this.nextTemp();
+    entryLines.push(
+      `  ${awaitSlot} = getelementptr ptr, ptr %frame, i64 ${awaitSlotIndex}`,
+    );
+
+    // Slot pointers for params + locals.
+    const slotPtr = new Map<string, string>();
     for (let i = 0; i < fn.params.length; i += 1) {
       const param = fn.params[i]!;
-      if (param.isReceiver) {
-        const type = this.resolveAnnotation(param.typeAnnotation);
-        if (!type) {
-          throw new Error("Codegen: invalid extension receiver type");
-        }
-        const slot = this.nextTemp();
-        bodyLines.push(
-          `  ${slot} = getelementptr ptr, ptr %frame, i64 ${i + 1}`,
-        );
-        const loaded = this.nextTemp();
-        const llvmTy = toLlvmType(type);
-        if (llvmTy === "ptr" || llvmTy === "%__Callable") {
-          bodyLines.push(`  ${loaded} = load ${llvmTy}, ptr ${slot}`);
-        } else {
-          bodyLines.push(`  ${loaded} = load ${llvmTy}, ptr ${slot}`);
-        }
-        this.thisType = type;
-        this.thisPtr = loaded;
-        continue;
+      const p = this.nextTemp();
+      entryLines.push(`  ${p} = getelementptr ptr, ptr %frame, i64 ${2 + i}`);
+      if (!param.isReceiver) {
+        slotPtr.set(param.name.name, p);
+      } else {
+        slotPtr.set("__receiver__", p);
       }
+    }
+    for (let i = 0; i < localNames.length; i += 1) {
+      const p = this.nextTemp();
+      entryLines.push(
+        `  ${p} = getelementptr ptr, ptr %frame, i64 ${localBase + i}`,
+      );
+      slotPtr.set(localNames[i]!, p);
+    }
+
+    this.asyncFrame = { slotPtr, stateSlot, awaitSlot, stateCount: 1 };
+
+    // Bind params: receiver loaded into an SSA `this` (entry dominates all);
+    // value/reference params are read from their frame slot on demand.
+    this.thisPtr = null;
+    this.thisType = null;
+    for (let i = 0; i < fn.params.length; i += 1) {
+      const param = fn.params[i]!;
       const type = this.resolveAnnotation(param.typeAnnotation);
       if (!type) {
         throw new Error("Codegen: invalid parameter type");
       }
-      const slot = this.nextTemp();
-      bodyLines.push(
-        `  ${slot} = getelementptr ptr, ptr %frame, i64 ${i + 1}`,
-      );
-      const llvmTy = toLlvmType(type);
-      const loaded = this.nextTemp();
-      bodyLines.push(`  ${loaded} = load ${llvmTy}, ptr ${slot}`);
-      const ptr = `%v.${param.name.name}`;
-      bodyLines.push(`  ${ptr} = alloca ${llvmTy}`);
-      bodyLines.push(`  store ${llvmTy} ${loaded}, ptr ${ptr}`);
-      this.locals.set(param.name.name, { ptr, type, boxed: false });
-      this.registerRootsForStorage(ptr, type, bodyLines);
-      paramIndex += 1;
+      if (param.isReceiver) {
+        const loaded = this.nextTemp();
+        const llvmTy = toLlvmType(type);
+        entryLines.push(
+          `  ${loaded} = load ${llvmTy}, ptr ${slotPtr.get("__receiver__")!}`,
+        );
+        this.thisType = type;
+        this.thisPtr = loaded;
+        continue;
+      }
+      this.locals.set(param.name.name, {
+        ptr: slotPtr.get(param.name.name)!,
+        type,
+        boxed: false,
+      });
     }
-    void paramIndex;
 
+    // Emit the body into its own block stream, beginning at state 0.
+    const bodyLines: string[] = [];
+    bodyLines.push("state.0:");
     let terminated = false;
     for (const stmt of fn.body) {
       if (terminated) {
@@ -3873,11 +4019,31 @@ export class LlvmCodegen {
         );
       }
     }
-    bodyLines.push("}");
-    bodyLines.push("");
-    this.functionBodies.push(...bodyLines);
+
+    // Now that every await has registered its state, emit the dispatch switch
+    // into the entry block.
+    const stateCount = this.asyncFrame.stateCount;
+    const stateLoaded = this.nextTemp();
+    entryLines.push(`  ${stateLoaded} = load i32, ptr ${stateSlot}`);
+    const cases: string[] = [];
+    for (let k = 0; k < stateCount; k += 1) {
+      cases.push(`i32 ${k}, label %state.${k}`);
+    }
+    entryLines.push(
+      `  switch i32 ${stateLoaded}, label %state.invalid [ ${cases.join(" ")} ]`,
+    );
+
+    this.functionBodies.push(...entryLines, ...bodyLines);
+    this.functionBodies.push("state.invalid:");
+    this.functionBodies.push("  unreachable");
+    this.functionBodies.push("}");
+    this.functionBodies.push("");
+
     this.asyncResultFut = null;
+    this.asyncFrame = null;
     this.boxedNames = new Set();
+    this.thisPtr = null;
+    this.thisType = null;
     this.endGcFunctionScope(bodyGc);
 
     // --- start stub ---
@@ -3895,19 +4061,37 @@ export class LlvmCodegen {
     startLines.push(`  ${fut} = call ptr @sn_future_new()`);
     this.rootHeapPtr(fut, startLines);
 
-    const frameSize = 8 * (1 + fn.params.length); // ptr-sized slots
+    const frameSize = 8 * totalSlots;
     const frame = this.nextTemp();
     startLines.push(
       `  ${frame} = call ptr @sn_alloc(i64 noundef ${frameSize})`,
     );
+    // Tag the frame so the GC conservatively scans its slots (keeps a suspended
+    // task's locals / result alive) and root it while we finish spawning.
+    this.needsGc = true;
+    startLines.push(
+      `  call void @sn_gc_set_type(ptr noundef ${frame}, i32 noundef ${SN_TYPEID_FRAME})`,
+    );
+    this.rootHeapPtr(frame, startLines);
     const futStore = this.nextTemp();
     startLines.push(`  ${futStore} = getelementptr ptr, ptr ${frame}, i64 0`);
     startLines.push(`  store ptr ${fut}, ptr ${futStore}`);
+    // Zero state + local + await-scratch slots (params are written below).
+    for (let s = 1; s < totalSlots; s += 1) {
+      if (s >= 2 && s < 2 + paramCount) {
+        continue;
+      }
+      const zslot = this.nextTemp();
+      startLines.push(
+        `  ${zslot} = getelementptr ptr, ptr ${frame}, i64 ${s}`,
+      );
+      startLines.push(`  store i64 0, ptr ${zslot}`);
+    }
     for (let i = 0; i < fn.params.length; i += 1) {
       const llvmTy = toLlvmType(sig.params[i]!);
       const slot = this.nextTemp();
       startLines.push(
-        `  ${slot} = getelementptr ptr, ptr ${frame}, i64 ${i + 1}`,
+        `  ${slot} = getelementptr ptr, ptr ${frame}, i64 ${2 + i}`,
       );
       startLines.push(`  store ${llvmTy} %arg${i}, ptr ${slot}`);
     }
@@ -3923,6 +4107,88 @@ export class LlvmCodegen {
     if (fn.name.name === "main") {
       this.emitAsyncMainWrapper(startName);
     }
+  }
+
+  /**
+   * Collect the names of all locals declared anywhere in an async function body
+   * (variable declarations, destructuring elements, for-in bindings, C-style for
+   * initializers, and catch parameters). Each distinct name is spilled to one
+   * frame slot so its value survives task suspension. Nested lambda bodies are
+   * skipped — they compile to separate functions with their own frames.
+   */
+  private collectAsyncLocalNames(stmts: readonly Statement[]): string[] {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    const add = (name: string): void => {
+      if (!seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    };
+    const visitBinding = (binding: BindingPattern): void => {
+      if (binding.kind === "ArrayBindingPattern") {
+        for (const el of binding.elements) {
+          if (el.name) {
+            add(el.name.name);
+          }
+        }
+      } else {
+        add(binding.name);
+      }
+    };
+    const visit = (list: readonly Statement[]): void => {
+      for (const s of list) {
+        switch (s.kind) {
+          case "VariableDeclaration":
+            visitBinding(s.binding);
+            break;
+          case "IfStatement":
+            visit(s.consequent);
+            if (s.alternate) {
+              if (Array.isArray(s.alternate)) {
+                visit(s.alternate);
+              } else {
+                visit([s.alternate]);
+              }
+            }
+            break;
+          case "WhileStatement":
+            visit(s.body);
+            break;
+          case "ForStatement":
+            if (s.initializer && s.initializer.kind === "VariableDeclaration") {
+              visitBinding(s.initializer.binding);
+            }
+            visit(s.body);
+            break;
+          case "ForInStatement":
+            if (s.mutability) {
+              add(s.name.name);
+            }
+            visit(s.body);
+            break;
+          case "SwitchStatement":
+            for (const c of s.cases) {
+              visit(c.body);
+            }
+            break;
+          case "TryStatement":
+            visit(s.tryBlock);
+            if (s.catchClause) {
+              add(s.catchClause.parameter.name);
+              visit(s.catchClause.body);
+            }
+            if (s.finallyBlock) {
+              visit(s.finallyBlock);
+            }
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    visit(stmts);
+    return names;
   }
 
   private emitAsyncMainWrapper(asyncStartName: string): void {
@@ -4679,6 +4945,23 @@ export class LlvmCodegen {
       return;
     }
 
+    // In an async task body, spill ptr-sized locals into the heap frame so they
+    // survive suspension. Aggregates (>8 bytes) keep an alloca (won't persist
+    // across await — documented limitation).
+    const frameSlot = this.asyncFrameSlotFor(name, type);
+    if (frameSlot) {
+      this.locals.set(name, { ptr: frameSlot, type, boxed: false });
+      if (stmt.initializer === null) {
+        lines.push(
+          `  store ${llvmType} ${zeroInitializer(type)}, ptr ${frameSlot}`,
+        );
+        return;
+      }
+      const init = this.emitExpression(stmt.initializer, lines, type);
+      lines.push(`  store ${llvmType} ${init.llvm}, ptr ${frameSlot}`);
+      return;
+    }
+
     const ptr = `%v.${name}`;
     lines.push(`  ${ptr} = alloca ${llvmType}`);
     this.locals.set(name, { ptr, type, boxed: false });
@@ -4691,6 +4974,32 @@ export class LlvmCodegen {
 
     const init = this.emitExpression(stmt.initializer, lines, type);
     lines.push(`  store ${llvmType} ${init.llvm}, ptr ${ptr}`);
+  }
+
+  /**
+   * Return the frame-slot pointer for `name` when emitting an async task body
+   * and the local's type is pointer-sized (fits one 8-byte slot); otherwise
+   * null (caller falls back to an alloca).
+   */
+  private asyncFrameSlotFor(name: string, type: ValueType): string | null {
+    if (!this.asyncFrame) {
+      return null;
+    }
+    const slot = this.asyncFrame.slotPtr.get(name);
+    if (!slot) {
+      return null;
+    }
+    const llvmTy = toLlvmType(type);
+    const fits =
+      llvmTy === "ptr" ||
+      llvmTy === "i1" ||
+      llvmTy === "i8" ||
+      llvmTy === "i16" ||
+      llvmTy === "i32" ||
+      llvmTy === "i64" ||
+      llvmTy === "float" ||
+      llvmTy === "double";
+    return fits ? slot : null;
   }
 
   private emitDestructuringDeclaration(
@@ -7154,9 +7463,49 @@ export class LlvmCodegen {
     this.needsAsync = true;
     this.needsGc = true;
     const futVal = this.emitExpression(expr.argument, lines);
+
+    if (this.asyncFrame) {
+      // Stackless suspension: stash the Future in the frame, ask the runtime to
+      // suspend the current task. If it suspends (returns true) we `ret void`
+      // and the scheduler re-enters this resume function at `state.<next>` once
+      // the Future settles; if the Future is already ready (false) we fall
+      // straight through to extract its value without blocking the stack.
+      const frame = this.asyncFrame;
+      const nextState = frame.stateCount;
+      frame.stateCount += 1;
+      lines.push(`  store ptr ${futVal.llvm}, ptr ${frame.awaitSlot}`);
+      lines.push(`  store i32 ${nextState}, ptr ${frame.stateSlot}`);
+      const susp = this.nextTemp();
+      lines.push(
+        `  ${susp} = call i1 @sn_task_await_suspend(ptr noundef ${futVal.llvm})`,
+      );
+      const suspendLabel = this.nextLabel("await.suspend");
+      const resumeLabel = `state.${nextState}`;
+      lines.push(
+        `  br i1 ${susp}, label %${suspendLabel}, label %${resumeLabel}`,
+      );
+      lines.push(`${suspendLabel}:`);
+      this.emitFunctionRet(lines, "  ret void");
+      lines.push(`${resumeLabel}:`);
+      const reloaded = this.nextTemp();
+      lines.push(`  ${reloaded} = load ptr, ptr ${frame.awaitSlot}`);
+      return this.emitAwaitResult(reloaded, futVal.type, lines, expected);
+    }
+
+    // Fallback for any non-task context: drive the loop inline (blocking).
     lines.push(`  call void @sn_future_await_run(ptr noundef ${futVal.llvm})`);
+    return this.emitAwaitResult(futVal.llvm, futVal.type, lines, expected);
+  }
+
+  /** Emit the error-check + value-extraction tail shared by both await paths. */
+  private emitAwaitResult(
+    futLlvm: string,
+    futType: ValueType,
+    lines: string[],
+    expected?: ValueType,
+  ): EmittedValue {
     const err = this.nextTemp();
-    lines.push(`  ${err} = call ptr @sn_future_error(ptr noundef ${futVal.llvm})`);
+    lines.push(`  ${err} = call ptr @sn_future_error(ptr noundef ${futLlvm})`);
     const isNull = this.nextTemp();
     lines.push(`  ${isNull} = icmp eq ptr ${err}, null`);
     const okLabel = this.nextLabel("await.ok");
@@ -7170,15 +7519,15 @@ export class LlvmCodegen {
 
     // Determine result type from Future
     let resultType: ValueType = expected ?? "i32";
-    if (typeof futVal.type === "object" && futVal.type.kind === "future") {
-      if (futVal.type.inner === "void") {
+    if (typeof futType === "object" && futType.kind === "future") {
+      if (futType.inner === "void") {
         return { llvm: "0", type: "i32" };
       }
-      resultType = futVal.type.inner as ValueType;
+      resultType = futType.inner as ValueType;
     }
 
     const raw = this.nextTemp();
-    lines.push(`  ${raw} = call ptr @sn_future_value(ptr noundef ${futVal.llvm})`);
+    lines.push(`  ${raw} = call ptr @sn_future_value(ptr noundef ${futLlvm})`);
     if (isReferenceCategory(resultType) || resultType === "string") {
       this.rootHeapPtr(raw, lines);
       return { llvm: raw, type: resultType };

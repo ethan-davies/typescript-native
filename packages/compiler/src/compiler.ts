@@ -55,7 +55,11 @@ function discoverPreludePaths(): readonly string[] {
   return [
     join(root, "prelude", "string.sn"),
     join(root, "prelude", "array.sn"),
+    join(root, "prelude", "number.sn"),
+    join(root, "prelude", "bool.sn"),
+    join(root, "prelude", "nullable.sn"),
     join(root, "prelude", "io.sn"),
+    join(root, "prelude", "bytes.sn"),
   ];
 }
 

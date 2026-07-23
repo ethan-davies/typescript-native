@@ -163,6 +163,21 @@ static const SnTypeInfo BUILTIN_TASK = {
     .parent_type_id = 0,
 };
 
+static const SnTypeInfo BUILTIN_BYTES = {
+    .type_id = SN_TYPEID_BYTES,
+    .kind = SN_KIND_ARRAY,
+    .size = (int32_t)sizeof(SnBytes),
+    .field_count = 0,
+    .fields = NULL,
+    .elem_type_id = 0,
+    .elem_ref_class = SN_REF_VALUE,
+    .key_type_id = 0,
+    .key_ref_class = SN_REF_VALUE,
+    .value_type_id = 0,
+    .value_ref_class = SN_REF_VALUE,
+    .parent_type_id = 0,
+};
+
 static const SnTypeInfo *builtins_by_id(int32_t type_id) {
   switch (type_id) {
     case SN_TYPEID_STRING:
@@ -179,6 +194,8 @@ static const SnTypeInfo *builtins_by_id(int32_t type_id) {
       return &BUILTIN_FUTURE;
     case SN_TYPEID_TASK:
       return &BUILTIN_TASK;
+    case SN_TYPEID_BYTES:
+      return &BUILTIN_BYTES;
     default:
       return NULL;
   }

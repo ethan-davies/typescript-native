@@ -1,0 +1,34 @@
+import { Server, Request, Response, URL } from "std/http";
+
+/**
+ * Sync entrypoint: handler/middleware lambdas must not be created inside
+ * `async function main` (codegen currently lowers those as async).
+ */
+function main(): void {
+  let server = new Server();
+  server.useHeader("x-powered-by", "sonite");
+  server.use((req: Request, next: (Request) => Response): Response => {
+    let resp = next(req);
+    resp.headers.set("x-mw", "1");
+    return resp;
+  });
+  server.get("/hi", (req: Request): Response => {
+    return Response.text("hi");
+  });
+  server.getText("/plain", "plain-ok");
+  server.getText("/users/:id", "user:");
+
+  let hi = server.handle(new Request("GET", URL.parse("http://localhost/hi")));
+  print(hi.body.text() == "hi");
+  print(hi.headers.get("x-mw") == "1");
+  print(hi.headers.get("x-powered-by") == "sonite");
+
+  let plain = server.handle(new Request("GET", URL.parse("http://localhost/plain")));
+  print(plain.body.text() == "plain-ok");
+
+  let user = server.handle(new Request("GET", URL.parse("http://localhost/users/9")));
+  print(user.body.text() == "user:9");
+
+  let missing = server.handle(new Request("GET", URL.parse("http://localhost/nope")));
+  print(missing.status == 404);
+}

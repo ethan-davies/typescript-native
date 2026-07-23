@@ -1,0 +1,43 @@
+import { TcpListener } from "std/net";
+import { TlsStream } from "std/tls";
+import { spawn } from "std/async";
+import { readFile, exists } from "std/fs";
+
+async function client(port: i32): void {
+  let tls = await TlsStream.connectWithConfig("127.0.0.1", port, true, "");
+  await tls.write(Bytes.fromString("ping"));
+  await tls.close();
+}
+
+function loadPem(name: string): string {
+  let p0 = sn_str_concat("examples/certs/", name);
+  if (exists(p0)) {
+    return readFile(p0);
+  }
+  let p1 = sn_str_concat("certs/", name);
+  if (exists(p1)) {
+    return readFile(p1);
+  }
+  let p2 = sn_str_concat("../examples/certs/", name);
+  if (exists(p2)) {
+    return readFile(p2);
+  }
+  throw new Error("missing tls pem file");
+}
+
+extern function sn_str_concat(left: string, right: string): string;
+
+async function main(): void {
+  let port: i32 = 19061;
+  let cert = loadPem("cert.pem");
+  let key = loadPem("key.pem");
+  let listener = await TcpListener.bind("127.0.0.1", port);
+  let c = spawn(client(port));
+  // Combined accept+TLS so handshake can finish while the client awaits connect.
+  let tls = await TlsStream.acceptListener(listener.rawHandle(), cert, key);
+  let msg = await tls.read(64);
+  print(msg.decode("utf8"));
+  await tls.close();
+  await c;
+  listener.close();
+}

@@ -12,6 +12,8 @@ OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 LIBRARY := $(DIST_DIR)/libsn_runtime.a
 SMOKE_BIN := $(DIST_DIR)/runtime_smoke
 ASYNC_SMOKE_BIN := $(DIST_DIR)/async_smoke
+TLS_SMOKE_BIN := $(DIST_DIR)/tls_smoke
+NET_EXTRAS_SMOKE_BIN := $(DIST_DIR)/net_extras_smoke
 
 .PHONY: all clean test
 
@@ -27,14 +29,22 @@ $(LIBRARY): $(OBJECTS)
 	$(AR) rcs $@ $(OBJECTS)
 
 $(SMOKE_BIN): $(TEST_DIR)/runtime_smoke.c $(LIBRARY)
-	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -o $@
+	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -lpthread -lssl -lcrypto -o $@
 
 $(ASYNC_SMOKE_BIN): $(TEST_DIR)/async_smoke.c $(LIBRARY)
-	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -o $@
+	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -lpthread -lssl -lcrypto -o $@
 
-test: $(SMOKE_BIN) $(ASYNC_SMOKE_BIN)
+$(TLS_SMOKE_BIN): $(TEST_DIR)/tls_smoke.c $(LIBRARY)
+	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -lpthread -lssl -lcrypto -o $@
+
+$(NET_EXTRAS_SMOKE_BIN): $(TEST_DIR)/net_extras_smoke.c $(LIBRARY)
+	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -lpthread -lssl -lcrypto -o $@
+
+test: $(SMOKE_BIN) $(ASYNC_SMOKE_BIN) $(TLS_SMOKE_BIN) $(NET_EXTRAS_SMOKE_BIN)
 	./$(SMOKE_BIN)
 	./$(ASYNC_SMOKE_BIN)
+	./$(TLS_SMOKE_BIN)
+	./$(NET_EXTRAS_SMOKE_BIN)
 
 clean:
 	rm -rf $(DIST_DIR)

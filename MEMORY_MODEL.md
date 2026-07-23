@@ -815,15 +815,60 @@ Identification today: class instances via `ObjectHeader.type_id` and the GC side
 
 ## 18. Async, futures, and GC
 
-Async/await is **single-threaded and cooperative**: one OS thread, no mutexes or parallel workers. An `async` call returns a heap `Future<T>` (`SN_TYPEID_FUTURE`). Completing or failing a future stores a value/error pointer and wakes waiters; `await` drives the event loop until that future settles.
+Async/await is **single-threaded and cooperative**: one OS thread, no mutexes or parallel workers. An `async` call returns a heap `Future<T>` (`SN_TYPEID_FUTURE`). Completing or failing a future stores a value/error pointer and wakes waiters.
+
+### Stackless resumable tasks
+
+Each `async` function compiles to two things:
+
+- a **start stub** (`f__async`) that allocates the result `Future`, allocates a heap **task frame**, packs the params, and spawns a task via `sn_task_spawn`; and
+- a **resume function** (`f__async__body`) — a stackless state machine. Its entry block computes frame-slot pointers and `switch`es on a saved `state` word to the correct resume point.
+
+Every `await` is a **suspension point**, not a blocking drive:
+
+```text
+store fut  → frame await-slot
+store N    → frame state-slot           ; N = next state
+if (sn_task_await_suspend(fut))         ; fut pending + a current task?
+    ret void                            ; yield to the scheduler; re-entered at state N
+else                                    ; already settled (or no task → runtime drove it)
+    fall through, extract value at state N
+```
+
+Because the resume function can `ret void` and later be re-entered, **its C stack does not persist**. Anything that must survive an `await` therefore lives in the heap task frame, not in `alloca` slots or SSA temporaries:
+
+```text
+Task frame (SN_TYPEID_FRAME, pointer-sized slots)
+┌────────────────────────────────────────────┐
+│ slot 0 : result Future*                     │
+│ slot 1 : state (i32 in an 8-byte slot)       │
+│ slots  : params …                            │
+│ slots  : spilled locals … (one per name)     │
+│ last   : scratch for the awaited Future      │
+└────────────────────────────────────────────┘
+```
+
+The compiler spills all pointer-sized locals/params to frame slots; the slot pointers are computed in the entry block (which dominates every resume state), so they are valid at every re-entry.
 
 ### What stays alive across `await`
 
 | Object | How the GC sees it |
 | --- | --- |
 | `Future` | Builtin TypeInfo — scans `value`, `error`, waiter list, compose data |
-| `Task` | Builtin TypeInfo — scans frame, result future, awaiting future |
-| Task frame | Allocated with `sn_alloc`; live locals that are references are rooted while the body runs (shadow stack), and the future keeps the frame reachable via the task while the task is scheduled |
+| `Task` | `SN_TYPEID_TASK` — scans `result`, `frame`, `awaiting` |
+| Task frame | `SN_TYPEID_FRAME` — **conservatively** scanned: every pointer-sized slot is treated as a potential heap pointer (non-pointer slots resolve to nothing in the side table, so this is safe and only over-retains). This is what keeps a *suspended* task's locals and result future alive between turns, since the shadow stack is unwound on every `ret void` |
 | Timer / TCP requests | Hold a pointer to their completion `Future`; reactor/timer queues keep requests alive until they settle |
+
+The task is reachable from the scheduler's rooted task array, so `Task → frame → locals` is fully traced even while suspended.
+
+### Why this fixes concurrent-peer deadlocks
+
+Previously `await` called `sn_future_await_run`, which **stack-blocks** the current task while nested-driving the loop. When two tasks each blocked awaiting the other's I/O (e.g. a client awaiting a read while the server must accept/read/write on the same loop), neither could unwind and they deadlocked. Suspension instead returns control to the scheduler, so the peer task runs to its own next suspension point and progress is made cooperatively.
+
+### Known limitations
+
+- Only values held in **named locals** (or params) survive an `await`; all such locals are spilled to the frame. Raw temporaries produced mid-expression around an inline `await` — e.g. `f(g(), await h())` or `(await a()) + (await b())` — are not spilled, so keep at most one `await` per expression (bind intermediate results to locals). Statement-level `const x = await …; use x;` is always safe.
+- Value-aggregate locals (structs/tuples larger than one slot) keep an `alloca` and are **not** preserved across an `await`.
+- `try`/`catch`/`finally` spanning an `await` uses setjmp/longjmp EH frames that are not re-established on resume; prefer keeping a `try` body free of suspension points for now.
 
 Failed futures surface via `sn_throw` when awaited. There is no separate async cancellation GC path beyond settling the future (`cancelled` / failed) and letting unreachable objects drop on the next collection.

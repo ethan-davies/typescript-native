@@ -248,6 +248,32 @@ char sn_str_char_at(const char *s, int32_t index) {
   return s[index];
 }
 
+int32_t sn_str_parse_i32(const char *s) {
+  if (s == NULL || s[0] == '\0') {
+    return 0;
+  }
+  int32_t sign = 1;
+  int32_t i = 0;
+  if (s[0] == '-') {
+    sign = -1;
+    i = 1;
+  }
+  int64_t n = 0;
+  int any = 0;
+  while (s[i] >= '0' && s[i] <= '9') {
+    any = 1;
+    n = n * 10 + (s[i] - '0');
+    if (n > 2147483647) {
+      return 0;
+    }
+    i += 1;
+  }
+  if (!any || s[i] != '\0') {
+    return 0;
+  }
+  return (int32_t)(sign * n);
+}
+
 char *sn_str_repeat(const char *s, int32_t count) {
   if (count <= 0) {
     char *empty = sn_alloc(1);

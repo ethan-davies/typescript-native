@@ -1,0 +1,131 @@
+extern function sn_tls_connect(host: string, port: i32, flags: i32, caFile: string): Future<i64>;
+extern function sn_tls_accept(tcpHandle: i64, flags: i32, certPem: string, keyPem: string): Future<i64>;
+extern function sn_tls_accept_listener(listener: i64, certPem: string, keyPem: string): Future<i64>;
+extern function sn_tls_read(tlsHandle: i64, maxBytes: i32): Future<i64>;
+extern function sn_tls_write(tlsHandle: i64, bytesHandle: i64): Future<void>;
+extern function sn_tls_close_i64(handle: i64): void;
+
+export class Certificate {
+  pem: string;
+
+  constructor(pem: string) {
+    this.pem = pem;
+  }
+
+  static fromPem(pem: string): Certificate {
+    return new Certificate(pem);
+  }
+}
+
+export class PrivateKey {
+  pem: string;
+
+  constructor(pem: string) {
+    this.pem = pem;
+  }
+
+  static fromPem(pem: string): PrivateKey {
+    return new PrivateKey(pem);
+  }
+}
+
+export class TlsConfig {
+  certificate: Certificate | null;
+  privateKey: PrivateKey | null;
+  insecureSkipVerify: bool;
+  caFile: string;
+
+  constructor() {
+    this.certificate = null;
+    this.privateKey = null;
+    this.insecureSkipVerify = false;
+    this.caFile = "";
+  }
+
+  static client(): TlsConfig {
+    return new TlsConfig();
+  }
+
+  static server(certificate: Certificate, privateKey: PrivateKey): TlsConfig {
+    let c = new TlsConfig();
+    c.certificate = certificate;
+    c.privateKey = privateKey;
+    return c;
+  }
+}
+
+export class TlsStream {
+  private handle: i64;
+
+  constructor(handle: i64) {
+    this.handle = handle;
+  }
+
+  static connect(host: string, port: i32): Future<TlsStream> {
+    return tlsConnect(host, port, 0, "");
+  }
+
+  static connectWithConfig(host: string, port: i32, insecureSkipVerify: bool, caFile: string): Future<TlsStream> {
+    let flags: i32 = 0;
+    if (insecureSkipVerify) {
+      flags = 1;
+    }
+    return tlsConnect(host, port, flags, caFile);
+  }
+
+  static accept(tcpHandle: i64, certPem: string, keyPem: string): Future<TlsStream> {
+    return tlsAccept(tcpHandle, certPem, keyPem);
+  }
+
+  /** Accept TCP + complete TLS on a listener without a separate TcpStream step. */
+  static acceptListener(listenerHandle: i64, certPem: string, keyPem: string): Future<TlsStream> {
+    return tlsAcceptListener(listenerHandle, certPem, keyPem);
+  }
+
+  rawHandle(): i64 {
+    return this.handle;
+  }
+
+  read(maxBytes: i32): Future<Bytes> {
+    return tlsReadBytes(this.handle, maxBytes);
+  }
+
+  write(data: Bytes): Future<void> {
+    return sn_tls_write(this.handle, data.rawHandle());
+  }
+
+  flush(): Future<void> {
+    return tlsFlush();
+  }
+
+  close(): Future<void> {
+    return tlsClose(this.handle);
+  }
+}
+
+async function tlsConnect(host: string, port: i32, flags: i32, caFile: string): TlsStream {
+  let h = await sn_tls_connect(host, port, flags, caFile);
+  return new TlsStream(h);
+}
+
+async function tlsAccept(tcpHandle: i64, certPem: string, keyPem: string): TlsStream {
+  let h = await sn_tls_accept(tcpHandle, 0, certPem, keyPem);
+  return new TlsStream(h);
+}
+
+async function tlsAcceptListener(listenerHandle: i64, certPem: string, keyPem: string): TlsStream {
+  let h = await sn_tls_accept_listener(listenerHandle, certPem, keyPem);
+  return new TlsStream(h);
+}
+
+async function tlsFlush(): void {
+}
+
+async function tlsClose(handle: i64): void {
+  sn_tls_close_i64(handle);
+}
+
+async function tlsReadBytes(handle: i64, maxBytes: i32): Bytes {
+  let h = await sn_tls_read(handle, maxBytes);
+  return Bytes.fromHandle(h);
+}

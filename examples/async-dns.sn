@@ -1,0 +1,9 @@
+import { resolve } from "std/net";
+
+async function main(): void {
+  let addrs = await resolve("localhost");
+  print(addrs.length > 0);
+  if (addrs.length > 0) {
+    print(addrs[0].format());
+  }
+}
