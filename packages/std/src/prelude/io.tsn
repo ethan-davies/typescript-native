@@ -1,2 +1,0 @@
-// Polymorphic multi-arg `print` remains a compiler intrinsic (lowered to tsn_print_*).
-// It is always available alongside this prelude module — no import required.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import type { AnalyzeResult, ExportIndexEntry } from "@typescript-native/compiler";
+import type { AnalyzeResult, ExportIndexEntry } from "@sonite/compiler";
 import {
   createConnection,
   ProposedFeatures,
@@ -48,10 +48,58 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         triggerCharacters: [
           ".",
           ":",
-          "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-          "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-          "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-          "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+          "a",
+          "b",
+          "c",
+          "d",
+          "e",
+          "f",
+          "g",
+          "h",
+          "i",
+          "j",
+          "k",
+          "l",
+          "m",
+          "n",
+          "o",
+          "p",
+          "q",
+          "r",
+          "s",
+          "t",
+          "u",
+          "v",
+          "w",
+          "x",
+          "y",
+          "z",
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F",
+          "G",
+          "H",
+          "I",
+          "J",
+          "K",
+          "L",
+          "M",
+          "N",
+          "O",
+          "P",
+          "Q",
+          "R",
+          "S",
+          "T",
+          "U",
+          "V",
+          "W",
+          "X",
+          "Y",
+          "Z",
           "_",
         ],
         resolveProvider: false,
@@ -107,10 +155,13 @@ async function runAnalyze(filePath: string): Promise<void> {
       uri: pathToUri(filePath),
       diagnostics: [
         {
-          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
           message: `Language server analyze failed: ${message}`,
           severity: 1,
-          source: "tsn",
+          source: "sn",
         },
       ],
     });
@@ -171,7 +222,12 @@ connection.onHover((params) => {
     return null;
   }
   const result = ensureAnalyzed(filePath);
-  return hoverAtPosition(result.semantic, filePath, doc.getText(), params.position);
+  return hoverAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    params.position,
+  );
 });
 
 connection.onDefinition((params) => {
@@ -181,7 +237,12 @@ connection.onDefinition((params) => {
     return null;
   }
   const result = ensureAnalyzed(filePath);
-  return definitionAtPosition(result.semantic, filePath, doc.getText(), params.position);
+  return definitionAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    params.position,
+  );
 });
 
 connection.onCompletion((params) => {

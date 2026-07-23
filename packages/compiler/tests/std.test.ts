@@ -12,21 +12,30 @@ import {
   setStdRootProvider,
 } from "../src/modules/index.js";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const repoRoot = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+);
 const examplesDir = join(repoRoot, "examples");
 const stdSrc = join(repoRoot, "packages", "std", "src");
 
 describe("std module resolution", () => {
-  it("resolves std/math to packages/std/src/math/index.tsn", () => {
+  it("resolves std/math to packages/std/src/math/index.sn", () => {
     const prev = getStdRootPath();
     setStdRootProvider(() => stdSrc);
     try {
-      expect(resolveStdSpecifier("std/math")).toBe(join(stdSrc, "math", "index.tsn"));
-      expect(resolveImportSpecifier("/proj", "std/math")).toBe(
-        join(stdSrc, "math", "index.tsn"),
+      expect(resolveStdSpecifier("std/math")).toBe(
+        join(stdSrc, "math", "index.sn"),
       );
-      expect(moduleIdForStdPath(join(stdSrc, "math", "index.tsn"))).toBe("std_math");
-      expect(moduleIdForStdPath(join(stdSrc, "collections", "index.tsn"))).toBe(
+      expect(resolveImportSpecifier("/proj", "std/math")).toBe(
+        join(stdSrc, "math", "index.sn"),
+      );
+      expect(moduleIdForStdPath(join(stdSrc, "math", "index.sn"))).toBe(
+        "std_math",
+      );
+      expect(moduleIdForStdPath(join(stdSrc, "collections", "index.sn"))).toBe(
         "std_collections",
       );
     } finally {
@@ -38,9 +47,9 @@ describe("std module resolution", () => {
     setStdRootProvider(() => stdSrc);
     const diagnostics = new DiagnosticCollector();
     const result = resolveModules(
-      "/proj/main.tsn",
+      "/proj/main.sn",
       (path) => {
-        if (path === "/proj/main.tsn") {
+        if (path === "/proj/main.sn") {
           return `import { sqrt } from "std/math";\nfunction main(): void { print(sqrt(4.0)); }\n`;
         }
         throw new Error(`ENOENT: ${path}`);
@@ -55,29 +64,29 @@ describe("std module resolution", () => {
 
 describe("std library examples", () => {
   it("compiles std-math example", () => {
-    const result = compileFile(join(examplesDir, "std-math.tsn"));
+    const result = compileFile(join(examplesDir, "std-math.sn"));
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("tsn_math_sqrt");
-    expect(result.ir).toContain("tsn_math_sin");
+    expect(result.ir).toContain("sn_math_sqrt");
+    expect(result.ir).toContain("sn_math_sin");
   });
 
   it("compiles std-random example", () => {
-    const result = compileFile(join(examplesDir, "std-random.tsn"));
+    const result = compileFile(join(examplesDir, "std-random.sn"));
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("tsn_random");
-    expect(result.ir).toContain("tsn_random_int");
+    expect(result.ir).toContain("sn_random");
+    expect(result.ir).toContain("sn_random_int");
   });
 
   it("compiles std-collections example", () => {
-    const result = compileFile(join(examplesDir, "std-collections.tsn"));
+    const result = compileFile(join(examplesDir, "std-collections.sn"));
     expect(result.success).toBe(true);
   });
 
   it("exposes extended string and array methods via the prelude without imports", () => {
-    const result = compileFile(join(examplesDir, "prelude.tsn"));
+    const result = compileFile(join(examplesDir, "prelude.sn"));
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("tsn_str_pad_start");
-    expect(result.ir).toContain("tsn_str_index_of");
-    expect(result.ir).toContain("tsn_str_join");
+    expect(result.ir).toContain("sn_str_pad_start");
+    expect(result.ir).toContain("sn_str_index_of");
+    expect(result.ir).toContain("sn_str_join");
   });
 });

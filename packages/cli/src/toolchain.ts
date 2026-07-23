@@ -31,14 +31,14 @@ export interface ResolvedClang {
 
 /**
  * Resolve a clang binary for linking LLVM IR.
- * Order: TSN_CLANG → system PATH → cache → download pinned LLVM.
+ * Order: SN_CLANG → system PATH → cache → download pinned LLVM.
  */
 export async function resolveClang(): Promise<ResolvedClang> {
-  const fromEnv = process.env.TSN_CLANG?.trim();
+  const fromEnv = process.env.SN_CLANG?.trim();
   if (fromEnv) {
     if (!existsSync(fromEnv)) {
       throw new ToolchainError(
-        `TSN_CLANG is set to '${fromEnv}' but that path does not exist`,
+        `SN_CLANG is set to '${fromEnv}' but that path does not exist`,
       );
     }
     return { path: fromEnv, source: "env" };
@@ -65,8 +65,8 @@ export async function resolveClang(): Promise<ResolvedClang> {
 }
 
 export function llvmCacheRoot(): string {
-  const override = process.env.TSN_CACHE_DIR?.trim();
-  const base = override || join(homedir(), ".cache", "tsn");
+  const override = process.env.SN_CACHE_DIR?.trim();
+  const base = override || join(homedir(), ".cache", "sn");
   return join(base, `llvm-${PINNED_LLVM_VERSION}`);
 }
 
@@ -158,18 +158,20 @@ function resolvePlatformAsset(): PlatformAsset {
   }
   throw new ToolchainError(
     `unsupported platform for LLVM download: ${platform}/${arch} ` +
-      `(install clang and ensure it is on PATH, or set TSN_CLANG)`,
+      `(install clang and ensure it is on PATH, or set SN_CLANG)`,
   );
 }
 
 async function downloadPinnedLlvm(): Promise<void> {
   const asset = resolvePlatformAsset();
-  const url =
-    `https://github.com/llvm/llvm-project/releases/download/llvmorg-${PINNED_LLVM_VERSION}/${asset.fileName}`;
+  const url = `https://github.com/llvm/llvm-project/releases/download/llvmorg-${PINNED_LLVM_VERSION}/${asset.fileName}`;
   const cacheRoot = llvmCacheRoot();
   mkdirSync(cacheRoot, { recursive: true });
 
-  const staging = join(tmpdir(), `tsn-llvm-${PINNED_LLVM_VERSION}-${process.pid}`);
+  const staging = join(
+    tmpdir(),
+    `sn-llvm-${PINNED_LLVM_VERSION}-${process.pid}`,
+  );
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging, { recursive: true });
 
@@ -210,7 +212,8 @@ async function downloadFile(url: string, dest: string): Promise<void> {
   );
 
   nodeStream.on("data", (chunk: Buffer | string) => {
-    received += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+    received +=
+      typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
     if (total > 0) {
       const pct = Math.floor((received / total) * 100);
       if (pct !== lastPct && pct % 5 === 0) {

@@ -1,7 +1,7 @@
 {
-  "name": "@typescript-native/runtime",
+  "name": "@sonite/runtime",
   "version": "0.0.0",
-  "description": "C runtime library for typescript-native programs",
+  "description": "C runtime library for sonite programs",
   "license": "MIT",
   "type": "module",
   "files": [

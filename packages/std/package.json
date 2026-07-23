@@ -1,7 +1,7 @@
 {
-  "name": "@typescript-native/std",
+  "name": "@sonite/std",
   "version": "0.0.0",
-  "description": "Standard library for typescript-native (.tsn sources)",
+  "description": "Standard library for sonite (.sn sources)",
   "license": "MIT",
   "type": "module",
   "exports": {

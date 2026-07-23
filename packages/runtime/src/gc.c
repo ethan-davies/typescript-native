@@ -3,30 +3,30 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "tsn/runtime.h"
+#include "sn/runtime.h"
 
-#define TSN_GC_DEFAULT_THRESHOLD (1024 * 1024)
-#define TSN_GC_ROOT_CAP_INITIAL 64
-#define TSN_GC_GLOBAL_CAP_INITIAL 16
-#define TSN_GC_HEAP_CAP_INITIAL 64
+#define SN_GC_DEFAULT_THRESHOLD (1024 * 1024)
+#define SN_GC_ROOT_CAP_INITIAL 64
+#define SN_GC_GLOBAL_CAP_INITIAL 16
+#define SN_GC_HEAP_CAP_INITIAL 64
 
-typedef struct TsnGcObject {
+typedef struct SnGcObject {
   void *ptr;
   int64_t size;
   int32_t type_id;
   int32_t marked;
-  /* Array scan metadata (valid when type_id == TSN_TYPEID_ARRAY). */
+  /* Array scan metadata (valid when type_id == SN_TYPEID_ARRAY). */
   int32_t elem_ref_class;
   int32_t elem_type_id;
   int64_t elem_size;
-  /* Map scan metadata (valid when type_id == TSN_TYPEID_MAP). */
+  /* Map scan metadata (valid when type_id == SN_TYPEID_MAP). */
   int32_t key_ref_class;
   int32_t key_type_id;
   int32_t value_ref_class;
   int32_t value_type_id;
-} TsnGcObject;
+} SnGcObject;
 
-static TsnGcObject *heap = NULL;
+static SnGcObject *heap = NULL;
 static int32_t heap_len = 0;
 static int32_t heap_cap = 0;
 
@@ -39,7 +39,7 @@ static int32_t global_len = 0;
 static int32_t global_cap = 0;
 
 static int64_t bytes_allocated = 0;
-static int64_t threshold = TSN_GC_DEFAULT_THRESHOLD;
+static int64_t threshold = SN_GC_DEFAULT_THRESHOLD;
 static int32_t collecting = 0;
 
 /* Runtime-managed exception root (points at TLS slot in exception.c). */
@@ -62,44 +62,44 @@ static int32_t heap_find(void *ptr) {
   return -1;
 }
 
-int32_t tsn_gc_find_index(void *ptr) {
+int32_t sn_gc_find_index(void *ptr) {
   if (ptr == NULL) {
     return -1;
   }
   return heap_find(ptr);
 }
 
-static TsnGcObject *heap_get(void *ptr) {
+static SnGcObject *heap_get(void *ptr) {
   int32_t i = heap_find(ptr);
   return i < 0 ? NULL : &heap[i];
 }
 
-void tsn_gc_register(void *ptr, int64_t size) {
+void sn_gc_register(void *ptr, int64_t size) {
   if (ptr == NULL) {
     return;
   }
   if (heap_len == heap_cap) {
-    int32_t new_cap = heap_cap == 0 ? TSN_GC_HEAP_CAP_INITIAL : heap_cap * 2;
-    heap = (TsnGcObject *)sys_xrealloc(heap, (size_t)new_cap * sizeof(TsnGcObject));
+    int32_t new_cap = heap_cap == 0 ? SN_GC_HEAP_CAP_INITIAL : heap_cap * 2;
+    heap = (SnGcObject *)sys_xrealloc(heap, (size_t)new_cap * sizeof(SnGcObject));
     heap_cap = new_cap;
   }
   heap[heap_len].ptr = ptr;
   heap[heap_len].size = size;
   heap[heap_len].type_id = 0;
   heap[heap_len].marked = 0;
-  heap[heap_len].elem_ref_class = TSN_REF_VALUE;
+  heap[heap_len].elem_ref_class = SN_REF_VALUE;
   heap[heap_len].elem_type_id = 0;
   heap[heap_len].elem_size = 0;
   /* Default map ABI: string keys + pointer values. */
-  heap[heap_len].key_ref_class = TSN_REF_PTR;
-  heap[heap_len].key_type_id = TSN_TYPEID_STRING;
-  heap[heap_len].value_ref_class = TSN_REF_PTR;
+  heap[heap_len].key_ref_class = SN_REF_PTR;
+  heap[heap_len].key_type_id = SN_TYPEID_STRING;
+  heap[heap_len].value_ref_class = SN_REF_PTR;
   heap[heap_len].value_type_id = 0;
   heap_len += 1;
   bytes_allocated += size;
 }
 
-void tsn_gc_unregister(void *ptr) {
+void sn_gc_unregister(void *ptr) {
   if (ptr == NULL) {
     return;
   }
@@ -115,9 +115,9 @@ void tsn_gc_unregister(void *ptr) {
   heap_len -= 1;
 }
 
-void tsn_gc_update_at(int32_t index, void *new_ptr, int64_t size) {
+void sn_gc_update_at(int32_t index, void *new_ptr, int64_t size) {
   if (index < 0) {
-    tsn_gc_register(new_ptr, size);
+    sn_gc_register(new_ptr, size);
     return;
   }
   if (index >= heap_len) {
@@ -129,44 +129,44 @@ void tsn_gc_update_at(int32_t index, void *new_ptr, int64_t size) {
   heap[index].size = size;
 }
 
-void tsn_gc_set_type(void *ptr, int32_t type_id) {
-  TsnGcObject *obj = heap_get(ptr);
+void sn_gc_set_type(void *ptr, int32_t type_id) {
+  SnGcObject *obj = heap_get(ptr);
   if (obj == NULL) {
     return;
   }
   obj->type_id = type_id;
 }
 
-void tsn_gc_set_array_meta(void *arr, int32_t elem_ref_class, int32_t elem_type_id, int64_t elem_size) {
-  TsnGcObject *obj = heap_get(arr);
+void sn_gc_set_array_meta(void *arr, int32_t elem_ref_class, int32_t elem_type_id, int64_t elem_size) {
+  SnGcObject *obj = heap_get(arr);
   if (obj == NULL) {
     return;
   }
-  obj->type_id = TSN_TYPEID_ARRAY;
+  obj->type_id = SN_TYPEID_ARRAY;
   obj->elem_ref_class = elem_ref_class;
   obj->elem_type_id = elem_type_id;
   obj->elem_size = elem_size;
 }
 
-void tsn_gc_set_map_meta(void *map, int32_t key_ref_class, int32_t key_type_id, int32_t value_ref_class,
+void sn_gc_set_map_meta(void *map, int32_t key_ref_class, int32_t key_type_id, int32_t value_ref_class,
                          int32_t value_type_id) {
-  TsnGcObject *obj = heap_get(map);
+  SnGcObject *obj = heap_get(map);
   if (obj == NULL) {
     return;
   }
-  obj->type_id = TSN_TYPEID_MAP;
+  obj->type_id = SN_TYPEID_MAP;
   obj->key_ref_class = key_ref_class;
   obj->key_type_id = key_type_id;
   obj->value_ref_class = value_ref_class;
   obj->value_type_id = value_type_id;
 }
 
-void tsn_gc_root_push(void **slot) {
+void sn_gc_root_push(void **slot) {
   if (slot == NULL) {
     return;
   }
   if (root_len == root_cap) {
-    int32_t new_cap = root_cap == 0 ? TSN_GC_ROOT_CAP_INITIAL : root_cap * 2;
+    int32_t new_cap = root_cap == 0 ? SN_GC_ROOT_CAP_INITIAL : root_cap * 2;
     roots = (void ***)sys_xrealloc(roots, (size_t)new_cap * sizeof(void **));
     root_cap = new_cap;
   }
@@ -174,7 +174,7 @@ void tsn_gc_root_push(void **slot) {
   root_len += 1;
 }
 
-void tsn_gc_root_pop(int32_t n) {
+void sn_gc_root_pop(int32_t n) {
   if (n < 0) {
     abort();
   }
@@ -184,23 +184,23 @@ void tsn_gc_root_pop(int32_t n) {
   root_len -= n;
 }
 
-int32_t tsn_gc_root_checkpoint(void) {
+int32_t sn_gc_root_checkpoint(void) {
   return root_len;
 }
 
-void tsn_gc_root_restore(int32_t n) {
+void sn_gc_root_restore(int32_t n) {
   if (n < 0 || n > root_len) {
     abort();
   }
   root_len = n;
 }
 
-void tsn_gc_add_global_root(void **slot) {
+void sn_gc_add_global_root(void **slot) {
   if (slot == NULL) {
     return;
   }
   if (global_len == global_cap) {
-    int32_t new_cap = global_cap == 0 ? TSN_GC_GLOBAL_CAP_INITIAL : global_cap * 2;
+    int32_t new_cap = global_cap == 0 ? SN_GC_GLOBAL_CAP_INITIAL : global_cap * 2;
     globals = (void ***)sys_xrealloc(globals, (size_t)new_cap * sizeof(void **));
     global_cap = new_cap;
   }
@@ -208,37 +208,37 @@ void tsn_gc_add_global_root(void **slot) {
   global_len += 1;
 }
 
-void tsn_gc_set_exception_root(void **slot) {
+void sn_gc_set_exception_root(void **slot) {
   exception_root = slot;
 }
 
-void tsn_gc_set_threshold(int64_t bytes) {
+void sn_gc_set_threshold(int64_t bytes) {
   if (bytes < 0) {
     abort();
   }
   threshold = bytes;
 }
 
-int64_t tsn_gc_bytes_allocated(void) {
+int64_t sn_gc_bytes_allocated(void) {
   return bytes_allocated;
 }
 
 static void mark_object(void *ptr);
 
-static void mark_fields_at(char *base, const TsnTypeInfo *info) {
+static void mark_fields_at(char *base, const SnTypeInfo *info) {
   if (info == NULL || info->fields == NULL) {
     return;
   }
   for (int32_t i = 0; i < info->field_count; i += 1) {
-    const TsnFieldInfo *f = &info->fields[i];
+    const SnFieldInfo *f = &info->fields[i];
     char *slot = base + f->offset;
-    if (f->ref_class == TSN_REF_PTR) {
+    if (f->ref_class == SN_REF_PTR) {
       void *child = *(void **)slot;
       mark_object(child);
-    } else if (f->ref_class == TSN_REF_AGG) {
-      const TsnTypeInfo *nested = tsn_typeinfo_get(f->type_id);
+    } else if (f->ref_class == SN_REF_AGG) {
+      const SnTypeInfo *nested = sn_typeinfo_get(f->type_id);
       if (nested != NULL) {
-        if (nested->kind == TSN_KIND_CLOSURE) {
+        if (nested->kind == SN_KIND_CLOSURE) {
           /* %__Callable: scan env pointer at offset sizeof(void*). */
           void *env = *(void **)(slot + (size_t)sizeof(void *));
           mark_object(env);
@@ -250,37 +250,37 @@ static void mark_fields_at(char *base, const TsnTypeInfo *info) {
   }
 }
 
-static void mark_array(TsnGcObject *obj) {
-  TsnArray *arr = (TsnArray *)obj->ptr;
+static void mark_array(SnGcObject *obj) {
+  SnArray *arr = (SnArray *)obj->ptr;
   if (arr->data != NULL) {
     mark_object(arr->data);
   }
-  if (obj->elem_ref_class == TSN_REF_VALUE || arr->data == NULL || obj->elem_size <= 0) {
+  if (obj->elem_ref_class == SN_REF_VALUE || arr->data == NULL || obj->elem_size <= 0) {
     return;
   }
   char *data = (char *)arr->data;
   for (int64_t i = 0; i < arr->length; i += 1) {
     char *elem = data + i * obj->elem_size;
-    if (obj->elem_ref_class == TSN_REF_PTR) {
+    if (obj->elem_ref_class == SN_REF_PTR) {
       mark_object(*(void **)elem);
-    } else if (obj->elem_ref_class == TSN_REF_AGG) {
-      const TsnTypeInfo *elem_ti = tsn_typeinfo_get(obj->elem_type_id);
+    } else if (obj->elem_ref_class == SN_REF_AGG) {
+      const SnTypeInfo *elem_ti = sn_typeinfo_get(obj->elem_type_id);
       mark_fields_at(elem, elem_ti);
     }
   }
 }
 
 static void mark_map_slot(char *slot, int32_t ref_class, int32_t type_id) {
-  if (ref_class == TSN_REF_PTR) {
+  if (ref_class == SN_REF_PTR) {
     mark_object(*(void **)slot);
-  } else if (ref_class == TSN_REF_AGG) {
-    const TsnTypeInfo *ti = tsn_typeinfo_get(type_id);
+  } else if (ref_class == SN_REF_AGG) {
+    const SnTypeInfo *ti = sn_typeinfo_get(type_id);
     mark_fields_at(slot, ti);
   }
 }
 
-static void mark_map(TsnGcObject *obj) {
-  TsnMap *map = (TsnMap *)obj->ptr;
+static void mark_map(SnGcObject *obj) {
+  SnMap *map = (SnMap *)obj->ptr;
   if (map->keys != NULL) {
     mark_object(map->keys);
   }
@@ -301,7 +301,7 @@ static void mark_object(void *ptr) {
   if (ptr == NULL) {
     return;
   }
-  TsnGcObject *obj = heap_get(ptr);
+  SnGcObject *obj = heap_get(ptr);
   if (obj == NULL) {
     /* Not a GC-managed pointer (e.g. string literal). */
     return;
@@ -317,37 +317,37 @@ static void mark_object(void *ptr) {
     return;
   }
 
-  if (type_id == TSN_TYPEID_STRING) {
+  if (type_id == SN_TYPEID_STRING) {
     return;
   }
-  if (type_id == TSN_TYPEID_ARRAY) {
+  if (type_id == SN_TYPEID_ARRAY) {
     mark_array(obj);
     return;
   }
-  if (type_id == TSN_TYPEID_MAP) {
+  if (type_id == SN_TYPEID_MAP) {
     mark_map(obj);
     return;
   }
 
-  const TsnTypeInfo *info = tsn_typeinfo_get(type_id);
+  const SnTypeInfo *info = sn_typeinfo_get(type_id);
   if (info == NULL) {
     return;
   }
 
   switch (info->kind) {
-    case TSN_KIND_CLASS:
-    case TSN_KIND_ENV:
-    case TSN_KIND_STRUCT:
-    case TSN_KIND_CLOSURE:
+    case SN_KIND_CLASS:
+    case SN_KIND_ENV:
+    case SN_KIND_STRUCT:
+    case SN_KIND_CLOSURE:
       mark_fields_at((char *)ptr, info);
       break;
-    case TSN_KIND_ARRAY:
+    case SN_KIND_ARRAY:
       mark_array(obj);
       break;
-    case TSN_KIND_MAP:
+    case SN_KIND_MAP:
       mark_map(obj);
       break;
-    case TSN_KIND_STRING:
+    case SN_KIND_STRING:
     default:
       break;
   }
@@ -380,7 +380,7 @@ static void sweep(void) {
   }
 }
 
-void tsn_gc_collect(void) {
+void sn_gc_collect(void) {
   if (collecting) {
     return;
   }
@@ -404,11 +404,11 @@ void tsn_gc_collect(void) {
   collecting = 0;
 }
 
-void tsn_gc_maybe_collect(void) {
+void sn_gc_maybe_collect(void) {
   if (collecting) {
     return;
   }
   if (threshold > 0 && bytes_allocated > threshold) {
-    tsn_gc_collect();
+    sn_gc_collect();
   }
 }

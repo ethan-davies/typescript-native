@@ -1,16 +1,16 @@
-# @typescript-native/lsp
+# @sonite/lsp
 
-Language server for TypeScript Native (`.tsn`).
+Language server for Sonite (`.sn`).
 
 ## Run
 
 ```bash
-pnpm --filter @typescript-native/compiler build
-pnpm --filter @typescript-native/lsp build
+pnpm --filter @sonite/compiler build
+pnpm --filter @sonite/lsp build
 node packages/lsp/dist/server.js --stdio
 ```
 
-Speaks LSP over stdio. Used by `typescript-native-vscode`.
+Speaks LSP over stdio. Used by `sonite-vscode`.
 
 ## Features
 

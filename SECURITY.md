@@ -1,6 +1,6 @@
 # Security Policy
 
-The **typescript-native** project takes the security of our compiler, CLI, packages, and generated binaries seriously. 
+The **sonite** project takes the security of our compiler, CLI, packages, and generated binaries seriously. 
 
 If you believe you have found a security vulnerability in this repository, please report it to us as described below.
 
@@ -21,7 +21,7 @@ Please include as much of the following information as possible to help us triag
 *   **Type of issue:** (e.g., arbitrary code execution during compilation, unsafe LLVM IR generation, memory safety bug in compiled output, buffer overflow)
 *   **Affected area:** The specific workspace package, module, or source file location
 *   **Environment:** Relevant OS, Node.js, pnpm, or Clang configuration details required to reproduce the issue
-*   **Reproduction:** Step-by-step instructions or a minimal reproducible `.tsn` code snippet
+*   **Reproduction:** Step-by-step instructions or a minimal reproducible `.sn` code snippet
 *   **Proof of concept:** Exploit code or assembly/LLVM IR output demonstrating the bug (if applicable)
 *   **Impact:** A brief explanation of the potential security impact
 

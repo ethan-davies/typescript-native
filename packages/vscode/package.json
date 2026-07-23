@@ -1,20 +1,20 @@
 {
-  "name": "typescript-native-vscode",
-  "displayName": "TypeScript Native",
-  "description": "Language support for TypeScript Native (.tsn) — grammar, editor config, and language server",
+  "name": "sonite-vscode",
+  "displayName": "Sonite",
+  "description": "Language support for Sonite (.sn) — grammar, editor config, and language server",
   "version": "0.0.0",
   "license": "MIT",
   "author": "Ethan Davies",
-  "publisher": "typescript-native",
+  "publisher": "sonite",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ethan-davies/typescript-native.git",
+    "url": "https://github.com/ethan-davies/sonite.git",
     "directory": "packages/vscode"
   },
   "bugs": {
-    "url": "https://github.com/ethan-davies/typescript-native/issues"
+    "url": "https://github.com/ethan-davies/sonite/issues"
   },
-  "homepage": "https://github.com/ethan-davies/typescript-native/tree/main/packages/vscode",
+  "homepage": "https://github.com/ethan-davies/sonite/tree/main/packages/vscode",
   "engines": {
     "vscode": "^1.85.0",
     "node": ">=20"
@@ -23,45 +23,49 @@
     "Programming Languages"
   ],
   "keywords": [
-    "tsn",
-    "typescript-native",
+    "sn",
+    "sonite",
     "lsp",
     "textmate"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onLanguage:tsn"
+    "onLanguage:sn"
   ],
   "contributes": {
     "configuration": {
-      "title": "TypeScript Native",
+      "title": "Sonite",
       "properties": {
-        "typescriptNative.trace.server": {
+        "sonite.trace.server": {
           "type": "string",
-          "enum": ["off", "messages", "verbose"],
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
           "default": "off",
-          "description": "Traces the communication between VS Code and the TypeScript Native language server."
+          "description": "Traces the communication between VS Code and the Sonite language server."
         }
       }
     },
     "languages": [
       {
-        "id": "tsn",
+        "id": "sn",
         "aliases": [
-          "TypeScript Native",
-          "tsn"
+          "Sonite",
+          "sn"
         ],
         "extensions": [
-          ".tsn"
+          ".sn"
         ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "tsn",
-        "scopeName": "source.tsn",
-        "path": "./syntaxes/tsn.tmLanguage.json"
+        "language": "sn",
+        "scopeName": "source.sn",
+        "path": "./syntaxes/sn.tmLanguage.json"
       }
     ]
   },
@@ -73,13 +77,13 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node --check tests/grammar.test.mjs && node -e \"JSON.parse(require('fs').readFileSync('syntaxes/tsn.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); console.log('ok')\"",
+    "build": "tsc -p tsconfig.build.json && node --check tests/grammar.test.mjs && node -e \"JSON.parse(require('fs').readFileSync('syntaxes/sn.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); console.log('ok')\"",
     "clean": "rm -rf dist node_modules/.cache",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test tests/grammar.test.mjs"
   },
   "dependencies": {
-    "@typescript-native/lsp": "workspace:*",
+    "@sonite/lsp": "workspace:*",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

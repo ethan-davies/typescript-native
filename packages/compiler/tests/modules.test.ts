@@ -7,24 +7,26 @@ import {
 } from "../src/modules/index.js";
 
 describe("module resolution", () => {
-  it("normalizes import specifiers to .tsn paths", () => {
+  it("normalizes import specifiers to .sn paths", () => {
     const dir = "/proj";
-    expect(resolveImportSpecifier(dir, "math")).toBe("/proj/math.tsn");
-    expect(resolveImportSpecifier(dir, "./math")).toBe("/proj/math.tsn");
-    expect(resolveImportSpecifier(dir, "math.tsn")).toBe("/proj/math.tsn");
-    expect(resolveImportSpecifier(dir, "./math.tsn")).toBe("/proj/math.tsn");
-    expect(resolveImportSpecifier(dir, "math/vector")).toBe("/proj/math/vector.tsn");
+    expect(resolveImportSpecifier(dir, "math")).toBe("/proj/math.sn");
+    expect(resolveImportSpecifier(dir, "./math")).toBe("/proj/math.sn");
+    expect(resolveImportSpecifier(dir, "math.sn")).toBe("/proj/math.sn");
+    expect(resolveImportSpecifier(dir, "./math.sn")).toBe("/proj/math.sn");
+    expect(resolveImportSpecifier(dir, "math/vector")).toBe(
+      "/proj/math/vector.sn",
+    );
   });
 
   it("derives module ids from file basenames", () => {
-    expect(moduleIdFromPath("/proj/math.tsn")).toBe("math");
-    expect(moduleIdFromPath("/proj/math/vector.tsn")).toBe("vector");
+    expect(moduleIdFromPath("/proj/math.sn")).toBe("math");
+    expect(moduleIdFromPath("/proj/math/vector.sn")).toBe("vector");
   });
 
   it("resolves a module graph with aliases", () => {
     const files = new Map<string, string>([
       [
-        "/proj/main.tsn",
+        "/proj/main.sn",
         `import "math";
 import "math/vector" as v;
 function main(): void {
@@ -34,14 +36,14 @@ function main(): void {
 `,
       ],
       [
-        "/proj/math.tsn",
+        "/proj/math.sn",
         `export function add(a: i32, b: i32): i32 {
   return a + b;
 }
 `,
       ],
       [
-        "/proj/math/vector.tsn",
+        "/proj/math/vector.sn",
         `export function add(a: i32, b: i32): i32 {
   return a + b;
 }
@@ -51,7 +53,7 @@ function main(): void {
 
     const diagnostics = new DiagnosticCollector();
     const result = resolveModules(
-      "/proj/main.tsn",
+      "/proj/main.sn",
       (path) => {
         const source = files.get(path);
         if (source === undefined) {
@@ -66,17 +68,17 @@ function main(): void {
     expect(result.success).toBe(true);
     expect(result.modules).toHaveLength(3);
     const entry = result.modules.find((m) => m.isEntry);
-    expect(entry?.path).toBe("/proj/main.tsn");
+    expect(entry?.path).toBe("/proj/main.sn");
     expect(entry?.imports).toEqual([
       expect.objectContaining({
         kind: "namespace",
         alias: "math",
-        modulePath: "/proj/math.tsn",
+        modulePath: "/proj/math.sn",
       }),
       expect.objectContaining({
         kind: "namespace",
         alias: "v",
-        modulePath: "/proj/math/vector.tsn",
+        modulePath: "/proj/math/vector.sn",
       }),
     ]);
   });
@@ -84,7 +86,7 @@ function main(): void {
   it("resolves named imports and explicit namespace imports", () => {
     const files = new Map<string, string>([
       [
-        "/proj/main.tsn",
+        "/proj/main.sn",
         `import * as math from "math";
 import { add as sum, mul } from "math";
 function main(): void {
@@ -95,7 +97,7 @@ function main(): void {
 `,
       ],
       [
-        "/proj/math.tsn",
+        "/proj/math.sn",
         `export function add(a: i32, b: i32): i32 {
   return a + b;
 }
@@ -108,7 +110,7 @@ export function mul(a: i32, b: i32): i32 {
 
     const diagnostics = new DiagnosticCollector();
     const result = resolveModules(
-      "/proj/main.tsn",
+      "/proj/main.sn",
       (path) => {
         const source = files.get(path);
         if (source === undefined) {
@@ -142,14 +144,14 @@ export function mul(a: i32, b: i32): i32 {
   it("reports duplicate import bindings", () => {
     const files = new Map<string, string>([
       [
-        "/proj/main.tsn",
+        "/proj/main.sn",
         `import "math";
 import { add as math } from "math";
 function main(): void {}
 `,
       ],
       [
-        "/proj/math.tsn",
+        "/proj/math.sn",
         `export function add(a: i32, b: i32): i32 {
   return a + b;
 }
@@ -158,7 +160,7 @@ function main(): void {}
     ]);
     const diagnostics = new DiagnosticCollector();
     const result = resolveModules(
-      "/proj/main.tsn",
+      "/proj/main.sn",
       (path) => {
         const source = files.get(path);
         if (source === undefined) {
@@ -175,9 +177,9 @@ function main(): void {}
   it("reports missing modules", () => {
     const diagnostics = new DiagnosticCollector();
     const result = resolveModules(
-      "/proj/main.tsn",
+      "/proj/main.sn",
       (path) => {
-        if (path === "/proj/main.tsn") {
+        if (path === "/proj/main.sn") {
           return `import "missing";\nfunction main(): void {}\n`;
         }
         throw new Error(`ENOENT: ${path}`);
@@ -190,12 +192,12 @@ function main(): void {}
 
   it("detects circular imports", () => {
     const files = new Map<string, string>([
-      ["/proj/a.tsn", `import "b";\nexport function a(): i32 { return 1; }\n`],
-      ["/proj/b.tsn", `import "a";\nexport function b(): i32 { return 2; }\n`],
+      ["/proj/a.sn", `import "b";\nexport function a(): i32 { return 1; }\n`],
+      ["/proj/b.sn", `import "a";\nexport function b(): i32 { return 2; }\n`],
     ]);
     const diagnostics = new DiagnosticCollector();
     const result = resolveModules(
-      "/proj/a.tsn",
+      "/proj/a.sn",
       (path) => {
         const source = files.get(path);
         if (source === undefined) {

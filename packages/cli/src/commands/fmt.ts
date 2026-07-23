@@ -6,10 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  formatDiagnostics,
-  formatSource,
-} from "@typescript-native/compiler";
+import { formatDiagnostics, formatSource } from "@sonite/compiler";
 import { findProjectManifest, loadProject } from "../project.js";
 
 export interface FmtOptions {
@@ -20,7 +17,7 @@ export interface FmtOptions {
 export function runFmt(options: FmtOptions): number {
   const files = collectFiles(options.paths);
   if (files.length === 0) {
-    console.error("error: no .tsn files to format");
+    console.error("error: no .sn files to format");
     return 1;
   }
 
@@ -73,9 +70,9 @@ function collectFiles(paths: readonly string[]): string[] {
     const manifest = findProjectManifest();
     if (manifest) {
       const project = loadProject();
-      return collectTsnFiles(project.root).sort();
+      return collectSnFiles(project.root).sort();
     }
-    return collectTsnFiles(process.cwd()).sort();
+    return collectSnFiles(process.cwd()).sort();
   }
 
   const out: string[] = [];
@@ -87,25 +84,19 @@ function collectFiles(paths: readonly string[]): string[] {
     }
     const st = statSync(absolute);
     if (st.isDirectory()) {
-      out.push(...collectTsnFiles(absolute));
-    } else if (absolute.toLowerCase().endsWith(".tsn")) {
+      out.push(...collectSnFiles(absolute));
+    } else if (absolute.toLowerCase().endsWith(".sn")) {
       out.push(absolute);
     } else {
-      console.error(`error: not a .tsn file: ${p}`);
+      console.error(`error: not a .sn file: ${p}`);
     }
   }
   return [...new Set(out)].sort();
 }
 
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "dist",
-  ".git",
-  ".tsn",
-  "target",
-]);
+const SKIP_DIRS = new Set(["node_modules", "dist", ".git", ".sn", "target"]);
 
-function collectTsnFiles(root: string): string[] {
+function collectSnFiles(root: string): string[] {
   const out: string[] = [];
   walk(root, out);
   return out;
@@ -131,7 +122,7 @@ function walk(dir: string, out: string[]): void {
     }
     if (st.isDirectory()) {
       walk(full, out);
-    } else if (entry.toLowerCase().endsWith(".tsn")) {
+    } else if (entry.toLowerCase().endsWith(".sn")) {
       out.push(full);
     }
   }

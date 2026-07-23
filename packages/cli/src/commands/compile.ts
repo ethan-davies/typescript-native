@@ -26,8 +26,7 @@ export function runCompile(
   }
 
   const absoluteInput = resolve(inputPath);
-  const out =
-    output ?? absoluteInput.replace(/\.tsn$/i, "") + ".ll";
+  const out = output ?? absoluteInput.replace(/\.sn$/i, "") + ".ll";
   writeFileSync(out, compiled.ir, "utf8");
   console.log(`wrote ${out}`);
   return 0;

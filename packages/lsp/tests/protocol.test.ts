@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptySemanticModel } from "@typescript-native/compiler";
+import { emptySemanticModel } from "@sonite/compiler";
 import {
   positionToOffset,
   spanToRange,
@@ -31,7 +31,7 @@ describe("LSP protocol helpers", () => {
         {
           severity: "error",
           message: "a",
-          file: "/a.tsn",
+          file: "/a.sn",
           code: "E0001",
           span: {
             start: { line: 1, column: 1, offset: 0 },
@@ -41,10 +41,10 @@ describe("LSP protocol helpers", () => {
         {
           severity: "error",
           message: "b",
-          file: "/b.tsn",
+          file: "/b.sn",
         },
       ],
-      "/a.tsn",
+      "/a.sn",
     );
     expect(diags).toHaveLength(1);
     expect(diags[0]?.code).toBe("E0001");
@@ -66,7 +66,7 @@ describe("LSP protocol helpers", () => {
 `;
     const semantic = emptySemanticModel([
       {
-        path: "/proj/main.tsn",
+        path: "/proj/main.sn",
         source,
         ast: {
           kind: "Program",
@@ -92,7 +92,7 @@ describe("LSP protocol helpers", () => {
       ],
       "abs",
       { line: 1, character: 5 },
-      { source, semantic, filePath: "/proj/main.tsn" },
+      { source, semantic, filePath: "/proj/main.sn" },
     );
     expect(items).toHaveLength(1);
     expect(items[0]!.additionalTextEdits).toBeDefined();

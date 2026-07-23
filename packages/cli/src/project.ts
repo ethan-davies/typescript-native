@@ -20,7 +20,7 @@ export interface Project {
   readonly manifestPath: string;
   readonly package: ProjectPackage;
   readonly build: ProjectBuild;
-  /** Absolute path to the entry .tsn file. */
+  /** Absolute path to the entry .sn file. */
   readonly entryPath: string;
   /** Absolute path to the build output directory. */
   readonly outdirPath: string;
@@ -39,7 +39,9 @@ export class ProjectError extends Error {
  * Walk upward from `startDir` looking for `project.toml`.
  * Returns the absolute path to the manifest, or null if not found.
  */
-export function findProjectManifest(startDir: string = process.cwd()): string | null {
+export function findProjectManifest(
+  startDir: string = process.cwd(),
+): string | null {
   let dir = resolve(startDir);
   for (;;) {
     const candidate = join(dir, "project.toml");
@@ -61,7 +63,7 @@ export function loadProject(startDir: string = process.cwd()): Project {
   const manifestPath = findProjectManifest(resolve(startDir));
   if (!manifestPath) {
     throw new ProjectError(
-      "no project.toml found (run `tsn init` or cd into a project directory)",
+      "no project.toml found (run `sn init` or cd into a project directory)",
     );
   }
   return loadProjectFromManifest(manifestPath);

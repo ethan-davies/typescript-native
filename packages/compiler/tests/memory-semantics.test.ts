@@ -43,13 +43,13 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).toContain("%v.b = alloca ptr");
     expect(result.ir).toMatch(/load ptr, ptr %v\.a/);
     expect(result.ir).toMatch(/store ptr .*, ptr %v\.b/);
-    expect(result.ir).toContain("call ptr @tsn_alloc");
+    expect(result.ir).toContain("call ptr @sn_alloc");
     expect(result.ir).toMatch(/store i32 \d+, ptr %/);
     expect(result.ir).toContain("store ptr @Person__vtable");
-    expect(result.ir).toContain("call void @tsn_init_typeinfo()");
+    expect(result.ir).toContain("call void @sn_init_typeinfo()");
     expect(result.ir).toContain("@Person__typeinfo");
-    expect(result.ir).toContain("tsn_typeinfo_register");
-    // ObjectHeader.type_id stores a class id (>= TSN_TYPEID_CLASS_BASE = 256).
+    expect(result.ir).toContain("sn_typeinfo_register");
+    // ObjectHeader.type_id stores a class id (>= SN_TYPEID_CLASS_BASE = 256).
     const typeIdStore = result.ir!.match(/store i32 (2\d{2,}), ptr %/);
     expect(typeIdStore).not.toBeNull();
     expect(Number(typeIdStore![1])).toBeGreaterThanOrEqual(256);
@@ -70,9 +70,11 @@ describe("value vs reference memory semantics", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("%TsnTypeInfo = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32, i32 }");
+    expect(result.ir).toContain(
+      "%SnTypeInfo = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32, i32 }",
+    );
     expect(result.ir).toContain("@Person__typeinfo_fields");
-    // string → PTR (ref_class 1), related type_id 1 (TSN_TYPEID_STRING)
+    // string → PTR (ref_class 1), related type_id 1 (SN_TYPEID_STRING)
     expect(result.ir).toMatch(/i32 1, i32 1\s*\}/);
     // i32 → VALUE (ref_class 0)
     expect(result.ir).toMatch(/i32 0, i32 0\s*\}/);
@@ -127,7 +129,7 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).toContain("%Dog = type { %ObjectHeader, ptr, ptr }");
   });
 
-  it("emits tsn_is_instance for subclass is-checks and parent_type_id", () => {
+  it("emits sn_is_instance for subclass is-checks and parent_type_id", () => {
     const result = compile(`
       class Animal {
         name: string;
@@ -148,11 +150,15 @@ describe("value vs reference memory semantics", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call i1 @tsn_is_instance");
-    expect(result.ir).toContain("%TsnTypeInfo = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32, i32 }");
+    expect(result.ir).toContain("call i1 @sn_is_instance");
+    expect(result.ir).toContain(
+      "%SnTypeInfo = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32, i32 }",
+    );
     // Animal has no parent (trailing i32 0); Dog's parent_type_id is Animal's non-zero type_id.
     expect(result.ir).toMatch(/@Animal__typeinfo = .* i32 0 \}/);
-    expect(result.ir).toMatch(/@Dog__typeinfo = .* i32 (2\d{2}|[3-9]\d{2}|[1-9]\d{3,}) \}/);
+    expect(result.ir).toMatch(
+      /@Dog__typeinfo = .* i32 (2\d{2}|[3-9]\d{2}|[1-9]\d{3,}) \}/,
+    );
   });
 
   it("registers static reference fields as global GC roots", () => {
@@ -167,7 +173,7 @@ describe("value vs reference memory semantics", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call void @tsn_gc_add_global_root");
+    expect(result.ir).toContain("call void @sn_gc_add_global_root");
   });
 
   it("compares strings by content via strcmp", () => {
@@ -183,15 +189,15 @@ describe("value vs reference memory semantics", () => {
     expect(result.ir).not.toMatch(/icmp eq ptr %.*a.*, %.*b/);
   });
 
-  it("coerces scalars with tsn_*_to_string for string +", () => {
+  it("coerces scalars with sn_*_to_string for string +", () => {
     const result = compile(`
       function main(): void {
         print("n=" + 42);
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_i32_to_string");
-    expect(result.ir).toContain("call ptr @tsn_str_concat");
+    expect(result.ir).toContain("call ptr @sn_i32_to_string");
+    expect(result.ir).toContain("call ptr @sn_str_concat");
   });
 
   it("passes struct params by value and class params by reference", () => {
@@ -297,8 +303,8 @@ describe("value vs reference memory semantics", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("declare ptr @tsn_array_new");
-    expect(result.ir).toContain("call void @tsn_array_push");
+    expect(result.ir).toContain("declare ptr @sn_array_new");
+    expect(result.ir).toContain("call void @sn_array_push");
     expect(result.ir).toContain("%v.a = alloca ptr");
     expect(result.ir).toContain("%v.b = alloca ptr");
     expect(result.ir).toMatch(/load ptr, ptr %v\.a/);
@@ -317,8 +323,8 @@ describe("value vs reference memory semantics", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("tsn_map_new");
-    expect(result.ir).toContain("tsn_map_set");
+    expect(result.ir).toContain("sn_map_new");
+    expect(result.ir).toContain("sn_map_set");
     expect(result.ir).toContain("%v.a = alloca ptr");
     expect(result.ir).toContain("%v.b = alloca ptr");
     expect(result.ir).toMatch(/load ptr, ptr %v\.a/);
@@ -351,7 +357,7 @@ describe("value vs reference memory semantics", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.ir).toContain("define void @addItem(ptr %arg0)");
-    expect(result.ir).toContain("call void @tsn_array_push");
+    expect(result.ir).toContain("call void @sn_array_push");
   });
 
   it("returns arrays, strings, and maps by reference", () => {
@@ -516,8 +522,8 @@ describe("value vs reference memory semantics", () => {
   });
 });
 
-describe("heap allocation contract (tsn_alloc)", () => {
-  it("allocates class instances via tsn_alloc(sizeof) and initializes ObjectHeader", () => {
+describe("heap allocation contract (sn_alloc)", () => {
+  it("allocates class instances via sn_alloc(sizeof) and initializes ObjectHeader", () => {
     const result = compile(`
       class Person {
         name: string;
@@ -533,7 +539,7 @@ describe("heap allocation contract (tsn_alloc)", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.ir).toContain(
-      "call ptr @tsn_alloc(i64 noundef ptrtoint (ptr getelementptr (%Person, ptr null, i32 1) to i64))",
+      "call ptr @sn_alloc(i64 noundef ptrtoint (ptr getelementptr (%Person, ptr null, i32 1) to i64))",
     );
     expect(result.ir).toMatch(/store i32 \d+, ptr %/);
     expect(result.ir).toContain("store ptr @Person__vtable");
@@ -541,19 +547,19 @@ describe("heap allocation contract (tsn_alloc)", () => {
     expect(result.ir).not.toContain("@free");
   });
 
-  it("creates arrays via tsn_array_new (not direct malloc)", () => {
+  it("creates arrays via sn_array_new (not direct malloc)", () => {
     const result = compile(`
       function main(): void {
         let a: i32[] = [1, 2];
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_array_new");
-    expect(result.ir).not.toMatch(/call ptr @tsn_alloc/);
+    expect(result.ir).toContain("call ptr @sn_array_new");
+    expect(result.ir).not.toMatch(/call ptr @sn_alloc/);
     expect(result.ir).not.toContain("@malloc");
   });
 
-  it("creates maps via tsn_map_new", () => {
+  it("creates maps via sn_map_new", () => {
     const result = compile(`
       interface Dictionary {
         [key: string]: string;
@@ -564,12 +570,12 @@ describe("heap allocation contract (tsn_alloc)", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_map_new");
-    expect(result.ir).toContain("tsn_map_set");
+    expect(result.ir).toContain("call ptr @sn_map_new");
+    expect(result.ir).toContain("sn_map_set");
     expect(result.ir).not.toContain("@malloc");
   });
 
-  it("concatenates strings via tsn_str_concat", () => {
+  it("concatenates strings via sn_str_concat", () => {
     const result = compile(`
       function main(): void {
         let a: string = "hello";
@@ -579,11 +585,11 @@ describe("heap allocation contract (tsn_alloc)", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_str_concat");
+    expect(result.ir).toContain("call ptr @sn_str_concat");
     expect(result.ir).not.toContain("@malloc");
   });
 
-  it("allocates closure environments via tsn_alloc(sizeof(env))", () => {
+  it("allocates closure environments via sn_alloc(sizeof(env))", () => {
     const result = compile(`
       function main(): void {
         let x: i32 = 10;
@@ -593,7 +599,7 @@ describe("heap allocation contract (tsn_alloc)", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.ir).toMatch(
-      /call ptr @tsn_alloc\(i64 noundef ptrtoint \(ptr getelementptr \(%__env_[^,]+, ptr null, i32 1\) to i64\)\)/,
+      /call ptr @sn_alloc\(i64 noundef ptrtoint \(ptr getelementptr \(%__env_[^,]+, ptr null, i32 1\) to i64\)\)/,
     );
     expect(result.ir).not.toContain("@malloc");
   });
@@ -614,12 +620,12 @@ describe("GC root registration and type hooks", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call void @tsn_gc_root_push");
-    expect(result.ir).toContain("call void @tsn_gc_root_restore");
-    expect(result.ir).toContain("call i32 @tsn_gc_root_checkpoint");
+    expect(result.ir).toContain("call void @sn_gc_root_push");
+    expect(result.ir).toContain("call void @sn_gc_root_restore");
+    expect(result.ir).toContain("call i32 @sn_gc_root_checkpoint");
   });
 
-  it("emits tsn_gc_set_type after class allocation", () => {
+  it("emits sn_gc_set_type after class allocation", () => {
     const result = compile(`
       class Person {
         name: string;
@@ -632,19 +638,19 @@ describe("GC root registration and type hooks", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call void @tsn_gc_set_type");
+    expect(result.ir).toContain("call void @sn_gc_set_type");
     expect(result.ir).not.toContain("@malloc");
     expect(result.ir).not.toContain("@free");
   });
 
-  it("emits tsn_gc_set_array_meta for array literals", () => {
+  it("emits sn_gc_set_array_meta for array literals", () => {
     const result = compile(`
       function main(): void {
         let a: i32[] = [1, 2];
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call void @tsn_gc_set_array_meta");
+    expect(result.ir).toContain("call void @sn_gc_set_array_meta");
   });
 
   it("emits AGG TypeInfo for nested ref-struct class fields", () => {
@@ -667,10 +673,12 @@ describe("GC root registration and type hooks", () => {
     expect(result.ir).toContain("@__agg_Profile__typeinfo");
     // AGG ref_class = 2 pointing at nested Profile TypeInfo
     expect(result.ir).toMatch(/i32 2, i32 \d+\s*\}/);
-    expect(result.ir).toContain("tsn_typeinfo_register(ptr noundef @__agg_Profile__typeinfo)");
+    expect(result.ir).toContain(
+      "sn_typeinfo_register(ptr noundef @__agg_Profile__typeinfo)",
+    );
   });
 
-  it("emits env TypeInfo and tsn_gc_set_type for closure environments", () => {
+  it("emits env TypeInfo and sn_gc_set_type for closure environments", () => {
     const result = compile(`
       class Box {
         value: i32;
@@ -687,7 +695,7 @@ describe("GC root registration and type hooks", () => {
     expect(result.success).toBe(true);
     expect(result.ir).toMatch(/@__env_.*__typeinfo/);
     expect(result.ir).toMatch(
-      /call void @tsn_gc_set_type\(ptr noundef %.*, i32 noundef \d+\)/,
+      /call void @sn_gc_set_type\(ptr noundef %.*, i32 noundef \d+\)/,
     );
   });
 
@@ -711,10 +719,12 @@ describe("GC root registration and type hooks", () => {
     expect(result.success).toBe(true);
     expect(result.ir).toContain("@__box_ptr_");
     // Box type_id must be non-zero (≥ CLASS_BASE)
-    expect(result.ir).toMatch(/call void @tsn_gc_set_type\(ptr noundef %.*, i32 noundef (2\d{2}|[3-9]\d{2}|\d{4,})\)/);
+    expect(result.ir).toMatch(
+      /call void @sn_gc_set_type\(ptr noundef %.*, i32 noundef (2\d{2}|[3-9]\d{2}|\d{4,})\)/,
+    );
   });
 
-  it("emits tsn_gc_set_map_meta after createMap", () => {
+  it("emits sn_gc_set_map_meta after createMap", () => {
     const result = compile(`
       interface Dictionary {
         [key: string]: string;
@@ -725,7 +735,7 @@ describe("GC root registration and type hooks", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call void @tsn_gc_set_map_meta");
+    expect(result.ir).toContain("call void @sn_gc_set_map_meta");
   });
 
   it("emits AGG array meta for struct elements with references", () => {
@@ -741,7 +751,7 @@ describe("GC root registration and type hooks", () => {
     expect(result.ir).toContain("@__agg_PersonData__typeinfo");
     // elem_ref_class AGG = 2
     expect(result.ir).toMatch(
-      /call void @tsn_gc_set_array_meta\(ptr noundef %.*, i32 noundef 2,/,
+      /call void @sn_gc_set_array_meta\(ptr noundef %.*, i32 noundef 2,/,
     );
   });
 
@@ -762,7 +772,7 @@ describe("GC root registration and type hooks", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.ir).toMatch(/define void @use\(ptr %arg0\)/);
-    expect(result.ir).toContain("call void @tsn_gc_root_push");
+    expect(result.ir).toContain("call void @sn_gc_root_push");
   });
 
   it("pre-roots catch parameter before setjmp and clears pending exception", () => {
@@ -776,11 +786,11 @@ describe("GC root registration and type hooks", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("declare void @tsn_eh_clear_exception()");
+    expect(result.ir).toContain("declare void @sn_eh_clear_exception()");
     const mainFn = result.ir!.slice(result.ir!.indexOf("define i32 @main"));
     const catchAlloca = mainFn.indexOf("%v.error = alloca ptr");
     const setjmpCall = mainFn.indexOf("call i32 @setjmp");
-    const clearCall = mainFn.indexOf("call void @tsn_eh_clear_exception()");
+    const clearCall = mainFn.indexOf("call void @sn_eh_clear_exception()");
     const catchLabel = mainFn.indexOf("try.catch.");
     expect(catchAlloca).toBeGreaterThanOrEqual(0);
     expect(setjmpCall).toBeGreaterThan(catchAlloca);
@@ -788,9 +798,11 @@ describe("GC root registration and type hooks", () => {
     expect(clearCall).toBeGreaterThan(catchLabel);
     /* Catch entry pops EH frame before the body so rethrow propagates outward. */
     const afterCatch = mainFn.slice(catchLabel);
-    expect(afterCatch.indexOf("call void @tsn_eh_pop")).toBeGreaterThanOrEqual(0);
-    expect(afterCatch.indexOf("call void @tsn_eh_pop")).toBeLessThan(
-      afterCatch.indexOf("call void @tsn_eh_clear_exception()"),
+    expect(afterCatch.indexOf("call void @sn_eh_pop")).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(afterCatch.indexOf("call void @sn_eh_pop")).toBeLessThan(
+      afterCatch.indexOf("call void @sn_eh_clear_exception()"),
     );
   });
 
@@ -813,10 +825,12 @@ describe("GC root registration and type hooks", () => {
     `);
     expect(result.success).toBe(true);
     const mainFn = result.ir!.slice(result.ir!.indexOf("define i32 @main"));
-    expect(mainFn).toContain("call i32 @tsn_gc_root_checkpoint()");
-    expect(mainFn).toContain("call void @tsn_gc_root_restore");
+    expect(mainFn).toContain("call i32 @sn_gc_root_checkpoint()");
+    expect(mainFn).toContain("call void @sn_gc_root_restore");
     expect(mainFn).toContain("%v.error = alloca ptr");
-    expect(mainFn.indexOf("%v.error = alloca ptr")).toBeLessThan(mainFn.indexOf("call i32 @setjmp"));
+    expect(mainFn.indexOf("%v.error = alloca ptr")).toBeLessThan(
+      mainFn.indexOf("call i32 @setjmp"),
+    );
   });
 
   it("allocates throwable subclasses with GC type hooks", () => {
@@ -843,8 +857,8 @@ describe("GC root registration and type hooks", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_alloc");
-    expect(result.ir).toContain("call void @tsn_gc_set_type");
-    expect(result.ir).toContain("call void @tsn_throw");
+    expect(result.ir).toContain("call ptr @sn_alloc");
+    expect(result.ir).toContain("call void @sn_gc_set_type");
+    expect(result.ir).toContain("call void @sn_throw");
   });
 });

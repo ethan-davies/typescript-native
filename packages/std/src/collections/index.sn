@@ -1,6 +1,6 @@
-extern function tsn_array_push<T>(arr: T[], value: T): void;
-extern function tsn_array_pop<T>(arr: T[]): T;
-extern function tsn_array_index_of<T>(arr: T[], value: T): i32;
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_array_pop<T>(arr: T[]): T;
+extern function sn_array_index_of<T>(arr: T[], value: T): i32;
 
 export class Stack<T> {
   private items: T[];
@@ -10,14 +10,14 @@ export class Stack<T> {
   }
 
   push(value: T): void {
-    tsn_array_push(this.items, value);
+    sn_array_push(this.items, value);
   }
 
   pop(): T {
     if (this.items.length == 0) {
       throw new Error("Stack is empty");
     }
-    return tsn_array_pop(this.items);
+    return sn_array_pop(this.items);
   }
 
   peek(): T {
@@ -50,7 +50,7 @@ export class Queue<T> {
   }
 
   enqueue(value: T): void {
-    tsn_array_push(this.items, value);
+    sn_array_push(this.items, value);
   }
 
   dequeue(): T {
@@ -63,7 +63,7 @@ export class Queue<T> {
       let compacted: T[] = [];
       let i = this.head;
       while (i < this.items.length) {
-        tsn_array_push(compacted, this.items[i]);
+        sn_array_push(compacted, this.items[i]);
         i = i + 1;
       }
       this.items = compacted;
@@ -101,19 +101,19 @@ export class Set<T> {
   }
 
   add(value: T): bool {
-    if (tsn_array_index_of(this.items, value) >= 0) {
+    if (sn_array_index_of(this.items, value) >= 0) {
       return false;
     }
-    tsn_array_push(this.items, value);
+    sn_array_push(this.items, value);
     return true;
   }
 
   has(value: T): bool {
-    return tsn_array_index_of(this.items, value) >= 0;
+    return sn_array_index_of(this.items, value) >= 0;
   }
 
   remove(value: T): bool {
-    let idx = tsn_array_index_of(this.items, value);
+    let idx = sn_array_index_of(this.items, value);
     if (idx < 0) {
       return false;
     }
@@ -121,7 +121,7 @@ export class Set<T> {
     let i: i32 = 0;
     while (i < this.items.length) {
       if (i != idx) {
-        tsn_array_push(next, this.items[i]);
+        sn_array_push(next, this.items[i]);
       }
       i = i + 1;
     }
@@ -145,7 +145,7 @@ export class Set<T> {
     let result: T[] = [];
     let i: i32 = 0;
     while (i < this.items.length) {
-      tsn_array_push(result, this.items[i]);
+      sn_array_push(result, this.items[i]);
       i = i + 1;
     }
     return result;
@@ -160,7 +160,7 @@ export class List<T> {
   }
 
   add(value: T): void {
-    tsn_array_push(this.items, value);
+    sn_array_push(this.items, value);
   }
 
   get(index: i32): T {
@@ -178,9 +178,9 @@ export class List<T> {
     let i: i32 = 0;
     while (i < this.items.length) {
       if (i == index) {
-        tsn_array_push(next, value);
+        sn_array_push(next, value);
       } else {
-        tsn_array_push(next, this.items[i]);
+        sn_array_push(next, this.items[i]);
       }
       i = i + 1;
     }
@@ -196,7 +196,7 @@ export class List<T> {
     let i: i32 = 0;
     while (i < this.items.length) {
       if (i != index) {
-        tsn_array_push(next, this.items[i]);
+        sn_array_push(next, this.items[i]);
       }
       i = i + 1;
     }
@@ -220,7 +220,7 @@ export class List<T> {
     let result: T[] = [];
     let i: i32 = 0;
     while (i < this.items.length) {
-      tsn_array_push(result, this.items[i]);
+      sn_array_push(result, this.items[i]);
       i = i + 1;
     }
     return result;

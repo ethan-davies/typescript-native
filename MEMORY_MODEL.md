@@ -1,6 +1,6 @@
-# TSN Memory Model
+# Sonite Memory Model
 
-TSN aims to be **easy to use**, **TypeScript-like**, and a **compiled native language**. Developers should **not normally think about the stack or heap** — the compiler and runtime handle that automatically.
+Sonite aims to be **easy to use**, **TypeScript-like**, and a **compiled native language**. Developers should **not normally think about the stack or heap** — the compiler and runtime handle that automatically.
 
 ## Core idea
 
@@ -177,7 +177,7 @@ Rules:
 - Methods are **not** stored in the object. Instance methods live in a per-class vtable; the object header holds a pointer to that table. A call is conceptually `greet(person)`.
 - **Inheritance** flattens superclass fields after the header, then subclass fields (so a `Dog*` can be treated as an `Animal*` for field offsets).
 - Class fields that are reference types (string, class, array, …) are pointers. Struct fields are stored **inline** in the object.
-- `new Person()` allocates with `tsn_alloc(sizeof(Person))`, initializes the object header (`type_id` + vtable), then runs the constructor.
+- `new Person()` allocates with `sn_alloc(sizeof(Person))`, initializes the object header (`type_id` + vtable), then runs the constructor.
 - `type_id` indexes runtime `TypeInfo` (see [§18](#18-runtime-typeinfo--object-layouts)). Class IDs start at **256**; IDs **1–5** are reserved for builtins.
 
 ### Common heap object header
@@ -219,10 +219,10 @@ b ─────┘
 
 ### Array physical layout
 
-Canonical header (24 bytes — `TSN_ARRAY_HEADER_SIZE`):
+Canonical header (24 bytes — `SN_ARRAY_HEADER_SIZE`):
 
 ```text
-TsnArray                         separate data buffer
+SnArray                         separate data buffer
 ┌──────────────────────┐         ┌─────────────────────┐
 │ length   : i64       │         │ elem[0] … elem[n)   │
 │ capacity : i64       │───────→ │ size = sizeof(T)    │
@@ -245,7 +245,7 @@ Person[]                         Point[]
 └────────┘                       └────────┘
 ```
 
-Runtime APIs (`tsn_array_new`, `tsn_array_push`, `tsn_array_pop`, `tsn_array_index_of`) operate on this header. Per-instantiation scan metadata (`tsn_gc_set_array_meta`) records whether elements are `VALUE`, `PTR`, or `AGG` (inline aggregate that itself contains references) so the GC can scan the data buffer correctly.
+Runtime APIs (`sn_array_new`, `sn_array_push`, `sn_array_pop`, `sn_array_index_of`) operate on this header. Per-instantiation scan metadata (`sn_gc_set_array_meta`) records whether elements are `VALUE`, `PTR`, or `AGG` (inline aggregate that itself contains references) so the GC can scan the data buffer correctly.
 
 ---
 
@@ -267,7 +267,7 @@ a ─────┐
 b ─────┘
 ```
 
-You cannot modify characters in place. Operations such as `toUpper()` or `concat()` produce a new string. The runtime APIs (`tsn_str_len`, `tsn_str_concat`, etc.) fit this model.
+You cannot modify characters in place. Operations such as `toUpper()` or `concat()` produce a new string. The runtime APIs (`sn_str_len`, `sn_str_concat`, etc.) fit this model.
 
 ### String physical layout (current ABI)
 
@@ -276,8 +276,8 @@ string ref (ptr) ──→  [ bytes …, '\0' ]
 ```
 
 - Reference type, immutable, heap-allocated (literals may live in read-only data).
-- `tsn_str_concat` allocates a **new** buffer; it never mutates its inputs.
-- Length is computed with `tsn_str_len` / `strlen` (no length prefix yet).
+- `sn_str_concat` allocates a **new** buffer; it never mutates its inputs.
+- Length is computed with `sn_str_len` / `strlen` (no length prefix yet).
 
 **Target layout** (future ABI bump, not implemented):
 
@@ -314,10 +314,10 @@ b ─────┘
 
 ### Map physical layout
 
-Canonical header (32 bytes — `TSN_MAP_HEADER_SIZE`):
+Canonical header (32 bytes — `SN_MAP_HEADER_SIZE`):
 
 ```text
-TsnMap
+SnMap
 ┌──────────────────────┐
 │ len  : i64           │
 │ cap  : i64           │
@@ -328,11 +328,11 @@ TsnMap
 
 Behavior (existing runtime):
 
-- `tsn_map_new` — empty map with initial capacity 8
-- `tsn_map_set` — insert or **overwrite** value for an existing key (linear `strcmp` search); grows by doubling when full
-- `tsn_map_get` — lookup; returns `null` if missing
+- `sn_map_new` — empty map with initial capacity 8
+- `sn_map_set` — insert or **overwrite** value for an existing key (linear `strcmp` search); grows by doubling when full
+- `sn_map_get` — lookup; returns `null` if missing
 
-Today keys are strings and values are pointer-sized. Side-table map metadata (`tsn_gc_set_map_meta`) records key/value reference classification so the GC can scan entries (e.g. `Map<string, Person>` → key `PTR`, value `PTR`; pure value payloads use `VALUE` and are not followed).
+Today keys are strings and values are pointer-sized. Side-table map metadata (`sn_gc_set_map_meta`) records key/value reference classification so the GC can scan entries (e.g. `Map<string, Person>` → key `PTR`, value `PTR`; pure value payloads use `VALUE` and are not followed).
 
 ---
 
@@ -363,9 +363,9 @@ function createCounter() {
 ```
 
 - The **handle** `{ code, env }` is a language-level reference payload (shallow-copied on assign/pass). It is not itself a heap object with an object header.
-- The **environment** (and any mutable capture boxes) live on the heap via `tsn_alloc`.
+- The **environment** (and any mutable capture boxes) live on the heap via `sn_alloc`.
 - Captures follow the same value/reference rules as fields: primitives/structs stored by value (or via a mutable box); reference captures stored as pointers.
-- Each environment layout gets a registered `TypeInfo` (`TSN_KIND_ENV`). Mutable capture boxes that hold references get their own `TypeInfo` (`TSN_KIND_STRUCT`) so the GC scans the boxed pointer/aggregate.
+- Each environment layout gets a registered `TypeInfo` (`SN_KIND_ENV`). Mutable capture boxes that hold references get their own `TypeInfo` (`SN_KIND_STRUCT`) so the GC scans the boxed pointer/aggregate.
 
 ```text
 () => person.name
@@ -502,22 +502,22 @@ The compiler and runtime handle allocation and reclamation.
 
 ## 12. Allocation ownership
 
-Raw heap memory for TSN-managed objects goes through one canonical API:
+Raw heap memory for SN-managed objects goes through one canonical API:
 
 ```text
-void* tsn_alloc(size);
-void* tsn_realloc(ptr, size);
-void  tsn_free(ptr);
+void* sn_alloc(size);
+void* sn_realloc(ptr, size);
+void  sn_free(ptr);
 ```
 
 **Compiler** chooses object size and layout, then initializes fields. **Runtime** owns the bytes.
 
 ```text
-TSN compiler
+SN compiler
      │
      │  "I need N bytes for this layout"
      ▼
-tsn_alloc(N)   (or a helper that calls it)
+sn_alloc(N)   (or a helper that calls it)
      │
      ▼
 Runtime heap memory
@@ -533,19 +533,19 @@ Call graph today (ABIs unchanged):
 
 | Kind | Compiler emits | Runtime allocates with |
 | --- | --- | --- |
-| Class instance | `tsn_alloc(sizeof(Class))` + ObjectHeader init | `tsn_alloc` |
-| Array | `tsn_array_new(...)` | `tsn_alloc` (header + data); grow via `tsn_realloc` |
-| String (dynamic) | `tsn_str_concat` / `to_string` helpers | `tsn_alloc` |
-| Map | `tsn_map_new` / `tsn_map_set` | `tsn_alloc` / `tsn_realloc` |
-| Closure environment | `tsn_alloc(sizeof(env))` | `tsn_alloc` |
+| Class instance | `sn_alloc(sizeof(Class))` + ObjectHeader init | `sn_alloc` |
+| Array | `sn_array_new(...)` | `sn_alloc` (header + data); grow via `sn_realloc` |
+| String (dynamic) | `sn_str_concat` / `to_string` helpers | `sn_alloc` |
+| Map | `sn_map_new` / `sn_map_set` | `sn_alloc` / `sn_realloc` |
+| Closure environment | `sn_alloc(sizeof(env))` | `sn_alloc` |
 
-Root registration and `tsn_gc_set_type` / `tsn_gc_set_array_meta` / `tsn_gc_set_map_meta` are the compiler/runtime hooks for the collector; a future allocator swap can keep those call sites.
+Root registration and `sn_gc_set_type` / `sn_gc_set_array_meta` / `sn_gc_set_map_meta` are the compiler/runtime hooks for the collector; a future allocator swap can keep those call sites.
 
 ---
 
 ## 13. Memory management
 
-TSN uses **automatic garbage collection**.
+SN uses **automatic garbage collection**.
 
 - No manual `free(person)`
 - No required `Box<Person>` / `Rc<Person>` for everyday code
@@ -568,9 +568,9 @@ Heap (side table)
 
 ### Allocation tracking
 
-Every `tsn_alloc` / `tsn_realloc` registers the payload pointer in a runtime side table (`ptr`, `size`, `type_id`, mark bit, array/map scan meta). Object byte layouts are unchanged — arrays/maps/strings still do not embed `type_id` in-object; the side table carries type identity instead.
+Every `sn_alloc` / `sn_realloc` registers the payload pointer in a runtime side table (`ptr`, `size`, `type_id`, mark bit, array/map scan meta). Object byte layouts are unchanged — arrays/maps/strings still do not embed `type_id` in-object; the side table carries type identity instead.
 
-GC-internal structures (the side table, root stack, TypeInfo registry growth) use system `malloc`, never `tsn_alloc`, to avoid reentrancy.
+GC-internal structures (the side table, root stack, TypeInfo registry growth) use system `malloc`, never `sn_alloc`, to avoid reentrancy.
 
 Secondary buffers (array `data`, map `keys`/`vals`) are separate GC objects with opaque `type_id = 0`; they are marked only when a parent array/map is marked.
 
@@ -581,15 +581,15 @@ String literals are not in the side table; marking them is a no-op, so they are 
 The compiler emits:
 
 ```text
-cp = tsn_gc_root_checkpoint()   // once per function, before its first root push
-tsn_gc_root_push(slot)          // on reference locals / params / this / callable env fields
+cp = sn_gc_root_checkpoint()   // once per function, before its first root push
+sn_gc_root_push(slot)          // on reference locals / params / this / callable env fields
 … function body …
-tsn_gc_root_restore(cp)         // on every return (safe if unwind already trimmed roots)
+sn_gc_root_restore(cp)         // on every return (safe if unwind already trimmed roots)
 ```
 
-Roots also include global slots (`tsn_gc_add_global_root`) and the pending exception pointer (`tsn_gc_set_exception_root`).
+Roots also include global slots (`sn_gc_add_global_root`) and the pending exception pointer (`sn_gc_set_exception_root`).
 
-Exception unwinding (setjmp/longjmp) restores the shadow stack: each EH frame records a root checkpoint at `tsn_eh_push`, and `tsn_throw` calls `tsn_gc_root_restore` before running a finally-only callback or longjmping to a catcher. That drops abandoned callee roots so the next collection cannot scan dangling stack slots. Catch parameters are rooted before `setjmp`; after binding, `tsn_eh_clear_exception` transfers ownership from the pending-exception root to the catch local. Try-only locals may become unmarked after unwind into catch (they are language-dead). Function returns always restore to the function-entry checkpoint, so a static push count never over-pops after an exception trimmed the shadow stack.
+Exception unwinding (setjmp/longjmp) restores the shadow stack: each EH frame records a root checkpoint at `sn_eh_push`, and `sn_throw` calls `sn_gc_root_restore` before running a finally-only callback or longjmping to a catcher. That drops abandoned callee roots so the next collection cannot scan dangling stack slots. Catch parameters are rooted before `setjmp`; after binding, `sn_eh_clear_exception` transfers ownership from the pending-exception root to the catch local. Try-only locals may become unmarked after unwind into catch (they are language-dead). Function returns always restore to the function-entry checkpoint, so a static push count never over-pops after an exception trimmed the shadow stack.
 
 Rule: anything reachable from a GC root stays alive.
 
@@ -613,16 +613,16 @@ Root → Closure env → User → profile (AGG) → String
 | Container | How refs are found |
 | --- | --- |
 | Class | `TypeInfo.fields` — `PTR` / nested `AGG` |
-| Struct-with-refs (inline) | Nested `TSN_KIND_STRUCT` TypeInfo via `AGG` |
-| Array | Side-table `elem_ref_class` / `elem_type_id` (`tsn_gc_set_array_meta`) |
-| Map | Side-table key/value meta (`tsn_gc_set_map_meta`) |
+| Struct-with-refs (inline) | Nested `SN_KIND_STRUCT` TypeInfo via `AGG` |
+| Array | Side-table `elem_ref_class` / `elem_type_id` (`sn_gc_set_array_meta`) |
+| Map | Side-table key/value meta (`sn_gc_set_map_meta`) |
 | Closure handle | Builtin CLOSURE fields → env `PTR` |
-| Closure env | Per-env `TSN_KIND_ENV` TypeInfo |
-| Mutable / union box | Per-layout `TSN_KIND_STRUCT` TypeInfo |
+| Closure env | Per-env `SN_KIND_ENV` TypeInfo |
+| Mutable / union box | Per-layout `SN_KIND_STRUCT` TypeInfo |
 
 ### When GC runs
 
-Before `tsn_alloc` / `tsn_realloc`, if `bytes_allocated > threshold` (default 1 MiB), the runtime runs `tsn_gc_collect()`. Tests and tools can call `tsn_gc_collect` / `tsn_gc_set_threshold` directly.
+Before `sn_alloc` / `sn_realloc`, if `bytes_allocated > threshold` (default 1 MiB), the runtime runs `sn_gc_collect()`. Tests and tools can call `sn_gc_collect` / `sn_gc_set_threshold` directly.
 
 Generational or concurrent GC can come later as optimizations.
 
@@ -694,7 +694,7 @@ person ─────────────→ Person object
 ### Mental model
 
 ```text
-                TSN Types
+                SN Types
                     │
           ┌─────────┴─────────┐
           │                   │
@@ -738,7 +738,7 @@ TypeInfo
 ├── fields[]      (offset, size, ref_class, nested type_id)
 ├── elem_*        (arrays: element type_id + ref_class)
 ├── key_* / value_* (maps)
-└── parent_type_id (class inheritance; 0 if none — used by `tsn_is_instance`)
+└── parent_type_id (class inheritance; 0 if none — used by `sn_is_instance`)
 ```
 
 ### Reference classification (`ref_class`)
@@ -774,12 +774,12 @@ struct WithName { name: string; }[]
 | ID | Kind |
 | --- | --- |
 | 1 | String (NUL-terminated buffer today) |
-| 2 | Array header (`TsnArray`) |
-| 3 | Map header (`TsnMap`) |
+| 2 | Array header (`SnArray`) |
+| 3 | Map header (`SnMap`) |
 | 4 | Closure handle shape (`{ code*, env* }`) |
 | 5 | Generic env / capture-box placeholder |
 
-Class `type_id`s start at **256**. Lookup: `tsn_typeinfo_get(type_id)`. The compiler registers per-class `TypeInfo` (field layouts) at program start via `tsn_typeinfo_register`.
+Class `type_id`s start at **256**. Lookup: `sn_typeinfo_get(type_id)`. The compiler registers per-class `TypeInfo` (field layouts) at program start via `sn_typeinfo_register`.
 
 ### Unified model
 
@@ -787,14 +787,14 @@ Class `type_id`s start at **256**. Lookup: `tsn_typeinfo_get(type_id)`. The comp
 Runtime TypeInfo
 │
 ├── Class     — size + reference fields (type_id in ObjectHeader)
-├── Struct    — nested AGG layouts / typed boxes (`TSN_KIND_STRUCT`)
+├── Struct    — nested AGG layouts / typed boxes (`SN_KIND_STRUCT`)
 ├── Array     — element type + elem_ref_class (header has no type_id yet)
 ├── String    — character data (no type_id in buffer yet)
 ├── Map       — key/value type classification (side-table meta)
 └── Closure   — handle shape + environment / capture layout
 ```
 
-Identification today: class instances via `ObjectHeader.type_id` and the GC side table; other kinds via reserved builtin `TypeInfo` entries plus `tsn_gc_set_type` / `tsn_gc_set_array_meta` / `tsn_gc_set_map_meta` at allocation time. A future ABI bump may also embed `type_id` on every heap object.
+Identification today: class instances via `ObjectHeader.type_id` and the GC side table; other kinds via reserved builtin `TypeInfo` entries plus `sn_gc_set_type` / `sn_gc_set_array_meta` / `sn_gc_set_map_meta` at allocation time. A future ABI bump may also embed `type_id` on every heap object.
 
 ### Design decisions (canonical)
 
@@ -806,7 +806,7 @@ Identification today: class instances via `ObjectHeader.type_id` and the GC side
 | Storage | Compiler chooses stack/register vs heap |
 | Memory management | Automatic tracing GC (mark-and-sweep + shadow stack) |
 | Object header | Classes: `{ type_id, vtable }`; arrays/maps/strings: layout as above; GC type identity also in side table |
-| Type metadata | `TypeInfo` registry (`tsn_typeinfo_get` / `tsn_typeinfo_register`) |
+| Type metadata | `TypeInfo` registry (`sn_typeinfo_get` / `sn_typeinfo_register`) |
 | References | Implicit for reference types |
 | Pointers | Optional future low-level feature |
-| Manual `free` | Not part of normal TSN programming |
+| Manual `free` | Not part of normal SN programming |

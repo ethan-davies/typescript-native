@@ -1,10 +1,10 @@
-# TypeScript Native — VS Code / Cursor
+# Sonite — VS Code / Cursor
 
-Language support for **TypeScript Native** (`.tsn`).
+Language support for **Sonite** (`.sn`).
 
 ## Features
 
-- Syntax highlighting (TextMate grammar, `source.tsn`)
+- Syntax highlighting (TextMate grammar, `source.sn`)
 - Editor language configuration (comments, brackets, auto-closing pairs)
 - Language server: diagnostics, hover, go-to-definition, completion, document symbols
 
@@ -17,17 +17,17 @@ Having this package in the monorepo does **not** load it automatically. Pick one
 1. From the repo root, build:
 
 ```bash
-pnpm --filter @typescript-native/compiler build
-pnpm --filter @typescript-native/lsp build
-pnpm --filter typescript-native-vscode build
+pnpm --filter @sonite/compiler build
+pnpm --filter @sonite/lsp build
+pnpm --filter sonite-vscode build
 ```
 
-2. Run **Launch TSN Extension** from the Run and Debug view (F5).
-3. In the new window, open a `.tsn` file (e.g. `examples/modules/alias.tsn`).
-4. Check the status bar language mode says **TypeScript Native**, then:
+2. Run **Launch SN Extension** from the Run and Debug view (F5).
+3. In the new window, open a `.sn` file (e.g. `examples/modules/alias.sn`).
+4. Check the status bar language mode says **Sonite**, then:
    - Hover a variable
    - Press **Ctrl+Space** for completions (also triggers while typing)
-   - Open **Output → TypeScript Native** for server logs
+   - Open **Output → Sonite** for server logs
 
 ### B) Install into your normal Cursor window
 

@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import type { ImportDeclaration, Program } from "../ast/nodes.js";
-import type { DiagnosticCollector, SourceSpan } from "../diagnostics/diagnostic.js";
+import type {
+  DiagnosticCollector,
+  SourceSpan,
+} from "../diagnostics/diagnostic.js";
 import { Lexer } from "../lexer/lexer.js";
 import { Parser } from "../parser/parser.js";
 import { moduleIdFromPath } from "./mangle.js";
@@ -29,7 +32,7 @@ export interface ResolvedModule {
   readonly path: string;
   readonly source: string;
   readonly ast: Program;
-  /** File basename without `.tsn`; used for LLVM mangling. */
+  /** File basename without `.sn`; used for LLVM mangling. */
   readonly moduleId: string;
   readonly isEntry: boolean;
   /** Namespace and named bindings declared by this module's imports. */
@@ -61,7 +64,7 @@ function isStdSpecifier(specifier: string): boolean {
 
 /**
  * Resolve a `std/...` specifier against the standard-library root.
- * Tries `std/math` → `$STD/math.tsn` then `$STD/math/index.tsn`.
+ * Tries `std/math` → `$STD/math.sn` then `$STD/math/index.sn`.
  */
 export function resolveStdSpecifier(specifier: string): string | null {
   const root = getStdRootPath();
@@ -76,20 +79,20 @@ export function resolveStdSpecifier(specifier: string): string | null {
   } else {
     return null;
   }
-  if (rest.toLowerCase().endsWith(".tsn")) {
-    rest = rest.slice(0, -4);
+  if (rest.toLowerCase().endsWith(".sn")) {
+    rest = rest.slice(0, -".sn".length);
   }
 
   if (rest === "") {
-    const indexPath = join(root, "index.tsn");
+    const indexPath = join(root, "index.sn");
     return existsSync(indexPath) ? indexPath : null;
   }
 
-  const direct = join(root, `${rest}.tsn`);
+  const direct = join(root, `${rest}.sn`);
   if (existsSync(direct)) {
     return direct;
   }
-  const indexPath = join(root, rest, "index.tsn");
+  const indexPath = join(root, rest, "index.sn");
   if (existsSync(indexPath)) {
     return indexPath;
   }
@@ -97,7 +100,7 @@ export function resolveStdSpecifier(specifier: string): string | null {
 }
 
 /**
- * Stable mangling id for std modules, e.g. `math/index.tsn` → `std_math`.
+ * Stable mangling id for std modules, e.g. `math/index.sn` → `std_math`.
  */
 export function moduleIdForStdPath(absolutePath: string): string | null {
   const root = getStdRootPath();
@@ -110,8 +113,8 @@ export function moduleIdForStdPath(absolutePath: string): string | null {
     return null;
   }
   let rel = normalized.slice(rootNorm.length + 1);
-  if (rel.toLowerCase().endsWith(".tsn")) {
-    rel = rel.slice(0, -4);
+  if (rel.toLowerCase().endsWith(".sn")) {
+    rel = rel.slice(0, -".sn".length);
   }
   if (rel.endsWith("/index")) {
     rel = rel.slice(0, -"/index".length);
@@ -123,11 +126,14 @@ export function moduleIdForStdPath(absolutePath: string): string | null {
 }
 
 /**
- * Normalize an import specifier to an absolute `.tsn` path.
- * Accepts `"math"`, `"./math"`, `"math.tsn"`, `"./math.tsn"`, `"math/vector"`,
+ * Normalize an import specifier to an absolute `.sn` path.
+ * Accepts `"math"`, `"./math"`, `"math.sn"`, `"./math.sn"`, `"math/vector"`,
  * and `"std/math"` (resolved against the standard library root).
  */
-export function resolveImportSpecifier(importerDir: string, specifier: string): string {
+export function resolveImportSpecifier(
+  importerDir: string,
+  specifier: string,
+): string {
   if (isStdSpecifier(specifier)) {
     const stdPath = resolveStdSpecifier(specifier);
     if (stdPath) {
@@ -137,21 +143,21 @@ export function resolveImportSpecifier(importerDir: string, specifier: string): 
     if (rest.startsWith("std/")) {
       rest = rest.slice(4);
     }
-    if (rest.toLowerCase().endsWith(".tsn")) {
-      rest = rest.slice(0, -4);
+    if (rest.toLowerCase().endsWith(".sn")) {
+      rest = rest.slice(0, -".sn".length);
     }
     const root = getStdRootPath() ?? resolvePath(importerDir, "std");
-    return resolvePath(root, `${rest || "index"}.tsn`);
+    return resolvePath(root, `${rest || "index"}.sn`);
   }
 
   let spec = specifier.trim();
   if (spec.startsWith("./")) {
     spec = spec.slice(2);
   }
-  if (spec.toLowerCase().endsWith(".tsn")) {
-    spec = spec.slice(0, -4);
+  if (spec.toLowerCase().endsWith(".sn")) {
+    spec = spec.slice(0, -".sn".length);
   }
-  return resolvePath(importerDir, `${spec}.tsn`);
+  return resolvePath(importerDir, `${spec}.sn`);
 }
 
 function defaultNamespaceFromPath(absolutePath: string): string {
@@ -177,7 +183,10 @@ export function resolveModules(
   const visiting = new Set<string>();
   const order: string[] = [];
 
-  function readModuleSource(absolutePath: string, preferRealFs: boolean): string {
+  function readModuleSource(
+    absolutePath: string,
+    preferRealFs: boolean,
+  ): string {
     if (preferRealFs || moduleIdForStdPath(absolutePath) !== null) {
       return readFileSync(absolutePath, "utf8");
     }
@@ -192,7 +201,10 @@ export function resolveModules(
       diagnostics.setFile(absolutePath);
       diagnostics.error(
         `Circular import detected involving '${absolutePath}'`,
-        { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 1, offset: 0 } },
+        {
+          start: { line: 1, column: 1, offset: 0 },
+          end: { line: 1, column: 1, offset: 0 },
+        },
         "E0403",
       );
       return false;
@@ -209,7 +221,10 @@ export function resolveModules(
       const message = err instanceof Error ? err.message : String(err);
       diagnostics.error(
         `Failed to read module '${absolutePath}': ${message}`,
-        { start: { line: 1, column: 1, offset: 0 }, end: { line: 1, column: 1, offset: 0 } },
+        {
+          start: { line: 1, column: 1, offset: 0 },
+          end: { line: 1, column: 1, offset: 0 },
+        },
         "E0401",
       );
       visiting.delete(absolutePath);
@@ -257,11 +272,16 @@ export function resolveModules(
       }
 
       if (decl.clause.kind === "NamespaceImport") {
-        const alias = decl.clause.localName?.name ?? defaultNamespaceFromPath(resolved);
+        const alias =
+          decl.clause.localName?.name ?? defaultNamespaceFromPath(resolved);
         const span = decl.clause.localName?.span ?? decl.source.span;
 
         if (seenLocalNames.has(alias)) {
-          diagnostics.error(`Duplicate import binding '${alias}'`, span, "E0404");
+          diagnostics.error(
+            `Duplicate import binding '${alias}'`,
+            span,
+            "E0404",
+          );
           ok = false;
           continue;
         }
@@ -304,7 +324,8 @@ export function resolveModules(
       path: absolutePath,
       source,
       ast,
-      moduleId: moduleIdForStdPath(absolutePath) ?? moduleIdFromPath(absolutePath),
+      moduleId:
+        moduleIdForStdPath(absolutePath) ?? moduleIdFromPath(absolutePath),
       isEntry,
       imports: bindings,
     };

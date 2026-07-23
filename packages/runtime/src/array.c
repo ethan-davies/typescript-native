@@ -2,10 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "tsn/runtime.h"
+#include "sn/runtime.h"
 
-static TsnArray *as_array(void *arr) {
-  return (TsnArray *)arr;
+static SnArray *as_array(void *arr) {
+  return (SnArray *)arr;
 }
 
 static int64_t grow_capacity(int64_t capacity) {
@@ -17,28 +17,28 @@ static int64_t grow_capacity(int64_t capacity) {
 
 static bool values_equal(const void *left, const void *right, int32_t cmp_kind) {
   switch (cmp_kind) {
-    case TSN_CMP_I32:
+    case SN_CMP_I32:
       return *(const int32_t *)left == *(const int32_t *)right;
-    case TSN_CMP_I64:
+    case SN_CMP_I64:
       return *(const int64_t *)left == *(const int64_t *)right;
-    case TSN_CMP_F32:
+    case SN_CMP_F32:
       return *(const float *)left == *(const float *)right;
-    case TSN_CMP_F64:
+    case SN_CMP_F64:
       return *(const double *)left == *(const double *)right;
-    case TSN_CMP_BOOL:
+    case SN_CMP_BOOL:
       return *(const bool *)left == *(const bool *)right;
-    case TSN_CMP_CHAR:
+    case SN_CMP_CHAR:
       return *(const char *)left == *(const char *)right;
-    case TSN_CMP_STRING:
+    case SN_CMP_STRING:
       return strcmp(*(const char *const *)left, *(const char *const *)right) == 0;
-    case TSN_CMP_PTR:
+    case SN_CMP_PTR:
       return *(const void *const *)left == *(const void *const *)right;
     default:
       abort();
   }
 }
 
-void *tsn_array_new(int64_t length, int64_t capacity, int64_t elem_size) {
+void *sn_array_new(int64_t length, int64_t capacity, int64_t elem_size) {
   if (length < 0 || capacity < length || elem_size <= 0) {
     abort();
   }
@@ -49,27 +49,27 @@ void *tsn_array_new(int64_t length, int64_t capacity, int64_t elem_size) {
     capacity = 4;
   }
 
-  TsnArray *arr = tsn_alloc((int64_t)sizeof(TsnArray));
+  SnArray *arr = sn_alloc((int64_t)sizeof(SnArray));
   arr->length = length;
   arr->capacity = capacity;
-  arr->data = tsn_alloc(capacity * elem_size);
-  tsn_gc_set_type(arr, TSN_TYPEID_ARRAY);
-  tsn_gc_set_type(arr->data, 0);
+  arr->data = sn_alloc(capacity * elem_size);
+  sn_gc_set_type(arr, SN_TYPEID_ARRAY);
+  sn_gc_set_type(arr->data, 0);
   return arr;
 }
 
-int32_t tsn_array_length(void *arr) {
+int32_t sn_array_length(void *arr) {
   return (int32_t)as_array(arr)->length;
 }
 
-static void array_grow(TsnArray *arr, int64_t elem_size) {
+static void array_grow(SnArray *arr, int64_t elem_size) {
   int64_t new_cap = grow_capacity(arr->capacity);
-  arr->data = tsn_realloc(arr->data, new_cap * elem_size);
+  arr->data = sn_realloc(arr->data, new_cap * elem_size);
   arr->capacity = new_cap;
 }
 
-void tsn_array_push(void *arr, void *value, int64_t elem_size) {
-  TsnArray *header = as_array(arr);
+void sn_array_push(void *arr, void *value, int64_t elem_size) {
+  SnArray *header = as_array(arr);
   if (header->length == header->capacity) {
     array_grow(header, elem_size);
   }
@@ -78,8 +78,8 @@ void tsn_array_push(void *arr, void *value, int64_t elem_size) {
   header->length += 1;
 }
 
-void tsn_array_pop(void *arr, void *dest, int64_t elem_size) {
-  TsnArray *header = as_array(arr);
+void sn_array_pop(void *arr, void *dest, int64_t elem_size) {
+  SnArray *header = as_array(arr);
   if (header->length == 0) {
     abort();
   }
@@ -88,8 +88,8 @@ void tsn_array_pop(void *arr, void *dest, int64_t elem_size) {
   memcpy(dest, slot, (size_t)elem_size);
 }
 
-int32_t tsn_array_index_of(void *arr, void *needle, int64_t elem_size, int32_t cmp_kind) {
-  TsnArray *header = as_array(arr);
+int32_t sn_array_index_of(void *arr, void *needle, int64_t elem_size, int32_t cmp_kind) {
+  SnArray *header = as_array(arr);
   for (int64_t i = 0; i < header->length; i += 1) {
     void *slot = (char *)header->data + i * elem_size;
     if (values_equal(slot, needle, cmp_kind)) {

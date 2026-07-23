@@ -1,7 +1,7 @@
 {
-  "name": "@typescript-native/compiler",
+  "name": "@sonite/compiler",
   "version": "0.0.0",
-  "description": "Compiler for the typescript-native language",
+  "description": "Compiler for the sonite language",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "@typescript-native/std": "workspace:*",
+    "@sonite/std": "workspace:*",
     "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

@@ -37,7 +37,7 @@ pnpm-debug.log*
 *.bc
 *.o
 *.out
-!examples/**/*.tsn
+!examples/**/*.sn
 
 # Local notes (not published)
 progress.md

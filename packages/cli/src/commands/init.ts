@@ -7,7 +7,7 @@ const DEFAULT_MAIN = `function main(): void {
 `;
 
 const DEFAULT_GITIGNORE = `dist/
-.tsn/
+.sn/
 *.ll
 `;
 
@@ -24,7 +24,7 @@ export function runInit(options: InitOptions): number {
   const name = options.name ?? basename(dir);
   const manifestPath = join(dir, "project.toml");
   const srcDir = join(dir, "src");
-  const mainPath = join(srcDir, "main.tsn");
+  const mainPath = join(srcDir, "main.sn");
   const gitignorePath = join(dir, ".gitignore");
 
   if (!options.force) {
@@ -44,7 +44,7 @@ version = "0.1.0"
 description = ""
 license = "MIT"
 authors = []
-entry = "src/main.tsn"
+entry = "src/main.sn"
 
 [build]
 outdir = "dist"

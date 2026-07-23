@@ -1,33 +1,33 @@
-#include "tsn/runtime.h"
+#include "sn/runtime.h"
 
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct TsnEhFrame {
-  struct TsnEhFrame *parent;
+typedef struct SnEhFrame {
+  struct SnEhFrame *parent;
   jmp_buf buf;
   int has_catch;
-  TsnFinallyFn finally_fn;
+  SnFinallyFn finally_fn;
   void *finally_ctx;
   int32_t root_checkpoint;
-} TsnEhFrame;
+} SnEhFrame;
 
-_Static_assert(sizeof(TsnEhFrame) <= TSN_EH_FRAME_SIZE, "TSN_EH_FRAME_SIZE is too small");
+_Static_assert(sizeof(SnEhFrame) <= SN_EH_FRAME_SIZE, "SN_EH_FRAME_SIZE is too small");
 
-static _Thread_local struct TsnEhFrame *tsn_eh_stack = NULL;
-static _Thread_local void *tsn_eh_current_exception = NULL;
-static _Thread_local int tsn_eh_exception_root_registered = 0;
+static _Thread_local struct SnEhFrame *sn_eh_stack = NULL;
+static _Thread_local void *sn_eh_current_exception = NULL;
+static _Thread_local int sn_eh_exception_root_registered = 0;
 
 static void ensure_exception_root(void) {
-  if (!tsn_eh_exception_root_registered) {
-    tsn_gc_set_exception_root(&tsn_eh_current_exception);
-    tsn_eh_exception_root_registered = 1;
+  if (!sn_eh_exception_root_registered) {
+    sn_gc_set_exception_root(&sn_eh_current_exception);
+    sn_eh_exception_root_registered = 1;
   }
 }
 
-void tsn_eh_init_frame(void *frame, int32_t has_catch, TsnFinallyFn finally_fn, void *finally_ctx) {
-  TsnEhFrame *f = (TsnEhFrame *)frame;
+void sn_eh_init_frame(void *frame, int32_t has_catch, SnFinallyFn finally_fn, void *finally_ctx) {
+  SnEhFrame *f = (SnEhFrame *)frame;
   f->parent = NULL;
   f->has_catch = has_catch;
   f->finally_fn = finally_fn;
@@ -35,34 +35,34 @@ void tsn_eh_init_frame(void *frame, int32_t has_catch, TsnFinallyFn finally_fn, 
   f->root_checkpoint = 0;
 }
 
-void tsn_eh_push(void *frame) {
+void sn_eh_push(void *frame) {
   ensure_exception_root();
-  TsnEhFrame *f = (TsnEhFrame *)frame;
-  f->root_checkpoint = tsn_gc_root_checkpoint();
-  f->parent = tsn_eh_stack;
-  tsn_eh_stack = f;
+  SnEhFrame *f = (SnEhFrame *)frame;
+  f->root_checkpoint = sn_gc_root_checkpoint();
+  f->parent = sn_eh_stack;
+  sn_eh_stack = f;
 }
 
-void tsn_eh_pop(void *frame) {
-  TsnEhFrame *f = (TsnEhFrame *)frame;
-  if (tsn_eh_stack == f) {
-    tsn_eh_stack = f->parent;
+void sn_eh_pop(void *frame) {
+  SnEhFrame *f = (SnEhFrame *)frame;
+  if (sn_eh_stack == f) {
+    sn_eh_stack = f->parent;
   }
 }
 
-jmp_buf *tsn_eh_jmp_buf(void *frame) {
-  return &((TsnEhFrame *)frame)->buf;
+jmp_buf *sn_eh_jmp_buf(void *frame) {
+  return &((SnEhFrame *)frame)->buf;
 }
 
-void *tsn_eh_caught_exception(void) {
-  return tsn_eh_current_exception;
+void *sn_eh_caught_exception(void) {
+  return sn_eh_current_exception;
 }
 
-void tsn_eh_clear_exception(void) {
-  tsn_eh_current_exception = NULL;
+void sn_eh_clear_exception(void) {
+  sn_eh_current_exception = NULL;
 }
 
-void tsn_uncaught_exception(void *error) {
+void sn_uncaught_exception(void *error) {
   char *message = "";
   if (error != NULL) {
     void **fields = (void **)error;
@@ -73,22 +73,22 @@ void tsn_uncaught_exception(void *error) {
   fprintf(stderr, "Uncaught Error: %s\n", message);
 }
 
-void tsn_throw(void *error) {
+void sn_throw(void *error) {
   ensure_exception_root();
-  tsn_eh_current_exception = error;
-  struct TsnEhFrame *f = tsn_eh_stack;
+  sn_eh_current_exception = error;
+  struct SnEhFrame *f = sn_eh_stack;
   while (f != NULL) {
     if (f->has_catch) {
-      tsn_gc_root_restore(f->root_checkpoint);
+      sn_gc_root_restore(f->root_checkpoint);
       longjmp(f->buf, 1);
     }
-    tsn_gc_root_restore(f->root_checkpoint);
+    sn_gc_root_restore(f->root_checkpoint);
     if (f->finally_fn != NULL) {
       f->finally_fn(f->finally_ctx);
     }
-    tsn_eh_stack = f->parent;
-    f = tsn_eh_stack;
+    sn_eh_stack = f->parent;
+    f = sn_eh_stack;
   }
-  tsn_uncaught_exception(error);
+  sn_uncaught_exception(error);
   abort();
 }

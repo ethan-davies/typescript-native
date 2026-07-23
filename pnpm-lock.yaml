@@ -20,13 +20,13 @@ importers:
 
   packages/cli:
     dependencies:
-      '@typescript-native/compiler':
+      '@sonite/compiler':
         specifier: workspace:*
         version: link:../compiler
-      '@typescript-native/runtime':
+      '@sonite/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@typescript-native/std':
+      '@sonite/std':
         specifier: workspace:*
         version: link:../std
       commander:
@@ -51,7 +51,7 @@ importers:
       '@types/node':
         specifier: ^22.15.30
         version: 22.20.1
-      '@typescript-native/std':
+      '@sonite/std':
         specifier: workspace:*
         version: link:../std
       '@vitest/coverage-v8':
@@ -66,10 +66,10 @@ importers:
 
   packages/lsp:
     dependencies:
-      '@typescript-native/compiler':
+      '@sonite/compiler':
         specifier: workspace:*
         version: link:../compiler
-      '@typescript-native/std':
+      '@sonite/std':
         specifier: workspace:*
         version: link:../std
       vscode-languageserver:
@@ -112,7 +112,7 @@ importers:
 
   packages/vscode:
     dependencies:
-      '@typescript-native/lsp':
+      '@sonite/lsp':
         specifier: workspace:*
         version: link:../lsp
       vscode-languageclient:

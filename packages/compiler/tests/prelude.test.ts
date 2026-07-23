@@ -7,14 +7,17 @@ import { Parser } from "../src/parser/index.js";
 describe("extern and extension methods", () => {
   it("parses extern functions and this receivers", () => {
     const source = `
-      extern function tsn_str_contains(haystack: string, needle: string): bool;
+      extern function sn_str_contains(haystack: string, needle: string): bool;
       export function contains(this: string, needle: string): bool {
-        return tsn_str_contains(this, needle);
+        return sn_str_contains(this, needle);
       }
       function main(): void {}
     `;
     const diagnostics = new DiagnosticCollector();
-    const ast = new Parser(new Lexer(source, diagnostics).tokenize(), diagnostics).parse();
+    const ast = new Parser(
+      new Lexer(source, diagnostics).tokenize(),
+      diagnostics,
+    ).parse();
     expect(diagnostics.hasErrors).toBe(false);
     const ext = ast.body.find(
       (d) => d.kind === "FunctionDeclaration" && d.name.name === "contains",
@@ -25,7 +28,8 @@ describe("extern and extension methods", () => {
       expect(ext.params[0]?.isReceiver).toBe(true);
     }
     const externDecl = ast.body.find(
-      (d) => d.kind === "FunctionDeclaration" && d.name.name === "tsn_str_contains",
+      (d) =>
+        d.kind === "FunctionDeclaration" && d.name.name === "sn_str_contains",
     );
     expect(externDecl?.kind).toBe("FunctionDeclaration");
     if (externDecl?.kind === "FunctionDeclaration") {
@@ -36,7 +40,10 @@ describe("extern and extension methods", () => {
 
   it("lexes the extern keyword", () => {
     const diagnostics = new DiagnosticCollector();
-    const tokens = new Lexer("extern function f(): void;", diagnostics).tokenize();
+    const tokens = new Lexer(
+      "extern function f(): void;",
+      diagnostics,
+    ).tokenize();
     expect(tokens[0]?.kind).toBe(TokenKind.Extern);
   });
 
@@ -52,7 +59,7 @@ describe("extern and extension methods", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("tsn_str_contains");
-    expect(result.ir).toContain("tsn_array_push");
+    expect(result.ir).toContain("sn_str_contains");
+    expect(result.ir).toContain("sn_array_push");
   });
 });

@@ -14,20 +14,29 @@ let client: LanguageClient | undefined;
 function resolveServerModule(): string {
   const require = createRequire(__filename);
   try {
-    return require.resolve("@typescript-native/lsp/dist/server.js");
+    return require.resolve("@sonite/lsp/dist/server.js");
   } catch {
-    const fallback = path.join(__dirname, "..", "..", "lsp", "dist", "server.js");
+    const fallback = path.join(
+      __dirname,
+      "..",
+      "..",
+      "lsp",
+      "dist",
+      "server.js",
+    );
     if (fs.existsSync(fallback)) {
       return fallback;
     }
     throw new Error(
-      "Could not find @typescript-native/lsp server. Build it with: pnpm --filter @typescript-native/lsp build",
+      "Could not find @sonite/lsp server. Build it with: pnpm --filter @sonite/lsp build",
     );
   }
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const output = vscode.window.createOutputChannel("TypeScript Native");
+export async function activate(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const output = vscode.window.createOutputChannel("Sonite");
   context.subscriptions.push(output);
 
   let serverModule: string;
@@ -36,7 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(message);
-    void vscode.window.showErrorMessage(`TypeScript Native LSP: ${message}`);
+    void vscode.window.showErrorMessage(`Sonite LSP: ${message}`);
     return;
   }
 
@@ -63,8 +72,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [
-      { scheme: "file", language: "tsn" },
-      { scheme: "untitled", language: "tsn" },
+      { scheme: "file", language: "sn" },
+      { scheme: "untitled", language: "sn" },
     ],
     outputChannel: output,
     traceOutputChannel: output,
@@ -72,8 +81,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   client = new LanguageClient(
-    "typescriptNative",
-    "TypeScript Native",
+    "sonite",
+    "Sonite",
     serverOptions,
     clientOptions,
   );
@@ -87,7 +96,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(`Failed to start language server: ${message}`);
     void vscode.window.showErrorMessage(
-      `TypeScript Native LSP failed to start: ${message}`,
+      `Sonite LSP failed to start: ${message}`,
     );
   }
 }

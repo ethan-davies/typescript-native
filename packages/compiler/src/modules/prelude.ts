@@ -1,14 +1,18 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { DiagnosticCollector } from "../diagnostics/diagnostic.js";
-import type { ModuleImportBinding, ReadFileFn, ResolvedModule } from "./resolve.js";
+import type {
+  ModuleImportBinding,
+  ReadFileFn,
+  ResolvedModule,
+} from "./resolve.js";
 import { resolveModules } from "./resolve.js";
 
 export type PreludePathsFn = () => readonly string[];
 
 let preludePathsProvider: PreludePathsFn | null = null;
 
-/** Injected by the compiler package after optional `@typescript-native/std` resolve. */
+/** Injected by the compiler package after optional `@sonite/std` resolve. */
 export function setPreludePathsProvider(provider: PreludePathsFn | null): void {
   preludePathsProvider = provider;
 }
@@ -55,7 +59,7 @@ export function loadPreludeModules(
     }
     for (const mod of result.modules) {
       if (!loaded.some((m) => m.path === mod.path)) {
-        const base = basename(mod.path, ".tsn");
+        const base = basename(mod.path, ".sn");
         const moduleId = mod.path.includes("prelude")
           ? `std_prelude_${base}`
           : mod.moduleId;
@@ -82,7 +86,7 @@ export function preludeImportBindings(
     if (mod.path === userModulePath) {
       continue;
     }
-    const base = basename(mod.path, ".tsn");
+    const base = basename(mod.path, ".sn");
     for (const decl of mod.ast.body) {
       if (
         !(
@@ -102,7 +106,8 @@ export function preludeImportBindings(
       // `indexOf`). Bind them under unique locals so both stay in the extension
       // registry; resolution still uses the original export name via the sig.
       const isExtension =
-        decl.kind === "FunctionDeclaration" && decl.params[0]?.isReceiver === true;
+        decl.kind === "FunctionDeclaration" &&
+        decl.params[0]?.isReceiver === true;
       const localName = isExtension
         ? `__prelude_ext_${base}_${decl.name.name}`
         : decl.name.name;

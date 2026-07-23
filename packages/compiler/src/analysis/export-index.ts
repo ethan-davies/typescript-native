@@ -21,7 +21,7 @@ const SKIP_DIR_NAMES = new Set([
 const STD_PUBLIC_MODULES = ["math", "collections", "random"] as const;
 
 export interface BuildExportIndexOptions {
-  /** Absolute workspace roots to scan for `.tsn` files. */
+  /** Absolute workspace roots to scan for `.sn` files. */
   readonly workspaceRoots?: readonly string[];
   /** Absolute path of the file receiving completions (for relative specifiers). */
   readonly importerPath: string;
@@ -119,8 +119,8 @@ function stdSpecifierForPath(absolutePath: string): string | null {
     return null;
   }
   rel = rel.slice(rootNorm.length + 1);
-  if (rel.toLowerCase().endsWith(".tsn")) {
-    rel = rel.slice(0, -4);
+  if (rel.toLowerCase().endsWith(".sn")) {
+    rel = rel.slice(0, -".sn".length);
   }
   if (rel.endsWith("/index")) {
     rel = rel.slice(0, -"/index".length);
@@ -133,8 +133,8 @@ function stdSpecifierForPath(absolutePath: string): string | null {
 
 function relativeSpecifier(importerPath: string, targetPath: string): string {
   let rel = relative(dirname(importerPath), targetPath).replace(/\\/g, "/");
-  if (rel.toLowerCase().endsWith(".tsn")) {
-    rel = rel.slice(0, -4);
+  if (rel.toLowerCase().endsWith(".sn")) {
+    rel = rel.slice(0, -".sn".length);
   }
   if (!rel.startsWith(".")) {
     rel = `./${rel}`;
@@ -143,16 +143,19 @@ function relativeSpecifier(importerPath: string, targetPath: string): string {
 }
 
 function specifierFor(importerPath: string, targetPath: string): string {
-  return stdSpecifierForPath(targetPath) ?? relativeSpecifier(importerPath, targetPath);
+  return (
+    stdSpecifierForPath(targetPath) ??
+    relativeSpecifier(importerPath, targetPath)
+  );
 }
 
-function walkTsnFiles(root: string, out: string[]): void {
+function walkSnFiles(root: string, out: string[]): void {
   if (!existsSync(root)) {
     return;
   }
   const st = statSync(root);
   if (st.isFile()) {
-    if (root.toLowerCase().endsWith(".tsn")) {
+    if (root.toLowerCase().endsWith(".sn")) {
       out.push(resolvePath(root));
     }
     return;
@@ -172,8 +175,8 @@ function walkTsnFiles(root: string, out: string[]): void {
       continue;
     }
     if (childStat.isDirectory()) {
-      walkTsnFiles(full, out);
-    } else if (childStat.isFile() && entry.toLowerCase().endsWith(".tsn")) {
+      walkSnFiles(full, out);
+    } else if (childStat.isFile() && entry.toLowerCase().endsWith(".sn")) {
       out.push(resolvePath(full));
     }
   }
@@ -226,9 +229,11 @@ function indexFile(
 
 /**
  * Build an export index for auto-import completions from public std modules
- * and workspace `.tsn` files.
+ * and workspace `.sn` files.
  */
-export function buildExportIndex(options: BuildExportIndexOptions): ExportIndexEntry[] {
+export function buildExportIndex(
+  options: BuildExportIndexOptions,
+): ExportIndexEntry[] {
   const out: ExportIndexEntry[] = [];
   const seen = new Set<string>();
   const importerPath = resolvePath(options.importerPath);
@@ -236,9 +241,13 @@ export function buildExportIndex(options: BuildExportIndexOptions): ExportIndexE
   const stdRoot = getStdRootPath();
   if (stdRoot) {
     for (const name of STD_PUBLIC_MODULES) {
-      const direct = join(stdRoot, `${name}.tsn`);
-      const indexPath = join(stdRoot, name, "index.tsn");
-      const path = existsSync(direct) ? direct : existsSync(indexPath) ? indexPath : null;
+      const direct = join(stdRoot, `${name}.sn`);
+      const indexPath = join(stdRoot, name, "index.sn");
+      const path = existsSync(direct)
+        ? direct
+        : existsSync(indexPath)
+          ? indexPath
+          : null;
       if (path) {
         indexFile(path, importerPath, out, seen, options.readFile);
       }
@@ -247,7 +256,7 @@ export function buildExportIndex(options: BuildExportIndexOptions): ExportIndexE
 
   for (const root of options.workspaceRoots ?? []) {
     const files: string[] = [];
-    walkTsnFiles(resolvePath(root), files);
+    walkSnFiles(resolvePath(root), files);
     for (const file of files) {
       // Avoid double-indexing std if the workspace contains packages/std.
       if (stdSpecifierForPath(file)) {

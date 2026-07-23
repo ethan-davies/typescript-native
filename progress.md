@@ -1,6 +1,6 @@
 # Progress
 
-Living checklist for **typescript-native** — what’s done, what’s in flight, and what’s still ahead.
+Living checklist for **sonite** — what’s done, what’s in flight, and what’s still ahead.
 
 Last updated: 2026-07-22
 
@@ -13,7 +13,7 @@ Build a programming language with TypeScript-like syntax that ahead-of-time comp
 Target pipeline:
 
 ```
-.tsn source → lexer → parser → validate → typecheck → LLVM IR → clang (bundled/cached) → native binary
+.sn source → lexer → parser → validate → typecheck → LLVM IR → clang (bundled/cached) → native binary
 ```
 
 ---
@@ -22,11 +22,11 @@ Target pipeline:
 
 ### Project scaffolding
 - [x] pnpm workspace monorepo (Node 20+)
-- [x] `@typescript-native/compiler` — lexer, parser, validate, typecheck, codegen, formatter
-- [x] `@typescript-native/cli` — `tsn` CLI (depends on compiler)
-- [x] `@typescript-native/runtime` — C runtime (`libtsn_runtime.a`)
-- [x] `@typescript-native/std` — standard library (prelude + modules)
-- [x] `@typescript-native/lsp` / VS Code extension
+- [x] `@sonite/compiler` — lexer, parser, validate, typecheck, codegen, formatter
+- [x] `@sonite/cli` — `sn` CLI (depends on compiler)
+- [x] `@sonite/runtime` — C runtime (`libsn_runtime.a`)
+- [x] `@sonite/std` — standard library (prelude + modules)
+- [x] `@sonite/lsp` / VS Code extension
 - [x] Strict TypeScript configs (`tsconfig.base.json` + per-package)
 - [x] Vitest in the compiler package
 - [x] `.gitignore`, `.editorconfig`, VS Code workspace hints
@@ -34,23 +34,23 @@ Target pipeline:
 - [x] Examples under `examples/`
 
 ### Compiler pipeline (working)
-- [x] `compile()` / `compileFile()` API in `@typescript-native/compiler`
+- [x] `compile()` / `compileFile()` API in `@sonite/compiler`
 - [x] Diagnostic collector with source spans and severity
 - [x] Formatted diagnostic output for the CLI
 - [x] Post-parse validation requiring exactly one `main(): void` (other functions allowed)
 - [x] Type checker for the current language surface
-- [x] Source formatter (`formatSource` / `tsn fmt`) — parse → pretty-print; comments not preserved yet
+- [x] Source formatter (`formatSource` / `sn fmt`) — parse → pretty-print; comments not preserved yet
 
 ### CLI / toolchain
-- [x] `tsn` entrypoint using **Commander**
+- [x] `sn` entrypoint using **Commander**
 - [x] `project.toml` project manifest (name, version, entry, build.outdir, …)
-- [x] `tsn init` — scaffold project
-- [x] `tsn build` — compile project entry to native binary in `dist/`
-- [x] `tsn run [file]` — single-file or project build+run
-- [x] `tsn fmt [--check]` — format `.tsn` files
-- [x] `tsn compile` — emit LLVM IR
-- [x] `tsn <file.tsn>` — shorthand for `run`
-- [x] Clang resolution: `TSN_CLANG` → system PATH → download/cache pinned LLVM under `~/.cache/tsn/`
+- [x] `sn init` — scaffold project
+- [x] `sn build` — compile project entry to native binary in `dist/`
+- [x] `sn run [file]` — single-file or project build+run
+- [x] `sn fmt [--check]` — format `.sn` files
+- [x] `sn compile` — emit LLVM IR
+- [x] `sn <file.sn>` — shorthand for `run`
+- [x] Clang resolution: `SN_CLANG` → system PATH → download/cache pinned LLVM under `~/.cache/sn/`
 - [x] `pnpm dev` builds the compiler then runs the CLI via `tsx`
 
 ### Language surface
@@ -82,8 +82,8 @@ Add features one at a time (implement end-to-end when adding — no stubs):
 | Area | Limitation |
 | --- | --- |
 | Formatter | Comments are stripped; style is fixed (2-space, K&R braces) |
-| Native binary | First-time clang download (if no system clang) fetches a large LLVM archive (~1–2 GB) into `~/.cache/tsn/` |
-| Strings | Concat allocates via `tsn_alloc` (no automatic free yet) |
+| Native binary | First-time clang download (if no system clang) fetches a large LLVM archive (~1–2 GB) into `~/.cache/sn/` |
+| Strings | Concat allocates via `sn_alloc` (no automatic free yet) |
 
 ---
 

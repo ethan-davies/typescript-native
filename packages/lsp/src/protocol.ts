@@ -10,14 +10,14 @@ import {
   hoverAt,
   offsetToPosition,
   type AnalyzeResult,
-  type Diagnostic as TsnDiagnostic,
+  type Diagnostic as SnDiagnostic,
   type DocumentSymbolInfo,
   type DocumentSymbolKind,
   type ExportIndexEntry,
   type ScopeBindingInfo,
   type SemanticModel,
   type SourceSpan,
-} from "@typescript-native/compiler";
+} from "@sonite/compiler";
 import {
   CompletionItemKind,
   DiagnosticSeverity,
@@ -72,9 +72,7 @@ export function positionToOffset(source: string, position: Position): number {
   return offset + position.character;
 }
 
-function severityToLsp(
-  severity: TsnDiagnostic["severity"],
-): DiagnosticSeverity {
+function severityToLsp(severity: SnDiagnostic["severity"]): DiagnosticSeverity {
   switch (severity) {
     case "error":
       return DiagnosticSeverity.Error;
@@ -86,7 +84,7 @@ function severityToLsp(
 }
 
 export function toLspDiagnostics(
-  diagnostics: readonly TsnDiagnostic[],
+  diagnostics: readonly SnDiagnostic[],
   filePath: string,
 ): Diagnostic[] {
   return diagnostics
@@ -99,7 +97,7 @@ export function toLspDiagnostics(
         severity: severityToLsp(d.severity),
         range,
         message: d.message,
-        source: "tsn",
+        source: "sn",
         ...(d.code ? { code: d.code } : {}),
       };
     });
@@ -255,7 +253,12 @@ export function toCompletionItems(
         newText: item.name,
       };
     }
-    if (item.autoImport && options?.source && options.semantic && options.filePath) {
+    if (
+      item.autoImport &&
+      options?.source &&
+      options.semantic &&
+      options.filePath
+    ) {
       const edits = autoImportTextEdits(
         options.source,
         options.semantic,
@@ -304,7 +307,7 @@ export function hoverAtPosition(
   return {
     contents: {
       kind: "markdown",
-      value: `\`\`\`tsn\n${info.contents}\n\`\`\``,
+      value: `\`\`\`sn\n${info.contents}\n\`\`\``,
     },
     range: spanToRange(info.span),
   };
@@ -358,7 +361,7 @@ export function documentSymbolsAtFile(
 
 /** Collect diagnostics for every file that produced them. */
 export function diagnosticsByFile(
-  diagnostics: readonly TsnDiagnostic[],
+  diagnostics: readonly SnDiagnostic[],
 ): Map<string, Diagnostic[]> {
   const byFile = new Map<string, Diagnostic[]>();
   for (const d of diagnostics) {
@@ -370,7 +373,7 @@ export function diagnosticsByFile(
         ? spanToRange(d.span)
         : { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
       message: d.message,
-      source: "tsn",
+      source: "sn",
       ...(d.code ? { code: d.code } : {}),
     });
     byFile.set(file, list);

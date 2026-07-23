@@ -4,7 +4,7 @@
     {
       "label": "build-vscode-extension",
       "type": "shell",
-      "command": "pnpm --filter @typescript-native/compiler build && pnpm --filter @typescript-native/lsp build && pnpm --filter typescript-native-vscode build",
+      "command": "pnpm --filter @sonite/compiler build && pnpm --filter @sonite/lsp build && pnpm --filter sonite-vscode build",
       "group": "build",
       "problemMatcher": "$tsc",
       "presentation": {

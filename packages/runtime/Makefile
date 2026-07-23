@@ -9,7 +9,7 @@ TEST_DIR := tests
 
 SOURCES := $(wildcard $(SRC_DIR)/*.c)
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
-LIBRARY := $(DIST_DIR)/libtsn_runtime.a
+LIBRARY := $(DIST_DIR)/libsn_runtime.a
 SMOKE_BIN := $(DIST_DIR)/runtime_smoke
 
 .PHONY: all clean test

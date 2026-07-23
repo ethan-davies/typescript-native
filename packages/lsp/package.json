@@ -1,11 +1,11 @@
 {
-  "name": "@typescript-native/lsp",
+  "name": "@sonite/lsp",
   "version": "0.0.0",
-  "description": "Language server for TypeScript Native (.tsn)",
+  "description": "Language server for Sonite (.sn)",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "tsn-lsp": "./dist/server.js"
+    "sn-lsp": "./dist/server.js"
   },
   "main": "./dist/server.js",
   "exports": {
@@ -26,8 +26,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@typescript-native/compiler": "workspace:*",
-    "@typescript-native/std": "workspace:*",
+    "@sonite/compiler": "workspace:*",
+    "@sonite/std": "workspace:*",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
   },

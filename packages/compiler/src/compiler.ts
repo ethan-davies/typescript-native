@@ -4,8 +4,14 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Program } from "./ast/nodes.js";
 import { LlvmCodegen } from "./codegen/llvm.js";
-import { DiagnosticCollector, type Diagnostic } from "./diagnostics/diagnostic.js";
-import { monomorphizeModules, type TypecheckInstantiations } from "./generics/monomorphize.js";
+import {
+  DiagnosticCollector,
+  type Diagnostic,
+} from "./diagnostics/diagnostic.js";
+import {
+  monomorphizeModules,
+  type TypecheckInstantiations,
+} from "./generics/monomorphize.js";
 import { Lexer } from "./lexer/lexer.js";
 import { attachPrelude, setPreludePathsProvider } from "./modules/prelude.js";
 import {
@@ -16,15 +22,12 @@ import {
 import { Parser } from "./parser/parser.js";
 import { typecheckModules } from "./typecheck.js";
 import { validateModules, validateModulesLoose } from "./validate.js";
-import {
-  emptySemanticModel,
-  type SemanticModel,
-} from "./analysis/semantic.js";
+import { emptySemanticModel, type SemanticModel } from "./analysis/semantic.js";
 
 function discoverStdRoot(): string | null {
   try {
     const require = createRequire(import.meta.url);
-    const std = require("@typescript-native/std") as {
+    const std = require("@sonite/std") as {
       getStdRoot: () => string;
     };
     return std.getStdRoot();
@@ -35,7 +38,7 @@ function discoverStdRoot(): string | null {
       join(here, "..", "..", "..", "std", "src"),
     ];
     for (const root of candidates) {
-      if (existsSync(join(root, "prelude", "string.tsn"))) {
+      if (existsSync(join(root, "prelude", "string.sn"))) {
         return root;
       }
     }
@@ -49,9 +52,9 @@ function discoverPreludePaths(): readonly string[] {
     return [];
   }
   return [
-    join(root, "prelude", "string.tsn"),
-    join(root, "prelude", "array.tsn"),
-    join(root, "prelude", "io.tsn"),
+    join(root, "prelude", "string.sn"),
+    join(root, "prelude", "array.sn"),
+    join(root, "prelude", "io.sn"),
   ];
 }
 
@@ -76,7 +79,10 @@ export interface CompileResult {
  * Imports are not supported here; use {@link compileFile} for multi-file programs.
  * The standard-library prelude is still auto-attached.
  */
-export function compile(source: string, options: CompileOptions = {}): CompileResult {
+export function compile(
+  source: string,
+  options: CompileOptions = {},
+): CompileResult {
   const diagnostics = new DiagnosticCollector();
   const fileName = options.fileName ?? "<source>";
   diagnostics.setFile(fileName);
@@ -116,7 +122,10 @@ export function compile(source: string, options: CompileOptions = {}): CompileRe
     const inst = typecheckModules(modules, diagnostics);
     if (!diagnostics.hasErrors) {
       monoModules = monomorphizeModules(modules, inst.instantiations);
-      const ir = new LlvmCodegen().emitModules(monoModules, inst.instantiations);
+      const ir = new LlvmCodegen().emitModules(
+        monoModules,
+        inst.instantiations,
+      );
       return {
         ast: monoModules.find((m) => m.isEntry)?.ast ?? ast,
         modules: monoModules,
@@ -152,7 +161,7 @@ export interface CompileFileOptions {
 }
 
 /**
- * Compile an entry `.tsn` file and all transitively imported modules.
+ * Compile an entry `.sn` file and all transitively imported modules.
  */
 export function compileFile(
   entryPath: string,
@@ -160,7 +169,8 @@ export function compileFile(
 ): CompileResult {
   const diagnostics = new DiagnosticCollector();
   const readFile =
-    options.readFile ?? ((absolutePath: string) => readFileSync(absolutePath, "utf8"));
+    options.readFile ??
+    ((absolutePath: string) => readFileSync(absolutePath, "utf8"));
   const absoluteEntry = resolvePath(entryPath);
 
   const resolved = resolveModules(absoluteEntry, readFile, diagnostics);
@@ -229,7 +239,7 @@ export interface AnalyzeResult {
 }
 
 /**
- * Resolve, validate, and typecheck a `.tsn` file without codegen.
+ * Resolve, validate, and typecheck a `.sn` file without codegen.
  * Suitable for IDE / LSP use. The open file need not define `main`.
  * Continues semantic analysis even when the parser already reported errors,
  * so completions/hover still work on incomplete buffers.
@@ -240,7 +250,8 @@ export function analyzeFile(
 ): AnalyzeResult {
   const diagnostics = new DiagnosticCollector();
   const readFile =
-    options.readFile ?? ((absolutePath: string) => readFileSync(absolutePath, "utf8"));
+    options.readFile ??
+    ((absolutePath: string) => readFileSync(absolutePath, "utf8"));
   const absoluteEntry = resolvePath(entryPath);
 
   const resolved = resolveModules(absoluteEntry, readFile, diagnostics);

@@ -1,108 +1,108 @@
 #include <stdlib.h>
 
-#include "tsn/runtime.h"
+#include "sn/runtime.h"
 
-/* TypeInfo registry uses system malloc — never tsn_alloc — so it is not GC-managed. */
+/* TypeInfo registry uses system malloc — never sn_alloc — so it is not GC-managed. */
 
 /* Builtin TypeInfo entries for reserved type_ids 1–5.
  * Array/map elem/key/value classifications are filled by per-instantiation
  * metadata later; builtins describe the header shapes only. */
 
-static const TsnTypeInfo BUILTIN_STRING = {
-    .type_id = TSN_TYPEID_STRING,
-    .kind = TSN_KIND_STRING,
+static const SnTypeInfo BUILTIN_STRING = {
+    .type_id = SN_TYPEID_STRING,
+    .kind = SN_KIND_STRING,
     .size = -1, /* NUL-terminated, variable length */
     .field_count = 0,
     .fields = NULL,
     .elem_type_id = 0,
-    .elem_ref_class = TSN_REF_VALUE,
+    .elem_ref_class = SN_REF_VALUE,
     .key_type_id = 0,
-    .key_ref_class = TSN_REF_VALUE,
+    .key_ref_class = SN_REF_VALUE,
     .value_type_id = 0,
-    .value_ref_class = TSN_REF_VALUE,
+    .value_ref_class = SN_REF_VALUE,
     .parent_type_id = 0,
 };
 
-static const TsnTypeInfo BUILTIN_ARRAY = {
-    .type_id = TSN_TYPEID_ARRAY,
-    .kind = TSN_KIND_ARRAY,
-    .size = (int32_t)sizeof(TsnArray),
+static const SnTypeInfo BUILTIN_ARRAY = {
+    .type_id = SN_TYPEID_ARRAY,
+    .kind = SN_KIND_ARRAY,
+    .size = (int32_t)sizeof(SnArray),
     .field_count = 0,
     .fields = NULL,
     .elem_type_id = 0, /* specialized by compiler later */
-    .elem_ref_class = TSN_REF_VALUE,
+    .elem_ref_class = SN_REF_VALUE,
     .key_type_id = 0,
-    .key_ref_class = TSN_REF_VALUE,
+    .key_ref_class = SN_REF_VALUE,
     .value_type_id = 0,
-    .value_ref_class = TSN_REF_VALUE,
+    .value_ref_class = SN_REF_VALUE,
     .parent_type_id = 0,
 };
 
-static const TsnTypeInfo BUILTIN_MAP = {
-    .type_id = TSN_TYPEID_MAP,
-    .kind = TSN_KIND_MAP,
-    .size = (int32_t)sizeof(TsnMap),
+static const SnTypeInfo BUILTIN_MAP = {
+    .type_id = SN_TYPEID_MAP,
+    .kind = SN_KIND_MAP,
+    .size = (int32_t)sizeof(SnMap),
     .field_count = 0,
     .fields = NULL,
     .elem_type_id = 0,
-    .elem_ref_class = TSN_REF_VALUE,
-    .key_type_id = TSN_TYPEID_STRING,
-    .key_ref_class = TSN_REF_PTR,
+    .elem_ref_class = SN_REF_VALUE,
+    .key_type_id = SN_TYPEID_STRING,
+    .key_ref_class = SN_REF_PTR,
     .value_type_id = 0,
-    .value_ref_class = TSN_REF_PTR,
+    .value_ref_class = SN_REF_PTR,
     .parent_type_id = 0,
 };
 
 /* Closure handle is { ptr code, ptr env } — 16 bytes on LP64; not always heap. */
-static const TsnFieldInfo CLOSURE_FIELDS[] = {
-    {.offset = 0, .size = (int32_t)sizeof(void *), .ref_class = TSN_REF_VALUE, .type_id = 0},
+static const SnFieldInfo CLOSURE_FIELDS[] = {
+    {.offset = 0, .size = (int32_t)sizeof(void *), .ref_class = SN_REF_VALUE, .type_id = 0},
     {.offset = (int32_t)sizeof(void *),
      .size = (int32_t)sizeof(void *),
-     .ref_class = TSN_REF_PTR,
-     .type_id = TSN_TYPEID_ENV},
+     .ref_class = SN_REF_PTR,
+     .type_id = SN_TYPEID_ENV},
 };
 
-static const TsnTypeInfo BUILTIN_CLOSURE = {
-    .type_id = TSN_TYPEID_CLOSURE,
-    .kind = TSN_KIND_CLOSURE,
+static const SnTypeInfo BUILTIN_CLOSURE = {
+    .type_id = SN_TYPEID_CLOSURE,
+    .kind = SN_KIND_CLOSURE,
     .size = (int32_t)(2 * sizeof(void *)),
     .field_count = 2,
     .fields = CLOSURE_FIELDS,
     .elem_type_id = 0,
-    .elem_ref_class = TSN_REF_VALUE,
+    .elem_ref_class = SN_REF_VALUE,
     .key_type_id = 0,
-    .key_ref_class = TSN_REF_VALUE,
+    .key_ref_class = SN_REF_VALUE,
     .value_type_id = 0,
-    .value_ref_class = TSN_REF_VALUE,
+    .value_ref_class = SN_REF_VALUE,
     .parent_type_id = 0,
 };
 
-static const TsnTypeInfo BUILTIN_ENV = {
-    .type_id = TSN_TYPEID_ENV,
-    .kind = TSN_KIND_ENV,
+static const SnTypeInfo BUILTIN_ENV = {
+    .type_id = SN_TYPEID_ENV,
+    .kind = SN_KIND_ENV,
     .size = -1, /* capture layout is per-closure */
     .field_count = 0,
     .fields = NULL,
     .elem_type_id = 0,
-    .elem_ref_class = TSN_REF_VALUE,
+    .elem_ref_class = SN_REF_VALUE,
     .key_type_id = 0,
-    .key_ref_class = TSN_REF_VALUE,
+    .key_ref_class = SN_REF_VALUE,
     .value_type_id = 0,
-    .value_ref_class = TSN_REF_VALUE,
+    .value_ref_class = SN_REF_VALUE,
     .parent_type_id = 0,
 };
 
-static const TsnTypeInfo *builtins_by_id(int32_t type_id) {
+static const SnTypeInfo *builtins_by_id(int32_t type_id) {
   switch (type_id) {
-    case TSN_TYPEID_STRING:
+    case SN_TYPEID_STRING:
       return &BUILTIN_STRING;
-    case TSN_TYPEID_ARRAY:
+    case SN_TYPEID_ARRAY:
       return &BUILTIN_ARRAY;
-    case TSN_TYPEID_MAP:
+    case SN_TYPEID_MAP:
       return &BUILTIN_MAP;
-    case TSN_TYPEID_CLOSURE:
+    case SN_TYPEID_CLOSURE:
       return &BUILTIN_CLOSURE;
-    case TSN_TYPEID_ENV:
+    case SN_TYPEID_ENV:
       return &BUILTIN_ENV;
     default:
       return NULL;
@@ -111,18 +111,18 @@ static const TsnTypeInfo *builtins_by_id(int32_t type_id) {
 
 #define REGISTERED_CAP_INITIAL 32
 
-static const TsnTypeInfo **registered = NULL;
+static const SnTypeInfo **registered = NULL;
 static int32_t registered_len = 0;
 static int32_t registered_cap = 0;
 
-void tsn_typeinfo_register(const TsnTypeInfo *info) {
-  if (info == NULL || info->type_id < TSN_TYPEID_CLASS_BASE) {
+void sn_typeinfo_register(const SnTypeInfo *info) {
+  if (info == NULL || info->type_id < SN_TYPEID_CLASS_BASE) {
     abort();
   }
   if (registered_len == registered_cap) {
     int32_t new_cap = registered_cap == 0 ? REGISTERED_CAP_INITIAL : registered_cap * 2;
-    const TsnTypeInfo **next =
-        (const TsnTypeInfo **)realloc(registered, (size_t)new_cap * sizeof(*next));
+    const SnTypeInfo **next =
+        (const SnTypeInfo **)realloc(registered, (size_t)new_cap * sizeof(*next));
     if (next == NULL) {
       abort();
     }
@@ -140,8 +140,8 @@ void tsn_typeinfo_register(const TsnTypeInfo *info) {
   registered_len += 1;
 }
 
-const TsnTypeInfo *tsn_typeinfo_get(int32_t type_id) {
-  const TsnTypeInfo *builtin = builtins_by_id(type_id);
+const SnTypeInfo *sn_typeinfo_get(int32_t type_id) {
+  const SnTypeInfo *builtin = builtins_by_id(type_id);
   if (builtin != NULL) {
     return builtin;
   }
@@ -153,16 +153,16 @@ const TsnTypeInfo *tsn_typeinfo_get(int32_t type_id) {
   return NULL;
 }
 
-bool tsn_is_instance(void *obj, int32_t type_id) {
+bool sn_is_instance(void *obj, int32_t type_id) {
   if (obj == NULL || type_id == 0) {
     return false;
   }
-  int32_t id = ((TsnObjectHeader *)obj)->type_id;
+  int32_t id = ((SnObjectHeader *)obj)->type_id;
   while (id != 0) {
     if (id == type_id) {
       return true;
     }
-    const TsnTypeInfo *info = tsn_typeinfo_get(id);
+    const SnTypeInfo *info = sn_typeinfo_get(id);
     if (info == NULL) {
       return false;
     }

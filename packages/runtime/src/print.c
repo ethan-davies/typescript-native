@@ -2,23 +2,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "tsn/runtime.h"
+#include "sn/runtime.h"
 
-typedef struct TsnStringBuilder {
+typedef struct SnStringBuilder {
   char *buf;
   int64_t cap;
   int64_t len;
-} TsnStringBuilder;
+} SnStringBuilder;
 
-static void sb_init(TsnStringBuilder *sb) {
+static void sb_init(SnStringBuilder *sb) {
   sb->cap = 64;
   sb->len = 0;
-  sb->buf = tsn_alloc(sb->cap);
-  tsn_gc_set_type(sb->buf, TSN_TYPEID_STRING);
+  sb->buf = sn_alloc(sb->cap);
+  sn_gc_set_type(sb->buf, SN_TYPEID_STRING);
   sb->buf[0] = '\0';
 }
 
-static void sb_grow(TsnStringBuilder *sb, int64_t needed) {
+static void sb_grow(SnStringBuilder *sb, int64_t needed) {
   if (needed <= sb->cap) {
     return;
   }
@@ -26,12 +26,12 @@ static void sb_grow(TsnStringBuilder *sb, int64_t needed) {
   while (new_cap < needed) {
     new_cap *= 2;
   }
-  sb->buf = tsn_realloc(sb->buf, new_cap);
-  tsn_gc_set_type(sb->buf, TSN_TYPEID_STRING);
+  sb->buf = sn_realloc(sb->buf, new_cap);
+  sn_gc_set_type(sb->buf, SN_TYPEID_STRING);
   sb->cap = new_cap;
 }
 
-static void sb_append_literal(TsnStringBuilder *sb, const char *text) {
+static void sb_append_literal(SnStringBuilder *sb, const char *text) {
   int64_t text_len = (int64_t)strlen(text);
   sb_grow(sb, sb->len + text_len + 1);
   memcpy(sb->buf + sb->len, text, (size_t)text_len);
@@ -39,119 +39,119 @@ static void sb_append_literal(TsnStringBuilder *sb, const char *text) {
   sb->buf[sb->len] = '\0';
 }
 
-static void sb_append_owned(TsnStringBuilder *sb, char *text) {
+static void sb_append_owned(SnStringBuilder *sb, char *text) {
   sb_append_literal(sb, text);
-  tsn_free(text);
+  sn_free(text);
 }
 
-static char *sb_finish(TsnStringBuilder *sb) {
+static char *sb_finish(SnStringBuilder *sb) {
   return sb->buf;
 }
 
-void tsn_print_i32(int32_t value) {
+void sn_print_i32(int32_t value) {
   printf("%d", value);
 }
 
-void tsn_print_i64(int64_t value) {
+void sn_print_i64(int64_t value) {
   printf("%lld", (long long)value);
 }
 
-void tsn_print_f32(float value) {
+void sn_print_f32(float value) {
   printf("%g", (double)value);
 }
 
-void tsn_print_f64(double value) {
+void sn_print_f64(double value) {
   printf("%g", value);
 }
 
-void tsn_print_bool(bool value) {
+void sn_print_bool(bool value) {
   fputs(value ? "true" : "false", stdout);
 }
 
-void tsn_print_char(char value) {
+void sn_print_char(char value) {
   putchar(value);
 }
 
-void tsn_print_str(const char *value) {
+void sn_print_str(const char *value) {
   fputs(value, stdout);
 }
 
-void tsn_print_space(void) {
+void sn_print_space(void) {
   putchar(' ');
 }
 
-void tsn_print_newline(void) {
+void sn_print_newline(void) {
   putchar('\n');
 }
 
-char *tsn_i32_to_string(int32_t value) {
-  char *buf = tsn_alloc(32);
-  tsn_gc_set_type(buf, TSN_TYPEID_STRING);
+char *sn_i32_to_string(int32_t value) {
+  char *buf = sn_alloc(32);
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
   snprintf(buf, 32, "%d", value);
   return buf;
 }
 
-char *tsn_i64_to_string(int64_t value) {
-  char *buf = tsn_alloc(32);
-  tsn_gc_set_type(buf, TSN_TYPEID_STRING);
+char *sn_i64_to_string(int64_t value) {
+  char *buf = sn_alloc(32);
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
   snprintf(buf, 32, "%lld", (long long)value);
   return buf;
 }
 
-char *tsn_f32_to_string(float value) {
-  char *buf = tsn_alloc(32);
-  tsn_gc_set_type(buf, TSN_TYPEID_STRING);
+char *sn_f32_to_string(float value) {
+  char *buf = sn_alloc(32);
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
   snprintf(buf, 32, "%g", (double)value);
   return buf;
 }
 
-char *tsn_f64_to_string(double value) {
-  char *buf = tsn_alloc(32);
-  tsn_gc_set_type(buf, TSN_TYPEID_STRING);
+char *sn_f64_to_string(double value) {
+  char *buf = sn_alloc(32);
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
   snprintf(buf, 32, "%g", value);
   return buf;
 }
 
-char *tsn_bool_to_string(bool value) {
-  return tsn_str_concat(value ? "true" : "false", "");
-  /* tsn_str_concat copies the literal; empty right operand keeps a fresh heap string */
+char *sn_bool_to_string(bool value) {
+  return sn_str_concat(value ? "true" : "false", "");
+  /* sn_str_concat copies the literal; empty right operand keeps a fresh heap string */
 }
 
-char *tsn_char_to_string(char value) {
-  char *buf = tsn_alloc(2);
-  tsn_gc_set_type(buf, TSN_TYPEID_STRING);
+char *sn_char_to_string(char value) {
+  char *buf = sn_alloc(2);
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
   buf[0] = value;
   buf[1] = '\0';
   return buf;
 }
 
 static char *format_array_element(void *arr, int64_t index, int64_t elem_size, int32_t elem_fmt) {
-  TsnArray *header = (TsnArray *)arr;
+  SnArray *header = (SnArray *)arr;
   void *slot = (char *)header->data + index * elem_size;
 
   switch (elem_fmt) {
-    case TSN_FMT_I32:
-      return tsn_i32_to_string(*(int32_t *)slot);
-    case TSN_FMT_I64:
-      return tsn_i64_to_string(*(int64_t *)slot);
-    case TSN_FMT_F32:
-      return tsn_f32_to_string(*(float *)slot);
-    case TSN_FMT_F64:
-      return tsn_f64_to_string(*(double *)slot);
-    case TSN_FMT_BOOL:
-      return tsn_bool_to_string(*(bool *)slot);
-    case TSN_FMT_CHAR:
-      return tsn_char_to_string(*(char *)slot);
-    case TSN_FMT_STRING:
-      return tsn_str_concat(*(char **)slot, "");
+    case SN_FMT_I32:
+      return sn_i32_to_string(*(int32_t *)slot);
+    case SN_FMT_I64:
+      return sn_i64_to_string(*(int64_t *)slot);
+    case SN_FMT_F32:
+      return sn_f32_to_string(*(float *)slot);
+    case SN_FMT_F64:
+      return sn_f64_to_string(*(double *)slot);
+    case SN_FMT_BOOL:
+      return sn_bool_to_string(*(bool *)slot);
+    case SN_FMT_CHAR:
+      return sn_char_to_string(*(char *)slot);
+    case SN_FMT_STRING:
+      return sn_str_concat(*(char **)slot, "");
     default:
       abort();
   }
 }
 
-char *tsn_array_to_string(void *arr, int64_t elem_size, int32_t elem_fmt) {
-  TsnArray *header = (TsnArray *)arr;
-  TsnStringBuilder sb;
+char *sn_array_to_string(void *arr, int64_t elem_size, int32_t elem_fmt) {
+  SnArray *header = (SnArray *)arr;
+  SnStringBuilder sb;
   sb_init(&sb);
   sb_append_literal(&sb, "[");
 

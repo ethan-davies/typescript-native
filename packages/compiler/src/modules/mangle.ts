@@ -9,8 +9,8 @@ export function mangleSymbol(moduleId: string, name: string): string {
   return `${moduleId}__${name}`;
 }
 
-/** Basename without `.tsn` used as the module id / default namespace. */
+/** Basename without `.sn` used as the module id / default namespace. */
 export function moduleIdFromPath(filePath: string): string {
   const base = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
-  return base.replace(/\.tsn$/i, "");
+  return base.replace(/\.sn$/i, "");
 }

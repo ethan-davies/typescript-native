@@ -1,0 +1,229 @@
+#ifndef SN_RUNTIME_H
+#define SN_RUNTIME_H
+
+#include <setjmp.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Must match ARRAY_HEADER_SIZE in packages/compiler/src/codegen/llvm.ts */
+#define SN_ARRAY_HEADER_SIZE 24
+#define SN_MAP_HEADER_SIZE 32
+
+/* Opaque exception-handling frame; must match SnEhFrame in exception.c */
+#define SN_EH_FRAME_SIZE 256
+
+typedef void (*SnFinallyFn)(void *ctx);
+
+void sn_eh_init_frame(void *frame, int32_t has_catch, SnFinallyFn finally_fn, void *finally_ctx);
+void sn_eh_push(void *frame);
+void sn_eh_pop(void *frame);
+jmp_buf *sn_eh_jmp_buf(void *frame);
+void sn_throw(void *error);
+void *sn_eh_caught_exception(void);
+void sn_eh_clear_exception(void);
+void sn_uncaught_exception(void *error);
+
+/* Shared header on every class instance. Must match %ObjectHeader in llvm.ts.
+ * type_id indexes TypeInfo (class IDs start at SN_TYPEID_CLASS_BASE).
+ * Arrays/maps/strings do not embed type_id yet — see reserved SN_TYPEID_*. */
+typedef struct SnObjectHeader {
+  int32_t type_id;
+  void *vtable;
+} SnObjectHeader;
+
+/* Canonical 24-byte array header. Must match ARRAY_HEADER_SIZE in llvm.ts. */
+typedef struct SnArray {
+  int64_t length;
+  int64_t capacity;
+  void *data;
+} SnArray;
+
+/* Canonical 32-byte map header. String keys + pointer-sized values today. */
+typedef struct SnMap {
+  int64_t len;
+  int64_t cap;
+  char **keys;
+  void **vals;
+} SnMap;
+
+/* --- TypeInfo (GC / RTTI metadata; does not change object byte layouts) --- */
+
+typedef enum SnTypeKind {
+  SN_KIND_CLASS = 1,
+  SN_KIND_ARRAY = 2,
+  SN_KIND_STRING = 3,
+  SN_KIND_MAP = 4,
+  SN_KIND_CLOSURE = 5, /* %__Callable handle shape (not always heap) */
+  SN_KIND_ENV = 6,     /* closure environment blob */
+  SN_KIND_STRUCT = 7,  /* value aggregate / box layout (not a heap class) */
+} SnTypeKind;
+
+typedef enum SnRefClass {
+  SN_REF_VALUE = 0, /* no GC scan (primitive / pure value aggregate) */
+  SN_REF_PTR = 1,   /* field/element is a heap pointer */
+  SN_REF_AGG = 2,   /* inline aggregate; scan via nested type_id */
+} SnRefClass;
+
+/* Reserved builtin type_ids. Class type_ids start at SN_TYPEID_CLASS_BASE. */
+#define SN_TYPEID_STRING 1
+#define SN_TYPEID_ARRAY 2
+#define SN_TYPEID_MAP 3
+#define SN_TYPEID_CLOSURE 4
+#define SN_TYPEID_ENV 5
+#define SN_TYPEID_CLASS_BASE 256
+
+typedef struct SnFieldInfo {
+  int32_t offset;    /* bytes from object start */
+  int32_t size;
+  int32_t ref_class; /* SnRefClass */
+  int32_t type_id;   /* nested TypeInfo for AGG; related type for PTR; 0 if N/A */
+} SnFieldInfo;
+
+/* Must match %SnTypeInfo / %SnFieldInfo in llvm.ts when emitting constants. */
+typedef struct SnTypeInfo {
+  int32_t type_id;
+  int32_t kind; /* SnTypeKind */
+  int32_t size; /* fixed size, or -1 if variable-length */
+  int32_t field_count;
+  const SnFieldInfo *fields;
+  /* Array */
+  int32_t elem_type_id;
+  int32_t elem_ref_class;
+  /* Map */
+  int32_t key_type_id;
+  int32_t key_ref_class;
+  int32_t value_type_id;
+  int32_t value_ref_class;
+  /* Class inheritance: superclass type_id, or 0 if none. */
+  int32_t parent_type_id;
+} SnTypeInfo;
+
+const SnTypeInfo *sn_typeinfo_get(int32_t type_id);
+void sn_typeinfo_register(const SnTypeInfo *info);
+/* True if obj is non-null and its type_id (or an ancestor) equals type_id. */
+bool sn_is_instance(void *obj, int32_t type_id);
+
+/* --- Mark-and-sweep GC (side-table tracking; object layouts unchanged) --- */
+
+void sn_gc_set_type(void *ptr, int32_t type_id);
+void sn_gc_set_array_meta(void *arr, int32_t elem_ref_class, int32_t elem_type_id, int64_t elem_size);
+void sn_gc_set_map_meta(void *map, int32_t key_ref_class, int32_t key_type_id, int32_t value_ref_class,
+                         int32_t value_type_id);
+void sn_gc_root_push(void **slot);
+void sn_gc_root_pop(int32_t n);
+int32_t sn_gc_root_checkpoint(void);
+void sn_gc_root_restore(int32_t n);
+void sn_gc_add_global_root(void **slot);
+void sn_gc_set_exception_root(void **slot);
+void sn_gc_collect(void);
+void sn_gc_set_threshold(int64_t bytes);
+int64_t sn_gc_bytes_allocated(void);
+
+/* Element comparison kinds for array search helpers. */
+#define SN_CMP_I32 0
+#define SN_CMP_I64 1
+#define SN_CMP_F32 2
+#define SN_CMP_F64 3
+#define SN_CMP_BOOL 4
+#define SN_CMP_CHAR 5
+#define SN_CMP_STRING 6
+#define SN_CMP_PTR 7
+
+/* Element formatting kinds for array-to-string helpers. */
+#define SN_FMT_I32 0
+#define SN_FMT_I64 1
+#define SN_FMT_F32 2
+#define SN_FMT_F64 3
+#define SN_FMT_BOOL 4
+#define SN_FMT_CHAR 5
+#define SN_FMT_STRING 6
+
+void *sn_alloc(int64_t size);
+void *sn_realloc(void *ptr, int64_t size);
+void sn_free(void *ptr);
+
+int32_t sn_str_len(const char *s);
+char *sn_str_concat(const char *left, const char *right);
+int32_t sn_str_index_of(const char *haystack, const char *needle);
+bool sn_str_contains(const char *haystack, const char *needle);
+bool sn_str_starts_with(const char *s, const char *prefix);
+bool sn_str_ends_with(const char *s, const char *suffix);
+char *sn_str_substring(const char *s, int32_t start, int32_t end);
+char *sn_str_trim(const char *s);
+char *sn_str_to_upper(const char *s);
+char *sn_str_to_lower(const char *s);
+char *sn_str_replace(const char *s, const char *from, const char *to);
+/* Returns a GC-managed string[] (array header pointer). */
+char *sn_str_split(const char *s, const char *sep);
+char sn_str_char_at(const char *s, int32_t index);
+char *sn_str_repeat(const char *s, int32_t count);
+char *sn_str_pad_start(const char *s, int32_t target_len, const char *pad);
+char *sn_str_pad_end(const char *s, int32_t target_len, const char *pad);
+/* Join a string[] with a separator. */
+char *sn_str_join(void *parts, const char *sep);
+int32_t sn_str_last_index_of(const char *haystack, const char *needle);
+
+/* Math (libm). Floating wrappers use f64; integer helpers are separate. */
+double sn_math_abs(double x);
+double sn_math_min(double a, double b);
+double sn_math_max(double a, double b);
+double sn_math_floor(double x);
+double sn_math_ceil(double x);
+double sn_math_round(double x);
+double sn_math_sqrt(double x);
+double sn_math_pow(double base, double exponent);
+double sn_math_sin(double x);
+double sn_math_cos(double x);
+double sn_math_tan(double x);
+double sn_math_log(double x);
+double sn_math_exp(double x);
+int32_t sn_math_abs_i32(int32_t x);
+int64_t sn_math_abs_i64(int64_t x);
+int32_t sn_math_min_i32(int32_t a, int32_t b);
+int32_t sn_math_max_i32(int32_t a, int32_t b);
+int64_t sn_math_min_i64(int64_t a, int64_t b);
+int64_t sn_math_max_i64(int64_t a, int64_t b);
+
+/* Random number generation (seeded from time on first use). */
+void sn_random_seed(int64_t seed);
+double sn_random(void);
+int32_t sn_random_int(int32_t min, int32_t max);
+double sn_random_float(double min, double max);
+
+void *sn_array_new(int64_t length, int64_t capacity, int64_t elem_size);
+int32_t sn_array_length(void *arr);
+void sn_array_push(void *arr, void *value, int64_t elem_size);
+void sn_array_pop(void *arr, void *dest, int64_t elem_size);
+int32_t sn_array_index_of(void *arr, void *needle, int64_t elem_size, int32_t cmp_kind);
+
+void *sn_map_new(void);
+void sn_map_set(void *map, const char *key, void *val);
+void *sn_map_get(void *map, const char *key);
+
+void sn_print_i32(int32_t value);
+void sn_print_i64(int64_t value);
+void sn_print_f32(float value);
+void sn_print_f64(double value);
+void sn_print_bool(bool value);
+void sn_print_char(char value);
+void sn_print_str(const char *value);
+void sn_print_space(void);
+void sn_print_newline(void);
+
+char *sn_i32_to_string(int32_t value);
+char *sn_i64_to_string(int64_t value);
+char *sn_f32_to_string(float value);
+char *sn_f64_to_string(double value);
+char *sn_bool_to_string(bool value);
+char *sn_char_to_string(char value);
+char *sn_array_to_string(void *arr, int64_t elem_size, int32_t elem_fmt);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* SN_RUNTIME_H */

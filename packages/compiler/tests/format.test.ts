@@ -29,9 +29,7 @@ function formatFailure(result: {
 describe("formatSource", () => {
   it("formats a minimal program", () => {
     const out = assertIdempotent(`function main():void{print("hi");}`);
-    expect(out).toBe(
-      `function main(): void {\n  print("hi");\n}\n`,
-    );
+    expect(out).toBe(`function main(): void {\n  print("hi");\n}\n`);
   });
 
   it("preserves parentheses needed for precedence", () => {
@@ -110,12 +108,12 @@ function main(): void {
   });
 
   const exampleFiles = [
-    "hello.tsn",
-    "variables.tsn",
-    "arithmetic.tsn",
-    "control-flow.tsn",
-    "loops.tsn",
-    "classes.tsn",
+    "hello.sn",
+    "variables.sn",
+    "arithmetic.sn",
+    "control-flow.sn",
+    "loops.sn",
+    "classes.sn",
   ];
 
   for (const name of exampleFiles) {

@@ -2,11 +2,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import {
-  compileFile,
-  formatDiagnostics,
-} from "@typescript-native/compiler";
-import { getRuntimeLibraryPath } from "@typescript-native/runtime";
+import { compileFile, formatDiagnostics } from "@sonite/compiler";
+import { getRuntimeLibraryPath } from "@sonite/runtime";
 import { resolveClang } from "./toolchain.js";
 
 export interface CompileToIrResult {
@@ -69,7 +66,7 @@ export async function linkNative(options: LinkOptions): Promise<number> {
     writeFileSync(options.emitIrPath, options.ir, "utf8");
   }
 
-  const dir = mkdtempSync(join(tmpdir(), "tsn-"));
+  const dir = mkdtempSync(join(tmpdir(), "sn-"));
   const llPath = join(dir, "program.ll");
   const binPath = resolve(options.outputPath);
 
@@ -113,7 +110,7 @@ export async function compileLinkAndRun(
     return 1;
   }
 
-  const dir = mkdtempSync(join(tmpdir(), "tsn-"));
+  const dir = mkdtempSync(join(tmpdir(), "sn-"));
   const binPath = join(dir, "program");
 
   try {

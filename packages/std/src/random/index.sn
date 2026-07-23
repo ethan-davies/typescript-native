@@ -1,24 +1,24 @@
-extern function tsn_random_seed(seed: i64): void;
-extern function tsn_random(): f64;
-extern function tsn_random_int(min: i32, max: i32): i32;
-extern function tsn_random_float(min: f64, max: f64): f64;
+extern function sn_random_seed(seed: i64): void;
+extern function sn_random(): f64;
+extern function sn_random_int(min: i32, max: i32): i32;
+extern function sn_random_float(min: f64, max: f64): f64;
 
 /** Uniform value in [0, 1). */
 export function random(): f64 {
-  return tsn_random();
+  return sn_random();
 }
 
 /** Inclusive integer in [min, max]. */
 export function randomInt(min: i32, max: i32): i32 {
-  return tsn_random_int(min, max);
+  return sn_random_int(min, max);
 }
 
 /** Half-open float in [min, max). */
 export function randomFloat(min: f64, max: f64): f64 {
-  return tsn_random_float(min, max);
+  return sn_random_float(min, max);
 }
 
 /** Set the RNG seed (useful for reproducible tests). */
 export function seed(value: i64): void {
-  tsn_random_seed(value);
+  sn_random_seed(value);
 }

@@ -1,11 +1,11 @@
 {
-  "name": "@typescript-native/cli",
+  "name": "@sonite/cli",
   "version": "0.0.0",
-  "description": "CLI for the typescript-native language (tsn)",
+  "description": "CLI for the sonite language (sn)",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "tsn": "./dist/cli.js"
+    "sn": "./dist/cli.js"
   },
   "files": [
     "dist"
@@ -20,9 +20,9 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@typescript-native/compiler": "workspace:*",
-    "@typescript-native/runtime": "workspace:*",
-    "@typescript-native/std": "workspace:*",
+    "@sonite/compiler": "workspace:*",
+    "@sonite/runtime": "workspace:*",
+    "@sonite/std": "workspace:*",
     "commander": "^14.0.3",
     "smol-toml": "^1.7.0"
   },

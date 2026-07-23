@@ -99,7 +99,10 @@ function isNullablePointerUnion(type: ValueType): boolean {
     return false;
   }
   const nonNull = arms.filter((a) => a !== "null");
-  return nonNull.length > 0 && nonNull.every((a) => isSinglePtrReference(a as ValueType));
+  return (
+    nonNull.length > 0 &&
+    nonNull.every((a) => isSinglePtrReference(a as ValueType))
+  );
 }
 
 /** Typecheck rewrites named/default args to a positional Expression[] before codegen. */
@@ -147,7 +150,11 @@ interface FunctionSig {
 }
 
 type ControlContext =
-  | { readonly kind: "loop"; readonly continueLabel: string; readonly breakLabel: string }
+  | {
+      readonly kind: "loop";
+      readonly continueLabel: string;
+      readonly breakLabel: string;
+    }
   | { readonly kind: "switch"; readonly breakLabel: string }
   | {
       readonly kind: "try";
@@ -256,35 +263,35 @@ const ARRAY_HEADER_SIZE = 24;
 /** Shared header on every class instance: { type_id, vtable }. */
 const OBJECT_HEADER_TYPE = "%ObjectHeader";
 
-/** Must match TSN_EH_FRAME_SIZE in packages/runtime/include/tsn/runtime.h */
-const TSN_EH_FRAME_SIZE = 256;
+/** Must match SN_EH_FRAME_SIZE in packages/runtime/include/sn/runtime.h */
+const SN_EH_FRAME_SIZE = 256;
 
-/** Reserved builtin type_ids — must match TSN_TYPEID_* in runtime.h */
-const TSN_TYPEID_STRING = 1;
-const TSN_TYPEID_ARRAY = 2;
-const TSN_TYPEID_MAP = 3;
-const TSN_TYPEID_CLOSURE = 4;
-const TSN_TYPEID_CLASS_BASE = 256;
+/** Reserved builtin type_ids — must match SN_TYPEID_* in runtime.h */
+const SN_TYPEID_STRING = 1;
+const SN_TYPEID_ARRAY = 2;
+const SN_TYPEID_MAP = 3;
+const SN_TYPEID_CLOSURE = 4;
+const SN_TYPEID_CLASS_BASE = 256;
 
-const TSN_KIND_CLASS = 1;
-const TSN_KIND_ENV = 6;
-const TSN_KIND_STRUCT = 7;
-const TSN_REF_VALUE = 0;
-const TSN_REF_PTR = 1;
-const TSN_REF_AGG = 2;
+const SN_KIND_CLASS = 1;
+const SN_KIND_ENV = 6;
+const SN_KIND_STRUCT = 7;
+const SN_REF_VALUE = 0;
+const SN_REF_PTR = 1;
+const SN_REF_AGG = 2;
 
 interface EnvTypeInfoPending {
   readonly globalName: string;
   readonly typeId: number;
   readonly llvmType: string;
   fields: TypeInfoFieldConst[];
-  /** TSN_KIND_ENV or TSN_KIND_STRUCT */
+  /** SN_KIND_ENV or SN_KIND_STRUCT */
   readonly kind: number;
 }
 
-/** Must match TsnFieldInfo / TsnTypeInfo in runtime.h */
-const TSN_FIELD_INFO_TYPE = "%TsnFieldInfo";
-const TSN_TYPE_INFO_TYPE = "%TsnTypeInfo";
+/** Must match SnFieldInfo / SnTypeInfo in runtime.h */
+const SN_FIELD_INFO_TYPE = "%SnFieldInfo";
+const SN_TYPE_INFO_TYPE = "%SnTypeInfo";
 
 /**
  * Lowers a validated, type-checked AST to LLVM IR text.
@@ -293,7 +300,10 @@ export class LlvmCodegen {
   private stringCounter = 0;
   private tempCounter = 0;
   private labelCounter = 0;
-  private readonly stringGlobals = new Map<string, { name: string; length: number }>();
+  private readonly stringGlobals = new Map<
+    string,
+    { name: string; length: number }
+  >();
   private locals = new Map<string, LocalBinding>();
   /** All functions keyed by mangled LLVM name. */
   private functions = new Map<string, FunctionSig>();
@@ -308,8 +318,8 @@ export class LlvmCodegen {
   private interfaces = new Map<string, InterfaceInfo>();
   private localInterfaces = new Map<string, InterfaceInfo>();
   private namespaces = new Map<string, NamespaceInfo>();
-  /** Next monotonic type_id for class ObjectHeaders / env TypeInfo (starts at TSN_TYPEID_CLASS_BASE). */
-  private nextTypeId = TSN_TYPEID_CLASS_BASE;
+  /** Next monotonic type_id for class ObjectHeaders / env TypeInfo (starts at SN_TYPEID_CLASS_BASE). */
+  private nextTypeId = SN_TYPEID_CLASS_BASE;
   private needsTypeInfo = false;
   private needsGc = false;
   /** Shadow-stack roots pushed in the current function (informational; epilogue uses restore). */
@@ -320,21 +330,23 @@ export class LlvmCodegen {
   private gcExprRoot: string | null = null;
   /** Closure environment TypeInfo records to emit alongside class TypeInfo. */
   private readonly pendingEnvTypeInfos: EnvTypeInfoPending[] = [];
-  private needsTsnAlloc = false;
-  private needsTsnString = false;
-  private needsTsnArray = false;
-  private needsTsnMap = false;
-  private needsTsnPrint = false;
-  private needsTsnFormat = false;
+  private needsSnAlloc = false;
+  private needsSnString = false;
+  private needsSnArray = false;
+  private needsSnMap = false;
+  private needsSnPrint = false;
+  private needsSnFormat = false;
   private needsAbort = false;
   private needsUnionRuntime = false;
   private needsCallableRuntime = false;
   private needsStrcmp = false;
-  private needsTsnException = false;
+  private needsSnException = false;
   private needsIsInstance = false;
   /** Deferred return through a finally block. */
-  private pendingReturn: { readonly llvm: string; readonly type: ValueType | "void" } | null =
-    null;
+  private pendingReturn: {
+    readonly llvm: string;
+    readonly type: ValueType | "void";
+  } | null = null;
   /** Deferred break/continue through a finally block. */
   private pendingBranch: string | null = null;
   /** Synthetic tuple LLVM type name → element types. */
@@ -369,7 +381,7 @@ export class LlvmCodegen {
   private extensionCallRewrites = new Map<number, string>();
   /** Extern symbols that need `declare` in the module. */
   private readonly externDeclares = new Set<string>();
-  private needsTsnStrExtras = false;
+  private needsSnStrExtras = false;
 
   emit(program: Program): string {
     return this.emitModules([
@@ -395,7 +407,9 @@ export class LlvmCodegen {
     this.locals = new Map();
     this.functions.clear();
     this.lambdaCaptures = new Map(instantiations?.lambdaCaptures ?? []);
-    this.extensionCallRewrites = new Map(instantiations?.extensionCallRewrites ?? []);
+    this.extensionCallRewrites = new Map(
+      instantiations?.extensionCallRewrites ?? [],
+    );
     this.lambdaCounter = 0;
     this.emittedLambdas.clear();
     this.emittedTrampolines.clear();
@@ -410,24 +424,24 @@ export class LlvmCodegen {
     this.interfaces.clear();
     this.localInterfaces.clear();
     this.namespaces.clear();
-    this.nextTypeId = TSN_TYPEID_CLASS_BASE;
+    this.nextTypeId = SN_TYPEID_CLASS_BASE;
     this.needsTypeInfo = false;
     this.needsGc = false;
     this.gcRootCount = 0;
     this.gcEntryCheckpoint = null;
     this.gcExprRoot = null;
     this.pendingEnvTypeInfos.length = 0;
-    this.needsTsnAlloc = false;
-    this.needsTsnString = false;
-    this.needsTsnStrExtras = false;
-    this.needsTsnArray = false;
-    this.needsTsnMap = false;
-    this.needsTsnPrint = false;
-    this.needsTsnFormat = false;
+    this.needsSnAlloc = false;
+    this.needsSnString = false;
+    this.needsSnStrExtras = false;
+    this.needsSnArray = false;
+    this.needsSnMap = false;
+    this.needsSnPrint = false;
+    this.needsSnFormat = false;
     this.needsAbort = false;
     this.needsUnionRuntime = false;
     this.needsStrcmp = false;
-    this.needsTsnException = false;
+    this.needsSnException = false;
     this.needsIsInstance = false;
     this.externDeclares.clear();
     this.registeredTuples.clear();
@@ -553,7 +567,9 @@ export class LlvmCodegen {
             new Map(),
           );
           if (!type) {
-            throw new Error(`Codegen: invalid field type in struct '${decl.name.name}'`);
+            throw new Error(
+              `Codegen: invalid field type in struct '${decl.name.name}'`,
+            );
           }
           return { name: field.name.name, type };
         });
@@ -568,12 +584,15 @@ export class LlvmCodegen {
               new Map(),
             );
             if (!t) {
-              throw new Error(`Codegen: invalid method param in '${method.name.name}'`);
+              throw new Error(
+                `Codegen: invalid method param in '${method.name.name}'`,
+              );
             }
             return t;
           });
           const returnType =
-            method.returnType.kind === "PrimitiveType" && method.returnType.name === "void"
+            method.returnType.kind === "PrimitiveType" &&
+            method.returnType.name === "void"
               ? ("void" as const)
               : this.resolveAnnotationInModule(
                   method.returnType,
@@ -584,11 +603,16 @@ export class LlvmCodegen {
                   new Map(),
                 );
           if (returnType === null) {
-            throw new Error(`Codegen: invalid method return in '${method.name.name}'`);
+            throw new Error(
+              `Codegen: invalid method return in '${method.name.name}'`,
+            );
           }
           return {
             name: method.name.name,
-            mangledName: mangleSymbol(mod.moduleId, `${decl.name.name}__${method.name.name}`),
+            mangledName: mangleSymbol(
+              mod.moduleId,
+              `${decl.name.name}__${method.name.name}`,
+            ),
             params,
             returnType,
             decl: method,
@@ -643,12 +667,15 @@ export class LlvmCodegen {
                 new Map(),
               );
               if (!t) {
-                throw new Error(`Codegen: invalid parameter type for '${p.name.name}'`);
+                throw new Error(
+                  `Codegen: invalid parameter type for '${p.name.name}'`,
+                );
               }
               return t;
             });
             let resolvedReturn: ValueType | "void" | null =
-              decl.returnType.kind === "PrimitiveType" && decl.returnType.name === "void"
+              decl.returnType.kind === "PrimitiveType" &&
+              decl.returnType.name === "void"
                 ? ("void" as const)
                 : this.resolveAnnotationInModule(
                     decl.returnType,
@@ -659,13 +686,16 @@ export class LlvmCodegen {
                     new Map(),
                   );
             if (resolvedReturn === null) {
-              throw new Error(`Codegen: invalid return type for '${decl.name.name}'`);
+              throw new Error(
+                `Codegen: invalid return type for '${decl.name.name}'`,
+              );
             }
             returnType = resolvedReturn;
           } else {
             // Generic extern: signature is ABI-specialized at the call site.
             returnType =
-              decl.returnType.kind === "PrimitiveType" && decl.returnType.name === "void"
+              decl.returnType.kind === "PrimitiveType" &&
+              decl.returnType.name === "void"
                 ? ("void" as const)
                 : "i32";
           }
@@ -694,12 +724,15 @@ export class LlvmCodegen {
             new Map(),
           );
           if (!t) {
-            throw new Error(`Codegen: invalid parameter type for '${p.name.name}'`);
+            throw new Error(
+              `Codegen: invalid parameter type for '${p.name.name}'`,
+            );
           }
           return t;
         });
         const returnType =
-          fn.returnType.kind === "PrimitiveType" && fn.returnType.name === "void"
+          fn.returnType.kind === "PrimitiveType" &&
+          fn.returnType.name === "void"
             ? ("void" as const)
             : this.resolveAnnotationInModule(
                 fn.returnType,
@@ -713,7 +746,9 @@ export class LlvmCodegen {
           throw new Error(`Codegen: invalid return type for '${fn.name.name}'`);
         }
         const mangledName =
-          fn.name.name === "main" ? "main" : mangleSymbol(mod.moduleId, fn.name.name);
+          fn.name.name === "main"
+            ? "main"
+            : mangleSymbol(mod.moduleId, fn.name.name);
         const sig: FunctionSig = {
           name: fn.name.name,
           mangledName,
@@ -761,7 +796,11 @@ export class LlvmCodegen {
             const fnDecl = importedMod.ast.body.find(
               (d) => d.kind === "FunctionDeclaration" && d.name.name === name,
             );
-            if (fnDecl && fnDecl.kind === "FunctionDeclaration" && fnDecl.exported) {
+            if (
+              fnDecl &&
+              fnDecl.kind === "FunctionDeclaration" &&
+              fnDecl.exported
+            ) {
               exportedFns.set(name, sig);
             }
           }
@@ -797,7 +836,11 @@ export class LlvmCodegen {
             const iDecl = importedMod.ast.body.find(
               (d) => d.kind === "InterfaceDeclaration" && d.name.name === name,
             );
-            if (iDecl && iDecl.kind === "InterfaceDeclaration" && iDecl.exported) {
+            if (
+              iDecl &&
+              iDecl.kind === "InterfaceDeclaration" &&
+              iDecl.exported
+            ) {
               exportedInterfaces.set(name, info);
             }
           }
@@ -860,7 +903,8 @@ export class LlvmCodegen {
         }
 
         const iDecl = importedMod.ast.body.find(
-          (d) => d.kind === "InterfaceDeclaration" && d.name.name === exportName,
+          (d) =>
+            d.kind === "InterfaceDeclaration" && d.name.name === exportName,
         );
         if (iDecl?.kind === "InterfaceDeclaration" && iDecl.exported) {
           const info = imported.interfaces.get(exportName);
@@ -871,7 +915,8 @@ export class LlvmCodegen {
         }
 
         const tDecl = importedMod.ast.body.find(
-          (d) => d.kind === "TypeAliasDeclaration" && d.name.name === exportName,
+          (d) =>
+            d.kind === "TypeAliasDeclaration" && d.name.name === exportName,
         );
         if (tDecl?.kind === "TypeAliasDeclaration" && tDecl.exported) {
           if (tDecl.typeParams.length === 0) {
@@ -924,14 +969,18 @@ export class LlvmCodegen {
     const interfaceTypeLines = this.emitInterfaceTypeDefs();
     const classTypeLines = this.emitClassTypeDefs();
     const objectHeaderLines =
-      classTypeLines.length > 0 ? [`${OBJECT_HEADER_TYPE} = type { i32, ptr }`] : [];
+      classTypeLines.length > 0
+        ? [`${OBJECT_HEADER_TYPE} = type { i32, ptr }`]
+        : [];
     const typeInfoTypeLines = this.needsTypeInfo
       ? [
-          `${TSN_FIELD_INFO_TYPE} = type { i32, i32, i32, i32 }`,
-          `${TSN_TYPE_INFO_TYPE} = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32, i32 }`,
+          `${SN_FIELD_INFO_TYPE} = type { i32, i32, i32, i32 }`,
+          `${SN_TYPE_INFO_TYPE} = type { i32, i32, i32, i32, ptr, i32, i32, i32, i32, i32, i32, i32 }`,
         ]
       : [];
-    const unionTypeLines = this.needsUnionRuntime ? ["%__Union = type { i32, ptr }"] : [];
+    const unionTypeLines = this.needsUnionRuntime
+      ? ["%__Union = type { i32, ptr }"]
+      : [];
     const callableTypeLines = this.needsCallableRuntime
       ? ["%__Callable = type { ptr, ptr }"]
       : [];
@@ -949,8 +998,8 @@ export class LlvmCodegen {
     const declares = this.emitRuntimeDeclares();
 
     const ir = [
-      "; ModuleID = 'typescript-native'",
-      'source_filename = "typescript-native"',
+      "; ModuleID = 'sonite'",
+      'source_filename = "sonite"',
       "",
       ...typeLines,
       typeLines.length > 0 ? "" : null,
@@ -981,7 +1030,10 @@ export class LlvmCodegen {
     return info;
   }
 
-  private registerStruct(decl: StructDeclaration, moduleId: string): StructInfo {
+  private registerStruct(
+    decl: StructDeclaration,
+    moduleId: string,
+  ): StructInfo {
     const info: StructInfo = {
       name: mangleSymbol(moduleId, decl.name.name),
       localName: decl.name.name,
@@ -992,7 +1044,10 @@ export class LlvmCodegen {
     return info;
   }
 
-  private registerClassStub(decl: ClassDeclaration, moduleId: string): ClassInfo {
+  private registerClassStub(
+    decl: ClassDeclaration,
+    moduleId: string,
+  ): ClassInfo {
     const mangled = mangleSymbol(moduleId, decl.name.name);
     return {
       name: mangled,
@@ -1005,7 +1060,10 @@ export class LlvmCodegen {
       instanceMethods: [],
       staticMethods: [],
       constructorParams: [],
-      constructorMangledName: mangleSymbol(moduleId, `${decl.name.name}__constructor`),
+      constructorMangledName: mangleSymbol(
+        moduleId,
+        `${decl.name.name}__constructor`,
+      ),
       constructorDecl: null,
       vtableGlobalName: `${mangled}__vtable`,
       typeId: 0,
@@ -1017,7 +1075,10 @@ export class LlvmCodegen {
    * Resolve a class by local name (current module) or by local/mangled name across all modules.
    * Needed for monomorphized generics imported from another module (`new Stack__i32` after rewrite).
    */
-  private lookupClass(name: string, namespace: string | null = null): ClassInfo | undefined {
+  private lookupClass(
+    name: string,
+    namespace: string | null = null,
+  ): ClassInfo | undefined {
     if (namespace) {
       return this.namespaces.get(namespace)?.classes.get(name);
     }
@@ -1040,7 +1101,11 @@ export class LlvmCodegen {
   }
 
   /** GEP to ObjectHeader.type_id (index 0 of the nested header). */
-  private emitObjectTypeIdPtr(className: string, objPtr: string, lines: string[]): string {
+  private emitObjectTypeIdPtr(
+    className: string,
+    objPtr: string,
+    lines: string[],
+  ): string {
     const ptr = this.nextTemp();
     lines.push(
       `  ${ptr} = getelementptr inbounds %${className}, ptr ${objPtr}, i32 0, i32 0, i32 0`,
@@ -1049,7 +1114,11 @@ export class LlvmCodegen {
   }
 
   /** GEP to ObjectHeader.vtable (index 1 of the nested header). */
-  private emitObjectVtablePtr(className: string, objPtr: string, lines: string[]): string {
+  private emitObjectVtablePtr(
+    className: string,
+    objPtr: string,
+    lines: string[],
+  ): string {
     const ptr = this.nextTemp();
     lines.push(
       `  ${ptr} = getelementptr inbounds %${className}, ptr ${objPtr}, i32 0, i32 0, i32 1`,
@@ -1091,7 +1160,10 @@ export class LlvmCodegen {
     this.classes.set(BUILTIN_ERROR_MANGLED, info);
   }
 
-  private registerInterfaceStub(decl: InterfaceDeclaration, moduleId: string): InterfaceInfo {
+  private registerInterfaceStub(
+    decl: InterfaceDeclaration,
+    moduleId: string,
+  ): InterfaceInfo {
     const mangled = mangleSymbol(moduleId, decl.name.name);
     return {
       name: mangled,
@@ -1116,7 +1188,9 @@ export class LlvmCodegen {
     const baseDefs: InterfaceInfo[] = [];
     for (const baseType of decl.bases) {
       if (baseType.namespace) {
-        throw new Error("Codegen: cross-module interface extends not resolved yet");
+        throw new Error(
+          "Codegen: cross-module interface extends not resolved yet",
+        );
       }
       const base = localInterfaces.get(baseType.name);
       if (!base) {
@@ -1167,12 +1241,15 @@ export class LlvmCodegen {
           new Map(),
         );
         if (!t) {
-          throw new Error(`Codegen: invalid interface method param '${method.name.name}'`);
+          throw new Error(
+            `Codegen: invalid interface method param '${method.name.name}'`,
+          );
         }
         return t;
       });
       const returnType =
-        method.returnType.kind === "PrimitiveType" && method.returnType.name === "void"
+        method.returnType.kind === "PrimitiveType" &&
+        method.returnType.name === "void"
           ? ("void" as const)
           : this.resolveAnnotationInModule(
               method.returnType,
@@ -1183,7 +1260,9 @@ export class LlvmCodegen {
               new Map(),
             );
       if (returnType === null) {
-        throw new Error(`Codegen: invalid interface method return '${method.name.name}'`);
+        throw new Error(
+          `Codegen: invalid interface method return '${method.name.name}'`,
+        );
       }
       methods.push({
         name: method.name.name,
@@ -1219,7 +1298,9 @@ export class LlvmCodegen {
       }
       superclass = localClasses.get(decl.superclass.name) ?? null;
       if (!superclass) {
-        throw new Error(`Codegen: unknown superclass '${decl.superclass.name}'`);
+        throw new Error(
+          `Codegen: unknown superclass '${decl.superclass.name}'`,
+        );
       }
     }
 
@@ -1265,7 +1346,10 @@ export class LlvmCodegen {
             type,
             fieldIndex: -1,
             isStatic: true,
-            staticGlobal: mangleSymbol(moduleId, `${decl.name.name}__static_${member.name.name}`),
+            staticGlobal: mangleSymbol(
+              moduleId,
+              `${decl.name.name}__static_${member.name.name}`,
+            ),
           });
         } else {
           fields.push({
@@ -1303,12 +1387,15 @@ export class LlvmCodegen {
           new Map(),
         );
         if (!t) {
-          throw new Error(`Codegen: invalid method param '${method.name.name}'`);
+          throw new Error(
+            `Codegen: invalid method param '${method.name.name}'`,
+          );
         }
         return t;
       });
       const returnType =
-        method.returnType.kind === "PrimitiveType" && method.returnType.name === "void"
+        method.returnType.kind === "PrimitiveType" &&
+        method.returnType.name === "void"
           ? ("void" as const)
           : this.resolveAnnotationInModule(
               method.returnType,
@@ -1321,7 +1408,10 @@ export class LlvmCodegen {
       if (returnType === null) {
         throw new Error(`Codegen: invalid method return '${method.name.name}'`);
       }
-      const mangledMethod = mangleSymbol(moduleId, `${decl.name.name}__${method.name.name}`);
+      const mangledMethod = mangleSymbol(
+        moduleId,
+        `${decl.name.name}__${method.name.name}`,
+      );
       if (method.isStatic) {
         staticMethods.push({
           name: method.name.name,
@@ -1392,7 +1482,10 @@ export class LlvmCodegen {
       instanceMethods,
       staticMethods,
       constructorParams,
-      constructorMangledName: mangleSymbol(moduleId, `${decl.name.name}__constructor`),
+      constructorMangledName: mangleSymbol(
+        moduleId,
+        `${decl.name.name}__constructor`,
+      ),
       constructorDecl,
       vtableGlobalName: `${mangled}__vtable`,
       typeId: this.allocateTypeId(),
@@ -1531,7 +1624,11 @@ export class LlvmCodegen {
             localInterfaces,
             namespaces,
           );
-          if (vt && typeof vt === "object" && (vt.kind === "object" || vt.kind === "struct")) {
+          if (
+            vt &&
+            typeof vt === "object" &&
+            (vt.kind === "object" || vt.kind === "struct")
+          ) {
             return vt;
           }
         }
@@ -1553,7 +1650,11 @@ export class LlvmCodegen {
         return { kind: "intersection", arms };
       }
       case "LiteralType":
-        return { kind: "literal", value: ann.value, literalKind: ann.literalKind };
+        return {
+          kind: "literal",
+          value: ann.value,
+          literalKind: ann.literalKind,
+        };
       case "ObjectType": {
         // Lower to named struct if registered, else treat as object with mangled name
         const fieldNames = ann.fields.map((f) => f.name.name).join("_");
@@ -1624,7 +1725,9 @@ export class LlvmCodegen {
             return "string";
           }
           if (inner && isStructType(inner)) {
-            const info = [...localStructs.values()].find((s) => s.name === inner.name);
+            const info = [...localStructs.values()].find(
+              (s) => s.name === inner.name,
+            );
             if (info) {
               const arms = info.fields.map((f) => ({
                 kind: "literal" as const,
@@ -1643,7 +1746,10 @@ export class LlvmCodegen {
           return "string";
         }
         if (ann.kind === "TypeofType") {
-          if (ann.expression.kind === "CallExpression" && ann.expression.callee.kind === "Identifier") {
+          if (
+            ann.expression.kind === "CallExpression" &&
+            ann.expression.callee.kind === "Identifier"
+          ) {
             const sig = this.localFunctions.get(ann.expression.callee.name);
             if (sig && sig.returnType !== "void") {
               return sig.returnType;
@@ -1669,7 +1775,9 @@ export class LlvmCodegen {
             namespaces,
           );
           const branch =
-            check && ext && isAssignable(check, ext) ? ann.trueType : ann.falseType;
+            check && ext && isAssignable(check, ext)
+              ? ann.trueType
+              : ann.falseType;
           return this.resolveAnnotationInModule(
             branch,
             localStructs,
@@ -1704,7 +1812,13 @@ export class LlvmCodegen {
           localInterfaces,
           namespaces,
         );
-        if (obj && isObjectType(obj) && idx && isLiteralType(idx) && idx.literalKind === "string") {
+        if (
+          obj &&
+          isObjectType(obj) &&
+          idx &&
+          isLiteralType(idx) &&
+          idx.literalKind === "string"
+        ) {
           const field = obj.fields.find((f) => f.name === String(idx.value));
           return (field?.type as ValueType) ?? null;
         }
@@ -1726,7 +1840,10 @@ export class LlvmCodegen {
           }
           params.push(vt);
         }
-        if (ann.returnType.kind === "PrimitiveType" && ann.returnType.name === "void") {
+        if (
+          ann.returnType.kind === "PrimitiveType" &&
+          ann.returnType.name === "void"
+        ) {
           return { kind: "function", params, returnType: "void" };
         }
         const returnType = this.resolveAnnotationInModule(
@@ -1747,7 +1864,10 @@ export class LlvmCodegen {
           const generic = this.genericTypeAliases.get(ann.name);
           if (generic && generic.typeParams.length === ann.typeArgs.length) {
             const subst = new Map(
-              generic.typeParams.map((tp, i) => [tp.name.name, ann.typeArgs[i]!]),
+              generic.typeParams.map((tp, i) => [
+                tp.name.name,
+                ann.typeArgs[i]!,
+              ]),
             );
             return this.resolveAnnotationInModule(
               substituteAnnotation(generic.type, subst),
@@ -1891,7 +2011,9 @@ export class LlvmCodegen {
         }
         const llvmTy = toLlvmType(field.type);
         const zero = zeroInitializer(field.type);
-        this.globalDefs.push(`@${field.staticGlobal} = global ${llvmTy} ${zero}`);
+        this.globalDefs.push(
+          `@${field.staticGlobal} = global ${llvmTy} ${zero}`,
+        );
       }
       if (info.instanceMethods.length === 0) {
         this.globalDefs.push(
@@ -1899,9 +2021,7 @@ export class LlvmCodegen {
         );
       } else {
         const ptrs = info.instanceMethods
-          .map((m) =>
-            m.isAbstract ? "ptr null" : `ptr @${m.mangledName}`,
-          )
+          .map((m) => (m.isAbstract ? "ptr null" : `ptr @${m.mangledName}`))
           .join(", ");
         this.globalDefs.push(
           `@${info.vtableGlobalName} = global %${info.name}__vtable_type { ${ptrs} }`,
@@ -1923,7 +2043,9 @@ export class LlvmCodegen {
         }
         const ptrs = iface.methods
           .map((req) => {
-            const method = info.instanceMethods.find((m) => m.name === req.name);
+            const method = info.instanceMethods.find(
+              (m) => m.name === req.name,
+            );
             if (!method || method.isAbstract) {
               return "ptr null";
             }
@@ -1938,7 +2060,7 @@ export class LlvmCodegen {
   }
 
   /**
-   * Emit per-class TypeInfo constants and `@tsn_init_typeinfo`, which registers
+   * Emit per-class TypeInfo constants and `@sn_init_typeinfo`, which registers
    * them with the runtime. Does not change object byte layouts.
    */
   private emitTypeInfoGlobals(): void {
@@ -1947,7 +2069,11 @@ export class LlvmCodegen {
       const fields: TypeInfoFieldConst[] = [];
       for (const field of info.fields) {
         fields.push(
-          ...this.collectTypeInfoFields(`%${info.name}`, [field.fieldIndex], field.type),
+          ...this.collectTypeInfoFields(
+            `%${info.name}`,
+            [field.fieldIndex],
+            field.type,
+          ),
         );
       }
 
@@ -1956,15 +2082,16 @@ export class LlvmCodegen {
         const elems = fields
           .map(
             (f) =>
-              `${TSN_FIELD_INFO_TYPE} { i32 ${f.offsetExpr}, i32 ${f.sizeExpr}, i32 ${f.refClass}, i32 ${f.typeId} }`,
+              `${SN_FIELD_INFO_TYPE} { i32 ${f.offsetExpr}, i32 ${f.sizeExpr}, i32 ${f.refClass}, i32 ${f.typeId} }`,
           )
           .join(", ");
         this.globalDefs.push(
-          `@${fieldsGlobal} = private unnamed_addr constant [${fields.length} x ${TSN_FIELD_INFO_TYPE}] [${elems}]`,
+          `@${fieldsGlobal} = private unnamed_addr constant [${fields.length} x ${SN_FIELD_INFO_TYPE}] [${elems}]`,
         );
       }
 
-      const fieldsPtr = fields.length === 0 ? "ptr null" : `ptr @${fieldsGlobal}`;
+      const fieldsPtr =
+        fields.length === 0 ? "ptr null" : `ptr @${fieldsGlobal}`;
       const sizeExpr = llvmSizeofI32Expr(`%${info.name}`);
       let parentTypeId = 0;
       if (info.superclass) {
@@ -1972,7 +2099,7 @@ export class LlvmCodegen {
         parentTypeId = parent?.typeId ?? 0;
       }
       this.globalDefs.push(
-        `@${info.name}__typeinfo = private unnamed_addr constant ${TSN_TYPE_INFO_TYPE} { i32 ${info.typeId}, i32 ${TSN_KIND_CLASS}, i32 ${sizeExpr}, i32 ${fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 ${parentTypeId} }`,
+        `@${info.name}__typeinfo = private unnamed_addr constant ${SN_TYPE_INFO_TYPE} { i32 ${info.typeId}, i32 ${SN_KIND_CLASS}, i32 ${sizeExpr}, i32 ${fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 ${parentTypeId} }`,
       );
     }
 
@@ -1983,29 +2110,30 @@ export class LlvmCodegen {
         const elems = env.fields
           .map(
             (f) =>
-              `${TSN_FIELD_INFO_TYPE} { i32 ${f.offsetExpr}, i32 ${f.sizeExpr}, i32 ${f.refClass}, i32 ${f.typeId} }`,
+              `${SN_FIELD_INFO_TYPE} { i32 ${f.offsetExpr}, i32 ${f.sizeExpr}, i32 ${f.refClass}, i32 ${f.typeId} }`,
           )
           .join(", ");
         this.globalDefs.push(
-          `@${fieldsGlobal} = private unnamed_addr constant [${env.fields.length} x ${TSN_FIELD_INFO_TYPE}] [${elems}]`,
+          `@${fieldsGlobal} = private unnamed_addr constant [${env.fields.length} x ${SN_FIELD_INFO_TYPE}] [${elems}]`,
         );
       }
-      const fieldsPtr = env.fields.length === 0 ? "ptr null" : `ptr @${fieldsGlobal}`;
+      const fieldsPtr =
+        env.fields.length === 0 ? "ptr null" : `ptr @${fieldsGlobal}`;
       const sizeExpr = llvmSizeofI32Expr(env.llvmType);
       this.globalDefs.push(
-        `@${env.globalName}__typeinfo = private unnamed_addr constant ${TSN_TYPE_INFO_TYPE} { i32 ${env.typeId}, i32 ${env.kind}, i32 ${sizeExpr}, i32 ${env.fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0 }`,
+        `@${env.globalName}__typeinfo = private unnamed_addr constant ${SN_TYPE_INFO_TYPE} { i32 ${env.typeId}, i32 ${env.kind}, i32 ${sizeExpr}, i32 ${env.fields.length}, ${fieldsPtr}, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0 }`,
       );
     }
 
-    const initLines: string[] = ["define void @tsn_init_typeinfo() {", "entry:"];
+    const initLines: string[] = ["define void @sn_init_typeinfo() {", "entry:"];
     for (const info of this.classes.values()) {
       initLines.push(
-        `  call void @tsn_typeinfo_register(ptr noundef @${info.name}__typeinfo)`,
+        `  call void @sn_typeinfo_register(ptr noundef @${info.name}__typeinfo)`,
       );
     }
     for (const env of this.pendingEnvTypeInfos) {
       initLines.push(
-        `  call void @tsn_typeinfo_register(ptr noundef @${env.globalName}__typeinfo)`,
+        `  call void @sn_typeinfo_register(ptr noundef @${env.globalName}__typeinfo)`,
       );
     }
     for (const info of this.classes.values()) {
@@ -2015,7 +2143,7 @@ export class LlvmCodegen {
         }
         this.needsGc = true;
         initLines.push(
-          `  call void @tsn_gc_add_global_root(ptr noundef @${field.staticGlobal})`,
+          `  call void @sn_gc_add_global_root(ptr noundef @${field.staticGlobal})`,
         );
       }
     }
@@ -2039,25 +2167,27 @@ export class LlvmCodegen {
       return type.elements.some((el) => this.typeContainsRefs(el));
     }
     if (typeof type === "object" && type.kind === "object") {
-      return type.fields.some((f) => this.typeContainsRefs(f.type as ValueType));
+      return type.fields.some((f) =>
+        this.typeContainsRefs(f.type as ValueType),
+      );
     }
     return false;
   }
 
   private relatedTypeId(type: ValueType): number {
     if (type === "string") {
-      return TSN_TYPEID_STRING;
+      return SN_TYPEID_STRING;
     }
     if (typeof type !== "object") {
       return 0;
     }
     switch (type.kind) {
       case "array":
-        return TSN_TYPEID_ARRAY;
+        return SN_TYPEID_ARRAY;
       case "map":
-        return TSN_TYPEID_MAP;
+        return SN_TYPEID_MAP;
       case "function":
-        return TSN_TYPEID_CLOSURE;
+        return SN_TYPEID_CLOSURE;
       case "class": {
         const info = this.classes.get(type.name);
         return info?.typeId ?? 0;
@@ -2083,8 +2213,8 @@ export class LlvmCodegen {
         {
           offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
           sizeExpr: llvmSizeofI32Expr("%__Callable"),
-          refClass: TSN_REF_AGG,
-          typeId: TSN_TYPEID_CLOSURE,
+          refClass: SN_REF_AGG,
+          typeId: SN_TYPEID_CLOSURE,
         },
       ];
     }
@@ -2094,7 +2224,7 @@ export class LlvmCodegen {
         {
           offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
           sizeExpr: llvmSizeofI32Expr("ptr"),
-          refClass: TSN_REF_PTR,
+          refClass: SN_REF_PTR,
           typeId: this.relatedTypeId(type),
         },
       ];
@@ -2107,7 +2237,7 @@ export class LlvmCodegen {
           {
             offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
             sizeExpr: llvmSizeofI32Expr(`%${type.name}`),
-            refClass: TSN_REF_VALUE,
+            refClass: SN_REF_VALUE,
             typeId: 0,
           },
         ];
@@ -2117,7 +2247,7 @@ export class LlvmCodegen {
           {
             offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
             sizeExpr: llvmSizeofI32Expr(`%${info.name}`),
-            refClass: TSN_REF_VALUE,
+            refClass: SN_REF_VALUE,
             typeId: 0,
           },
         ];
@@ -2126,7 +2256,7 @@ export class LlvmCodegen {
         {
           offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
           sizeExpr: llvmSizeofI32Expr(`%${info.name}`),
-          refClass: TSN_REF_AGG,
+          refClass: SN_REF_AGG,
           typeId: this.ensureAggregateTypeInfo(type),
         },
       ];
@@ -2138,7 +2268,7 @@ export class LlvmCodegen {
           {
             offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
             sizeExpr: llvmSizeofI32Expr(toLlvmType(type)),
-            refClass: TSN_REF_VALUE,
+            refClass: SN_REF_VALUE,
             typeId: 0,
           },
         ];
@@ -2147,7 +2277,7 @@ export class LlvmCodegen {
         {
           offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
           sizeExpr: llvmSizeofI32Expr(toLlvmType(type)),
-          refClass: TSN_REF_AGG,
+          refClass: SN_REF_AGG,
           typeId: this.ensureAggregateTypeInfo(type),
         },
       ];
@@ -2157,7 +2287,7 @@ export class LlvmCodegen {
       {
         offsetExpr: llvmOffsetOfExpr(aggregateLlvm, indexPath),
         sizeExpr: llvmSizeofI32Expr(toLlvmType(type)),
-        refClass: TSN_REF_VALUE,
+        refClass: SN_REF_VALUE,
         typeId: 0,
       },
     ];
@@ -2177,7 +2307,9 @@ export class LlvmCodegen {
           result.add(name);
         }
       }
-      current = current.superclass ? this.classes.get(current.superclass) : undefined;
+      current = current.superclass
+        ? this.classes.get(current.superclass)
+        : undefined;
     }
     return [...result];
   }
@@ -2203,9 +2335,13 @@ export class LlvmCodegen {
       }
       const itable = itableGlobalName(classInfo.name, iface.name);
       const undef = this.nextTemp();
-      lines.push(`  ${undef} = insertvalue %${iface.name} undef, ptr ${value.llvm}, 0`);
+      lines.push(
+        `  ${undef} = insertvalue %${iface.name} undef, ptr ${value.llvm}, 0`,
+      );
       const fat = this.nextTemp();
-      lines.push(`  ${fat} = insertvalue %${iface.name} ${undef}, ptr @${itable}, 1`);
+      lines.push(
+        `  ${fat} = insertvalue %${iface.name} ${undef}, ptr @${itable}, 1`,
+      );
       return { llvm: fat, type: expected };
     }
 
@@ -2224,9 +2360,13 @@ export class LlvmCodegen {
         return value;
       }
       const data = this.nextTemp();
-      lines.push(`  ${data} = extractvalue %${fromIface.name} ${value.llvm}, 0`);
+      lines.push(
+        `  ${data} = extractvalue %${fromIface.name} ${value.llvm}, 0`,
+      );
       const itable = this.nextTemp();
-      lines.push(`  ${itable} = extractvalue %${fromIface.name} ${value.llvm}, 1`);
+      lines.push(
+        `  ${itable} = extractvalue %${fromIface.name} ${value.llvm}, 1`,
+      );
       let adjustedItable = itable;
       if (offset !== 0) {
         const gep = this.nextTemp();
@@ -2236,7 +2376,9 @@ export class LlvmCodegen {
         adjustedItable = gep;
       }
       const undef = this.nextTemp();
-      lines.push(`  ${undef} = insertvalue %${expected.name} undef, ptr ${data}, 0`);
+      lines.push(
+        `  ${undef} = insertvalue %${expected.name} undef, ptr ${data}, 0`,
+      );
       const fat = this.nextTemp();
       lines.push(
         `  ${fat} = insertvalue %${expected.name} ${undef}, ptr ${adjustedItable}, 1`,
@@ -2253,7 +2395,11 @@ export class LlvmCodegen {
         }
         return { llvm: value.llvm, type: expected };
       }
-      if (expected.arms.every((a) => isLiteralType(a) && a.literalKind === "string")) {
+      if (
+        expected.arms.every(
+          (a) => isLiteralType(a) && a.literalKind === "string",
+        )
+      ) {
         if (
           value.type === "string" ||
           (isLiteralType(value.type) && value.type.literalKind === "string")
@@ -2261,7 +2407,11 @@ export class LlvmCodegen {
           return { llvm: value.llvm, type: expected };
         }
       }
-      if (expected.arms.every((a) => isLiteralType(a) && a.literalKind === "number")) {
+      if (
+        expected.arms.every(
+          (a) => isLiteralType(a) && a.literalKind === "number",
+        )
+      ) {
         if (
           value.type === "i32" ||
           value.type === "i64" ||
@@ -2290,7 +2440,10 @@ export class LlvmCodegen {
       if (value.type.literalKind === "string" && expected === "string") {
         return { llvm: value.llvm, type: "string" };
       }
-      if (value.type.literalKind === "number" && (expected === "i32" || expected === "i64")) {
+      if (
+        value.type.literalKind === "number" &&
+        (expected === "i32" || expected === "i64")
+      ) {
         return { llvm: value.llvm, type: expected };
       }
     }
@@ -2333,26 +2486,45 @@ export class LlvmCodegen {
   private boxNullUnion(expected: ValueType, lines: string[]): EmittedValue {
     this.needsUnionRuntime = true;
     const undef = this.nextTemp();
-    lines.push(`  ${undef} = insertvalue %__Union undef, i32 ${UNION_TAG.null}, 0`);
+    lines.push(
+      `  ${undef} = insertvalue %__Union undef, i32 ${UNION_TAG.null}, 0`,
+    );
     const boxed = this.nextTemp();
     lines.push(`  ${boxed} = insertvalue %__Union ${undef}, ptr null, 1`);
     return { llvm: boxed, type: expected };
   }
 
-  private boxUnion(value: EmittedValue, expected: ValueType, lines: string[]): EmittedValue {
+  private boxUnion(
+    value: EmittedValue,
+    expected: ValueType,
+    lines: string[],
+  ): EmittedValue {
     this.needsUnionRuntime = true;
     const tag = this.unionTagForType(value.type);
     // Store payload on heap
     const payloadSize = 8;
     const raw = this.nextTemp();
-    lines.push(`  ${raw} = call ptr @tsn_alloc(i64 ${payloadSize})`);
-      this.rootHeapPtr(raw, lines);
+    lines.push(`  ${raw} = call ptr @sn_alloc(i64 ${payloadSize})`);
+    this.rootHeapPtr(raw, lines);
     this.needsGc = true;
     const boxTypeId = this.ensureBoxTypeInfo(value.type);
-    lines.push(`  call void @tsn_gc_set_type(ptr noundef ${raw}, i32 noundef ${boxTypeId})`);
-    if (value.type === "string" || (typeof value.type === "object" && (value.type.kind === "array" || value.type.kind === "class" || value.type.kind === "map"))) {
+    lines.push(
+      `  call void @sn_gc_set_type(ptr noundef ${raw}, i32 noundef ${boxTypeId})`,
+    );
+    if (
+      value.type === "string" ||
+      (typeof value.type === "object" &&
+        (value.type.kind === "array" ||
+          value.type.kind === "class" ||
+          value.type.kind === "map"))
+    ) {
       lines.push(`  store ptr ${value.llvm}, ptr ${raw}`);
-    } else if (value.type === "i32" || value.type === "bool" || value.type === "char" || (isLiteralType(value.type) && value.type.literalKind === "number")) {
+    } else if (
+      value.type === "i32" ||
+      value.type === "bool" ||
+      value.type === "char" ||
+      (isLiteralType(value.type) && value.type.literalKind === "number")
+    ) {
       const asI32 =
         value.type === "bool"
           ? (() => {
@@ -2379,16 +2551,30 @@ export class LlvmCodegen {
     return { llvm: boxed, type: expected };
   }
 
-  private unboxUnion(value: EmittedValue, expected: ValueType, lines: string[]): EmittedValue {
+  private unboxUnion(
+    value: EmittedValue,
+    expected: ValueType,
+    lines: string[],
+  ): EmittedValue {
     this.needsUnionRuntime = true;
     const payload = this.nextTemp();
     lines.push(`  ${payload} = extractvalue %__Union ${value.llvm}, 1`);
-    if (expected === "string" || (typeof expected === "object" && (expected.kind === "array" || expected.kind === "class" || expected.kind === "map"))) {
+    if (
+      expected === "string" ||
+      (typeof expected === "object" &&
+        (expected.kind === "array" ||
+          expected.kind === "class" ||
+          expected.kind === "map"))
+    ) {
       const loaded = this.nextTemp();
       lines.push(`  ${loaded} = load ptr, ptr ${payload}`);
       return { llvm: loaded, type: expected };
     }
-    if (expected === "i32" || expected === "char" || (isLiteralType(expected) && expected.literalKind === "number")) {
+    if (
+      expected === "i32" ||
+      expected === "char" ||
+      (isLiteralType(expected) && expected.literalKind === "number")
+    ) {
       const loaded = this.nextTemp();
       lines.push(`  ${loaded} = load i32, ptr ${payload}`);
       return { llvm: loaded, type: expected === "char" ? "char" : "i32" };
@@ -2423,7 +2609,7 @@ export class LlvmCodegen {
   private pushGcRoot(slot: string, lines: string[]): void {
     this.ensureGcEntryCheckpoint(lines);
     this.needsGc = true;
-    lines.push(`  call void @tsn_gc_root_push(ptr noundef ${slot})`);
+    lines.push(`  call void @sn_gc_root_push(ptr noundef ${slot})`);
     this.gcRootCount += 1;
   }
 
@@ -2435,7 +2621,7 @@ export class LlvmCodegen {
     this.gcEntryCheckpoint = "%gc.cp";
     lines.push(`  ${this.gcEntryCheckpoint} = alloca i32`);
     const cp = this.nextTemp();
-    lines.push(`  ${cp} = call i32 @tsn_gc_root_checkpoint()`);
+    lines.push(`  ${cp} = call i32 @sn_gc_root_checkpoint()`);
     lines.push(`  store i32 ${cp}, ptr ${this.gcEntryCheckpoint}`);
   }
 
@@ -2446,7 +2632,7 @@ export class LlvmCodegen {
     this.needsGc = true;
     const cp = this.nextTemp();
     lines.push(`  ${cp} = load i32, ptr ${this.gcEntryCheckpoint}`);
-    lines.push(`  call void @tsn_gc_root_restore(i32 noundef ${cp})`);
+    lines.push(`  call void @sn_gc_root_restore(i32 noundef ${cp})`);
   }
 
   /** Emit `ret` after restoring this function's shadow-stack roots. */
@@ -2473,7 +2659,11 @@ export class LlvmCodegen {
    * Single-ptr refs root the alloca; callables root the env field; aggregates
    * with refs root each PTR leaf (and callable env fields).
    */
-  private registerRootsForStorage(storagePtr: string, type: ValueType, lines: string[]): void {
+  private registerRootsForStorage(
+    storagePtr: string,
+    type: ValueType,
+    lines: string[],
+  ): void {
     if (isSinglePtrReference(type) || type === "null") {
       this.pushGcRoot(storagePtr, lines);
       return;
@@ -2496,14 +2686,26 @@ export class LlvmCodegen {
         return;
       }
       for (let i = 0; i < info.fields.length; i += 1) {
-        this.registerRootsAtField(storagePtr, `%${info.name}`, [i], info.fields[i]!.type, lines);
+        this.registerRootsAtField(
+          storagePtr,
+          `%${info.name}`,
+          [i],
+          info.fields[i]!.type,
+          lines,
+        );
       }
       return;
     }
     if (typeof type === "object" && type.kind === "tuple") {
       const name = tupleTypeName(type.elements);
       for (let i = 0; i < type.elements.length; i += 1) {
-        this.registerRootsAtField(storagePtr, `%${name}`, [i], type.elements[i]!, lines);
+        this.registerRootsAtField(
+          storagePtr,
+          `%${name}`,
+          [i],
+          type.elements[i]!,
+          lines,
+        );
       }
     }
   }
@@ -2544,7 +2746,13 @@ export class LlvmCodegen {
         return;
       }
       for (let i = 0; i < info.fields.length; i += 1) {
-        this.registerRootsAtField(basePtr, aggregateLlvm, [...indexPath, i], info.fields[i]!.type, lines);
+        this.registerRootsAtField(
+          basePtr,
+          aggregateLlvm,
+          [...indexPath, i],
+          info.fields[i]!.type,
+          lines,
+        );
       }
       return;
     }
@@ -2606,23 +2814,23 @@ export class LlvmCodegen {
 
   private refClassForElement(elementType: ValueType): number {
     if (isSinglePtrReference(elementType) || elementType === "null") {
-      return TSN_REF_PTR;
+      return SN_REF_PTR;
     }
     if (isFunctionType(elementType) || this.typeContainsRefs(elementType)) {
-      return TSN_REF_AGG;
+      return SN_REF_AGG;
     }
-    return TSN_REF_VALUE;
+    return SN_REF_VALUE;
   }
 
   private elementTypeIdForGc(elementType: ValueType, elemRef: number): number {
-    if (elemRef === TSN_REF_VALUE) {
+    if (elemRef === SN_REF_VALUE) {
       return 0;
     }
-    if (elemRef === TSN_REF_PTR) {
+    if (elemRef === SN_REF_PTR) {
       return this.relatedTypeId(elementType);
     }
     if (isFunctionType(elementType)) {
-      return TSN_TYPEID_CLOSURE;
+      return SN_TYPEID_CLOSURE;
     }
     return this.ensureAggregateTypeInfo(elementType);
   }
@@ -2634,7 +2842,9 @@ export class LlvmCodegen {
   private ensureAggregateTypeInfo(type: ValueType): number {
     if (typeof type === "object" && type.kind === "struct") {
       const globalName = `__agg_${type.name}`;
-      const existing = this.pendingEnvTypeInfos.find((e) => e.globalName === globalName);
+      const existing = this.pendingEnvTypeInfos.find(
+        (e) => e.globalName === globalName,
+      );
       if (existing) {
         return existing.typeId;
       }
@@ -2648,13 +2858,17 @@ export class LlvmCodegen {
         typeId,
         llvmType: `%${info.name}`,
         fields: [],
-        kind: TSN_KIND_STRUCT,
+        kind: SN_KIND_STRUCT,
       };
       /* Push before collecting fields so recursive aggregates reuse this type_id. */
       this.pendingEnvTypeInfos.push(pending);
       for (let i = 0; i < info.fields.length; i += 1) {
         pending.fields.push(
-          ...this.collectTypeInfoFields(`%${info.name}`, [i], info.fields[i]!.type),
+          ...this.collectTypeInfoFields(
+            `%${info.name}`,
+            [i],
+            info.fields[i]!.type,
+          ),
         );
       }
       this.needsTypeInfo = true;
@@ -2663,7 +2877,9 @@ export class LlvmCodegen {
     if (typeof type === "object" && type.kind === "tuple") {
       const name = tupleTypeName(type.elements);
       const globalName = `__agg_${name}`;
-      const existing = this.pendingEnvTypeInfos.find((e) => e.globalName === globalName);
+      const existing = this.pendingEnvTypeInfos.find(
+        (e) => e.globalName === globalName,
+      );
       if (existing) {
         return existing.typeId;
       }
@@ -2673,11 +2889,13 @@ export class LlvmCodegen {
         typeId,
         llvmType: `%${name}`,
         fields: [],
-        kind: TSN_KIND_STRUCT,
+        kind: SN_KIND_STRUCT,
       };
       this.pendingEnvTypeInfos.push(pending);
       for (let i = 0; i < type.elements.length; i += 1) {
-        pending.fields.push(...this.collectTypeInfoFields(`%${name}`, [i], type.elements[i]!));
+        pending.fields.push(
+          ...this.collectTypeInfoFields(`%${name}`, [i], type.elements[i]!),
+        );
       }
       this.needsTypeInfo = true;
       return typeId;
@@ -2696,7 +2914,9 @@ export class LlvmCodegen {
     if (isSinglePtrReference(type) || type === "null") {
       const related = this.relatedTypeId(type);
       const globalName = `__box_ptr_${related}`;
-      const existing = this.pendingEnvTypeInfos.find((e) => e.globalName === globalName);
+      const existing = this.pendingEnvTypeInfos.find(
+        (e) => e.globalName === globalName,
+      );
       if (existing) {
         return existing.typeId;
       }
@@ -2709,24 +2929,29 @@ export class LlvmCodegen {
           {
             offsetExpr: "0",
             sizeExpr: llvmSizeofI32Expr("ptr"),
-            refClass: TSN_REF_PTR,
+            refClass: SN_REF_PTR,
             typeId: related,
           },
         ],
-        kind: TSN_KIND_STRUCT,
+        kind: SN_KIND_STRUCT,
       });
       this.needsTypeInfo = true;
       return typeId;
     }
     if (isFunctionType(type)) {
       this.needsCallableRuntime = true;
-      return TSN_TYPEID_CLOSURE;
+      return SN_TYPEID_CLOSURE;
     }
     return this.ensureAggregateTypeInfo(type);
   }
 
-  private ensureEnvTypeInfo(envTypeName: string, captures: LambdaCaptureLowering[]): number {
-    const existing = this.pendingEnvTypeInfos.find((e) => e.llvmType === `%${envTypeName}`);
+  private ensureEnvTypeInfo(
+    envTypeName: string,
+    captures: LambdaCaptureLowering[],
+  ): number {
+    const existing = this.pendingEnvTypeInfos.find(
+      (e) => e.llvmType === `%${envTypeName}`,
+    );
     if (existing) {
       return existing.typeId;
     }
@@ -2738,11 +2963,13 @@ export class LlvmCodegen {
         fields.push({
           offsetExpr: llvmOffsetOfExpr(`%${envTypeName}`, [i]),
           sizeExpr: llvmSizeofI32Expr("ptr"),
-          refClass: TSN_REF_PTR,
+          refClass: SN_REF_PTR,
           typeId: this.ensureBoxTypeInfo(cap.type),
         });
       } else {
-        fields.push(...this.collectTypeInfoFields(`%${envTypeName}`, [i], cap.type));
+        fields.push(
+          ...this.collectTypeInfoFields(`%${envTypeName}`, [i], cap.type),
+        );
       }
     }
     this.pendingEnvTypeInfos.push({
@@ -2750,7 +2977,7 @@ export class LlvmCodegen {
       typeId,
       llvmType: `%${envTypeName}`,
       fields,
-      kind: TSN_KIND_ENV,
+      kind: SN_KIND_ENV,
     });
     this.needsTypeInfo = true;
     return typeId;
@@ -2759,86 +2986,120 @@ export class LlvmCodegen {
   private emitRuntimeDeclares(): string[] {
     const declares: string[] = [];
     if (this.needsTypeInfo) {
-      declares.push("declare void @tsn_typeinfo_register(ptr noundef) nounwind");
+      declares.push("declare void @sn_typeinfo_register(ptr noundef) nounwind");
     }
     if (this.needsIsInstance) {
-      declares.push("declare i1 @tsn_is_instance(ptr noundef, i32 noundef) nounwind");
+      declares.push(
+        "declare i1 @sn_is_instance(ptr noundef, i32 noundef) nounwind",
+      );
     }
     if (this.needsGc) {
-      declares.push("declare void @tsn_gc_set_type(ptr noundef, i32 noundef) nounwind");
       declares.push(
-        "declare void @tsn_gc_set_array_meta(ptr noundef, i32 noundef, i32 noundef, i64 noundef) nounwind",
+        "declare void @sn_gc_set_type(ptr noundef, i32 noundef) nounwind",
       );
       declares.push(
-        "declare void @tsn_gc_set_map_meta(ptr noundef, i32 noundef, i32 noundef, i32 noundef, i32 noundef) nounwind",
+        "declare void @sn_gc_set_array_meta(ptr noundef, i32 noundef, i32 noundef, i64 noundef) nounwind",
       );
-      declares.push("declare void @tsn_gc_root_push(ptr noundef) nounwind");
-      declares.push("declare i32 @tsn_gc_root_checkpoint() nounwind");
-      declares.push("declare void @tsn_gc_root_restore(i32 noundef) nounwind");
-      declares.push("declare void @tsn_gc_add_global_root(ptr noundef) nounwind");
+      declares.push(
+        "declare void @sn_gc_set_map_meta(ptr noundef, i32 noundef, i32 noundef, i32 noundef, i32 noundef) nounwind",
+      );
+      declares.push("declare void @sn_gc_root_push(ptr noundef) nounwind");
+      declares.push("declare i32 @sn_gc_root_checkpoint() nounwind");
+      declares.push("declare void @sn_gc_root_restore(i32 noundef) nounwind");
+      declares.push(
+        "declare void @sn_gc_add_global_root(ptr noundef) nounwind",
+      );
     }
     if (
-      this.needsTsnAlloc ||
+      this.needsSnAlloc ||
       this.needsUnionRuntime ||
       this.needsCallableRuntime
     ) {
-      declares.push("declare ptr @tsn_alloc(i64 noundef) nounwind");
+      declares.push("declare ptr @sn_alloc(i64 noundef) nounwind");
     }
-    if (this.needsTsnString) {
-      declares.push("declare i32 @tsn_str_len(ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_concat(ptr noundef, ptr noundef) nounwind");
+    if (this.needsSnString) {
+      declares.push("declare i32 @sn_str_len(ptr noundef) nounwind");
+      declares.push(
+        "declare ptr @sn_str_concat(ptr noundef, ptr noundef) nounwind",
+      );
     }
-    if (this.needsTsnStrExtras) {
-      declares.push("declare i1 @tsn_str_contains(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare i1 @tsn_str_starts_with(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare i1 @tsn_str_ends_with(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_substring(ptr noundef, i32 noundef, i32 noundef) nounwind");
-      declares.push("declare ptr @tsn_str_trim(ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_to_upper(ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_to_lower(ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_replace(ptr noundef, ptr noundef, ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_split(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare i32 @tsn_str_index_of(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare i8 @tsn_str_char_at(ptr noundef, i32 noundef) nounwind");
-      declares.push("declare ptr @tsn_str_repeat(ptr noundef, i32 noundef) nounwind");
-      declares.push("declare ptr @tsn_str_pad_start(ptr noundef, i32 noundef, ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_pad_end(ptr noundef, i32 noundef, ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_str_join(ptr noundef, ptr noundef) nounwind");
-      declares.push("declare i32 @tsn_str_last_index_of(ptr noundef, ptr noundef) nounwind");
+    if (this.needsSnStrExtras) {
+      declares.push(
+        "declare i1 @sn_str_contains(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare i1 @sn_str_starts_with(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare i1 @sn_str_ends_with(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_str_substring(ptr noundef, i32 noundef, i32 noundef) nounwind",
+      );
+      declares.push("declare ptr @sn_str_trim(ptr noundef) nounwind");
+      declares.push("declare ptr @sn_str_to_upper(ptr noundef) nounwind");
+      declares.push("declare ptr @sn_str_to_lower(ptr noundef) nounwind");
+      declares.push(
+        "declare ptr @sn_str_replace(ptr noundef, ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_str_split(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare i32 @sn_str_index_of(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare i8 @sn_str_char_at(ptr noundef, i32 noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_str_repeat(ptr noundef, i32 noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_str_pad_start(ptr noundef, i32 noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_str_pad_end(ptr noundef, i32 noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_str_join(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push(
+        "declare i32 @sn_str_last_index_of(ptr noundef, ptr noundef) nounwind",
+      );
     }
-    // Declares for other extern symbols used from TSN.
+    // Declares for other extern symbols used from SN.
     const hardcodedExterns = new Set([
-      "tsn_str_len",
-      "tsn_str_concat",
-      "tsn_str_contains",
-      "tsn_str_starts_with",
-      "tsn_str_ends_with",
-      "tsn_str_substring",
-      "tsn_str_trim",
-      "tsn_str_to_upper",
-      "tsn_str_to_lower",
-      "tsn_str_replace",
-      "tsn_str_split",
-      "tsn_str_index_of",
-      "tsn_str_char_at",
-      "tsn_str_repeat",
-      "tsn_str_pad_start",
-      "tsn_str_pad_end",
-      "tsn_str_join",
-      "tsn_str_last_index_of",
-      "tsn_array_new",
-      "tsn_array_push",
-      "tsn_array_pop",
-      "tsn_array_index_of",
-      "tsn_print_i32",
-      "tsn_print_i64",
-      "tsn_print_f32",
-      "tsn_print_f64",
-      "tsn_print_bool",
-      "tsn_print_char",
-      "tsn_print_str",
-      "tsn_print_space",
-      "tsn_print_newline",
+      "sn_str_len",
+      "sn_str_concat",
+      "sn_str_contains",
+      "sn_str_starts_with",
+      "sn_str_ends_with",
+      "sn_str_substring",
+      "sn_str_trim",
+      "sn_str_to_upper",
+      "sn_str_to_lower",
+      "sn_str_replace",
+      "sn_str_split",
+      "sn_str_index_of",
+      "sn_str_char_at",
+      "sn_str_repeat",
+      "sn_str_pad_start",
+      "sn_str_pad_end",
+      "sn_str_join",
+      "sn_str_last_index_of",
+      "sn_array_new",
+      "sn_array_push",
+      "sn_array_pop",
+      "sn_array_index_of",
+      "sn_print_i32",
+      "sn_print_i64",
+      "sn_print_f32",
+      "sn_print_f64",
+      "sn_print_bool",
+      "sn_print_char",
+      "sn_print_str",
+      "sn_print_space",
+      "sn_print_newline",
     ]);
     for (const name of this.externDeclares) {
       if (hardcodedExterns.has(name)) {
@@ -2848,62 +3109,71 @@ export class LlvmCodegen {
       if (!sig) {
         continue;
       }
-      const ret = sig.returnType === "void" ? "void" : toLlvmType(sig.returnType);
-      const params = sig.params.map((t) => `${toLlvmType(t)} noundef`).join(", ");
+      const ret =
+        sig.returnType === "void" ? "void" : toLlvmType(sig.returnType);
+      const params = sig.params
+        .map((t) => `${toLlvmType(t)} noundef`)
+        .join(", ");
       declares.push(`declare ${ret} @${name}(${params}) nounwind`);
     }
     if (this.needsStrcmp) {
       declares.push("declare i32 @strcmp(ptr noundef, ptr noundef) nounwind");
     }
-    if (this.needsTsnArray) {
-      declares.push("declare ptr @tsn_array_new(i64 noundef, i64 noundef, i64 noundef) nounwind");
+    if (this.needsSnArray) {
       declares.push(
-        "declare void @tsn_array_push(ptr noundef, ptr noundef, i64 noundef) nounwind",
+        "declare ptr @sn_array_new(i64 noundef, i64 noundef, i64 noundef) nounwind",
       );
       declares.push(
-        "declare void @tsn_array_pop(ptr noundef, ptr noundef, i64 noundef) nounwind",
+        "declare void @sn_array_push(ptr noundef, ptr noundef, i64 noundef) nounwind",
       );
       declares.push(
-        "declare i32 @tsn_array_index_of(ptr noundef, ptr noundef, i64 noundef, i32 noundef) nounwind",
+        "declare void @sn_array_pop(ptr noundef, ptr noundef, i64 noundef) nounwind",
+      );
+      declares.push(
+        "declare i32 @sn_array_index_of(ptr noundef, ptr noundef, i64 noundef, i32 noundef) nounwind",
       );
     }
-    if (this.needsTsnMap) {
-      declares.push("declare ptr @tsn_map_new() nounwind");
-      declares.push("declare void @tsn_map_set(ptr noundef, ptr noundef, ptr noundef) nounwind");
-      declares.push("declare ptr @tsn_map_get(ptr noundef, ptr noundef) nounwind");
-    }
-    if (this.needsTsnException) {
+    if (this.needsSnMap) {
+      declares.push("declare ptr @sn_map_new() nounwind");
       declares.push(
-        "declare void @tsn_eh_init_frame(ptr noundef, i32 noundef, ptr noundef, ptr noundef)",
+        "declare void @sn_map_set(ptr noundef, ptr noundef, ptr noundef) nounwind",
       );
-      declares.push("declare void @tsn_eh_push(ptr noundef)");
-      declares.push("declare void @tsn_eh_pop(ptr noundef)");
-      declares.push("declare ptr @tsn_eh_jmp_buf(ptr noundef)");
+      declares.push(
+        "declare ptr @sn_map_get(ptr noundef, ptr noundef) nounwind",
+      );
+    }
+    if (this.needsSnException) {
+      declares.push(
+        "declare void @sn_eh_init_frame(ptr noundef, i32 noundef, ptr noundef, ptr noundef)",
+      );
+      declares.push("declare void @sn_eh_push(ptr noundef)");
+      declares.push("declare void @sn_eh_pop(ptr noundef)");
+      declares.push("declare ptr @sn_eh_jmp_buf(ptr noundef)");
       declares.push("declare i32 @setjmp(ptr noundef)");
-      declares.push("declare void @tsn_throw(ptr noundef)");
-      declares.push("declare ptr @tsn_eh_caught_exception()");
-      declares.push("declare void @tsn_eh_clear_exception()");
+      declares.push("declare void @sn_throw(ptr noundef)");
+      declares.push("declare ptr @sn_eh_caught_exception()");
+      declares.push("declare void @sn_eh_clear_exception()");
     }
-    if (this.needsTsnPrint) {
-      declares.push("declare void @tsn_print_i32(i32 noundef) nounwind");
-      declares.push("declare void @tsn_print_i64(i64 noundef) nounwind");
-      declares.push("declare void @tsn_print_f32(float noundef) nounwind");
-      declares.push("declare void @tsn_print_f64(double noundef) nounwind");
-      declares.push("declare void @tsn_print_bool(i1 noundef) nounwind");
-      declares.push("declare void @tsn_print_char(i8 noundef) nounwind");
-      declares.push("declare void @tsn_print_str(ptr noundef) nounwind");
-      declares.push("declare void @tsn_print_space() nounwind");
-      declares.push("declare void @tsn_print_newline() nounwind");
+    if (this.needsSnPrint) {
+      declares.push("declare void @sn_print_i32(i32 noundef) nounwind");
+      declares.push("declare void @sn_print_i64(i64 noundef) nounwind");
+      declares.push("declare void @sn_print_f32(float noundef) nounwind");
+      declares.push("declare void @sn_print_f64(double noundef) nounwind");
+      declares.push("declare void @sn_print_bool(i1 noundef) nounwind");
+      declares.push("declare void @sn_print_char(i8 noundef) nounwind");
+      declares.push("declare void @sn_print_str(ptr noundef) nounwind");
+      declares.push("declare void @sn_print_space() nounwind");
+      declares.push("declare void @sn_print_newline() nounwind");
     }
-    if (this.needsTsnFormat) {
-      declares.push("declare ptr @tsn_i32_to_string(i32 noundef) nounwind");
-      declares.push("declare ptr @tsn_i64_to_string(i64 noundef) nounwind");
-      declares.push("declare ptr @tsn_f32_to_string(float noundef) nounwind");
-      declares.push("declare ptr @tsn_f64_to_string(double noundef) nounwind");
-      declares.push("declare ptr @tsn_bool_to_string(i1 noundef) nounwind");
-      declares.push("declare ptr @tsn_char_to_string(i8 noundef) nounwind");
+    if (this.needsSnFormat) {
+      declares.push("declare ptr @sn_i32_to_string(i32 noundef) nounwind");
+      declares.push("declare ptr @sn_i64_to_string(i64 noundef) nounwind");
+      declares.push("declare ptr @sn_f32_to_string(float noundef) nounwind");
+      declares.push("declare ptr @sn_f64_to_string(double noundef) nounwind");
+      declares.push("declare ptr @sn_bool_to_string(i1 noundef) nounwind");
+      declares.push("declare ptr @sn_char_to_string(i8 noundef) nounwind");
       declares.push(
-        "declare ptr @tsn_array_to_string(ptr noundef, i64 noundef, i32 noundef) nounwind",
+        "declare ptr @sn_array_to_string(ptr noundef, i64 noundef, i32 noundef) nounwind",
       );
     }
     if (this.needsAbort) {
@@ -2912,7 +3182,7 @@ export class LlvmCodegen {
     return declares;
   }
 
-  private tsnCmpKindForType(elementType: ValueType): number {
+  private snCmpKindForType(elementType: ValueType): number {
     if (elementType === "i32" || isEnumType(elementType)) {
       return 0;
     }
@@ -2937,8 +3207,8 @@ export class LlvmCodegen {
     return 7;
   }
 
-  private tsnFmtKindForType(elementType: ValueType): number {
-    return this.tsnCmpKindForType(elementType);
+  private snFmtKindForType(elementType: ValueType): number {
+    return this.snCmpKindForType(elementType);
   }
 
   private emitStructMethod(struct: StructInfo, method: StructMethodInfo): void {
@@ -2951,7 +3221,8 @@ export class LlvmCodegen {
     this.thisType = { kind: "struct", name: struct.name };
     this.currentReturnType = method.returnType;
 
-    const ret = method.returnType === "void" ? "void" : toLlvmType(method.returnType);
+    const ret =
+      method.returnType === "void" ? "void" : toLlvmType(method.returnType);
     const params = [
       `ptr %this`,
       ...method.params.map((t, i) => `${toLlvmType(t)} %arg${i}`),
@@ -2991,7 +3262,10 @@ export class LlvmCodegen {
     this.emitClassConstructor(info);
     const declaredInstance = new Set(
       info.decl.members
-        .filter((m): m is ClassMethod => m.kind === "ClassMethod" && !m.isStatic && !m.isAbstract)
+        .filter(
+          (m): m is ClassMethod =>
+            m.kind === "ClassMethod" && !m.isStatic && !m.isAbstract,
+        )
         .map((m) => m.name.name),
     );
     for (const method of info.instanceMethods) {
@@ -3089,12 +3363,18 @@ export class LlvmCodegen {
     this.thisType = method.isStatic ? null : { kind: "class", name: info.name };
     this.currentReturnType = method.returnType;
 
-    const ret = method.returnType === "void" ? "void" : toLlvmType(method.returnType);
+    const ret =
+      method.returnType === "void" ? "void" : toLlvmType(method.returnType);
     const paramParts = method.isStatic
       ? method.params.map((t, i) => `${toLlvmType(t)} %arg${i}`)
-      : [`ptr %this`, ...method.params.map((t, i) => `${toLlvmType(t)} %arg${i}`)];
+      : [
+          `ptr %this`,
+          ...method.params.map((t, i) => `${toLlvmType(t)} %arg${i}`),
+        ];
     const lines: string[] = [];
-    lines.push(`define ${ret} @${method.mangledName}(${paramParts.join(", ")}) {`);
+    lines.push(
+      `define ${ret} @${method.mangledName}(${paramParts.join(", ")}) {`,
+    );
     lines.push("entry:");
     if (!method.isStatic) {
       this.rootClassThis(lines);
@@ -3127,27 +3407,41 @@ export class LlvmCodegen {
     this.endGcFunctionScope(gcScope);
   }
 
-  private emitNewExpression(expr: NewExpression, lines: string[]): EmittedValue {
-    this.needsTsnAlloc = true;
+  private emitNewExpression(
+    expr: NewExpression,
+    lines: string[],
+  ): EmittedValue {
+    this.needsSnAlloc = true;
     this.needsGc = true;
-    const classInfo = this.lookupClass(expr.className.name, expr.namespace?.name ?? null);
+    const classInfo = this.lookupClass(
+      expr.className.name,
+      expr.namespace?.name ?? null,
+    );
     if (!classInfo) {
       throw new Error(`Codegen: unknown class '${expr.className.name}'`);
     }
     const obj = this.nextTemp();
     lines.push(
-      `  ${obj} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(`%${classInfo.name}`)})`,
+      `  ${obj} = call ptr @sn_alloc(i64 noundef ${llvmSizeofExpr(`%${classInfo.name}`)})`,
     );
     this.rootHeapPtr(obj, lines);
     const typeIdPtr = this.emitObjectTypeIdPtr(classInfo.name, obj, lines);
     lines.push(`  store i32 ${classInfo.typeId}, ptr ${typeIdPtr}`);
-    lines.push(`  call void @tsn_gc_set_type(ptr noundef ${obj}, i32 noundef ${classInfo.typeId})`);
+    lines.push(
+      `  call void @sn_gc_set_type(ptr noundef ${obj}, i32 noundef ${classInfo.typeId})`,
+    );
     const vtPtr = this.emitObjectVtablePtr(classInfo.name, obj, lines);
     lines.push(`  store ptr @${classInfo.vtableGlobalName}, ptr ${vtPtr}`);
 
     const args: EmittedValue[] = [];
     for (let i = 0; i < expr.args.length; i += 1) {
-      args.push(this.emitExpression(asExpressions(expr.args)[i]!, lines, classInfo.constructorParams[i]));
+      args.push(
+        this.emitExpression(
+          asExpressions(expr.args)[i]!,
+          lines,
+          classInfo.constructorParams[i],
+        ),
+      );
     }
     const argList = [
       `ptr ${obj}`,
@@ -3173,13 +3467,15 @@ export class LlvmCodegen {
 
     const isMain = fn.name.name === "main";
     const isExtension = fn.params[0]?.isReceiver === true;
-    const header = isMain ? "define i32 @main() {" : this.emitFunctionHeader(fn);
+    const header = isMain
+      ? "define i32 @main() {"
+      : this.emitFunctionHeader(fn);
 
     lines.push(header);
     lines.push("entry:");
 
     if (isMain) {
-      lines.push("  call void @tsn_init_typeinfo()");
+      lines.push("  call void @sn_init_typeinfo()");
     }
 
     this.thisPtr = null;
@@ -3216,7 +3512,9 @@ export class LlvmCodegen {
       if (isMain || isVoid) {
         this.emitFunctionRet(lines, isMain ? "  ret i32 0" : "  ret void");
       } else {
-        throw new Error(`Codegen: non-void function '${fn.name.name}' missing return`);
+        throw new Error(
+          `Codegen: non-void function '${fn.name.name}' missing return`,
+        );
       }
     }
 
@@ -3238,12 +3536,18 @@ export class LlvmCodegen {
   private emitFunctionHeader(fn: FunctionDeclaration): string {
     const sig = this.localFunctions.get(fn.name.name)!;
     const ret = sig.returnType === "void" ? "void" : toLlvmType(sig.returnType);
-    const params = sig.params.map((t, i) => `${toLlvmType(t)} %arg${i}`).join(", ");
+    const params = sig.params
+      .map((t, i) => `${toLlvmType(t)} %arg${i}`)
+      .join(", ");
     return `define ${ret} @${sig.mangledName}(${params}) {`;
   }
 
   /** Spill incoming arg: value params copy the aggregate; reference params copy the ptr. */
-  private emitParameter(param: Parameter, index: number, lines: string[]): void {
+  private emitParameter(
+    param: Parameter,
+    index: number,
+    lines: string[],
+  ): void {
     const type = this.resolveAnnotation(param.typeAnnotation);
     if (!type) {
       throw new Error(`Codegen: invalid parameter type`);
@@ -3301,7 +3605,10 @@ export class LlvmCodegen {
     }
   }
 
-  private enclosingTryWithFinally(): Extract<ControlContext, { kind: "try" }> | null {
+  private enclosingTryWithFinally(): Extract<
+    ControlContext,
+    { kind: "try" }
+  > | null {
     for (let i = this.controlStack.length - 1; i >= 0; i -= 1) {
       const ctx = this.controlStack[i]!;
       if (ctx.kind === "try" && ctx.hasFinally) {
@@ -3322,7 +3629,7 @@ export class LlvmCodegen {
   }
 
   private emitFinallyThunk(stmts: Statement[], id: number): string {
-    const name = `__tsn_finally_${id}`;
+    const name = `__sn_finally_${id}`;
     const savedLocals = this.locals;
     const savedThisPtr = this.thisPtr;
     const savedThisType = this.thisType;
@@ -3378,7 +3685,7 @@ export class LlvmCodegen {
       this.emitFinallyBlock(finallyBlock, lines);
     }
     if (popFrame) {
-      lines.push(`  call void @tsn_eh_pop(ptr noundef ${framePtr})`);
+      lines.push(`  call void @sn_eh_pop(ptr noundef ${framePtr})`);
     }
     if (this.pendingReturn) {
       const pending = this.pendingReturn;
@@ -3386,7 +3693,10 @@ export class LlvmCodegen {
       if (pending.type === "void") {
         this.emitFunctionRet(lines, "  ret void");
       } else {
-        this.emitFunctionRet(lines, `  ret ${toLlvmType(pending.type)} ${pending.llvm}`);
+        this.emitFunctionRet(
+          lines,
+          `  ret ${toLlvmType(pending.type)} ${pending.llvm}`,
+        );
       }
       return true;
     }
@@ -3401,16 +3711,17 @@ export class LlvmCodegen {
   }
 
   private emitTryStatement(stmt: TryStatement, lines: string[]): boolean {
-    this.needsTsnException = true;
+    this.needsSnException = true;
     const id = this.labelCounter;
     this.labelCounter += 1;
 
     const hasCatch = stmt.catchClause !== null;
-    const hasFinally = stmt.finallyBlock !== null && stmt.finallyBlock.length > 0;
+    const hasFinally =
+      stmt.finallyBlock !== null && stmt.finallyBlock.length > 0;
     const finallyOnly = hasFinally && !hasCatch;
 
     const framePtr = this.nextTemp();
-    lines.push(`  ${framePtr} = alloca i8, i64 ${TSN_EH_FRAME_SIZE}`);
+    lines.push(`  ${framePtr} = alloca i8, i64 ${SN_EH_FRAME_SIZE}`);
 
     /* Pre-root catch param so gcRootCount matches both try-success and catch paths. */
     let catchPtr: string | null = null;
@@ -3424,7 +3735,11 @@ export class LlvmCodegen {
         type: { kind: "class", name: BUILTIN_ERROR_MANGLED },
         boxed: false,
       });
-      this.registerRootsForStorage(catchPtr, { kind: "class", name: BUILTIN_ERROR_MANGLED }, lines);
+      this.registerRootsForStorage(
+        catchPtr,
+        { kind: "class", name: BUILTIN_ERROR_MANGLED },
+        lines,
+      );
     }
 
     let finallyFnName: string | null = null;
@@ -3434,12 +3749,14 @@ export class LlvmCodegen {
 
     const finallyArg = finallyFnName ? `ptr @${finallyFnName}` : "ptr null";
     lines.push(
-      `  call void @tsn_eh_init_frame(ptr noundef ${framePtr}, i32 ${hasCatch ? 1 : 0}, ${finallyArg}, ptr null)`,
+      `  call void @sn_eh_init_frame(ptr noundef ${framePtr}, i32 ${hasCatch ? 1 : 0}, ${finallyArg}, ptr null)`,
     );
-    lines.push(`  call void @tsn_eh_push(ptr noundef ${framePtr})`);
+    lines.push(`  call void @sn_eh_push(ptr noundef ${framePtr})`);
 
     const jmpBuf = this.nextTemp();
-    lines.push(`  ${jmpBuf} = call ptr @tsn_eh_jmp_buf(ptr noundef ${framePtr})`);
+    lines.push(
+      `  ${jmpBuf} = call ptr @sn_eh_jmp_buf(ptr noundef ${framePtr})`,
+    );
     const sj = this.nextTemp();
     lines.push(`  ${sj} = call i32 @setjmp(ptr noundef ${jmpBuf})`);
     const isCatch = this.nextTemp();
@@ -3451,9 +3768,13 @@ export class LlvmCodegen {
     const afterLabel = `try.after.${id}`;
 
     if (hasCatch) {
-      lines.push(`  br i1 ${isCatch}, label %${catchLabel}, label %${tryLabel}`);
+      lines.push(
+        `  br i1 ${isCatch}, label %${catchLabel}, label %${tryLabel}`,
+      );
     } else {
-      lines.push(`  br i1 ${isCatch}, label %${normalLeaveLabel}, label %${tryLabel}`);
+      lines.push(
+        `  br i1 ${isCatch}, label %${normalLeaveLabel}, label %${tryLabel}`,
+      );
     }
 
     this.controlStack.push({
@@ -3489,11 +3810,11 @@ export class LlvmCodegen {
     if (catchLabel && stmt.catchClause && catchPtr) {
       lines.push(`${catchLabel}:`);
       /* Disable this catch frame so throws inside catch propagate outward. */
-      lines.push(`  call void @tsn_eh_pop(ptr noundef ${framePtr})`);
+      lines.push(`  call void @sn_eh_pop(ptr noundef ${framePtr})`);
       const err = this.nextTemp();
-      lines.push(`  ${err} = call ptr @tsn_eh_caught_exception()`);
+      lines.push(`  ${err} = call ptr @sn_eh_caught_exception()`);
       lines.push(`  store ptr ${err}, ptr ${catchPtr}`);
-      lines.push("  call void @tsn_eh_clear_exception()");
+      lines.push("  call void @sn_eh_clear_exception()");
 
       terminated = false;
       for (const s of stmt.catchClause.body) {
@@ -3530,9 +3851,9 @@ export class LlvmCodegen {
   }
 
   private emitThrowStatement(stmt: ThrowStatement, lines: string[]): boolean {
-    this.needsTsnException = true;
+    this.needsSnException = true;
     const value = this.emitExpression(stmt.expression, lines);
-    lines.push(`  call void @tsn_throw(ptr noundef ${value.llvm})`);
+    lines.push(`  call void @sn_throw(ptr noundef ${value.llvm})`);
     lines.push("  unreachable");
     return true;
   }
@@ -3593,7 +3914,9 @@ export class LlvmCodegen {
         nonDefaultIndices.push(i);
       }
     });
-    const defaultIndex = stmt.cases.findIndex((switchCase) => switchCase.isDefault);
+    const defaultIndex = stmt.cases.findIndex(
+      (switchCase) => switchCase.isDefault,
+    );
 
     if (nonDefaultIndices.length > 0) {
       lines.push(`  br label %switch.check.${id}.0`);
@@ -3650,7 +3973,9 @@ export class LlvmCodegen {
     if (disc.type === "string") {
       this.needsStrcmp = true;
       const cmp = this.nextTemp();
-      lines.push(`  ${cmp} = call i32 @strcmp(ptr ${disc.llvm}, ptr ${right.llvm})`);
+      lines.push(
+        `  ${cmp} = call i32 @strcmp(ptr ${disc.llvm}, ptr ${right.llvm})`,
+      );
       lines.push(`  ${tmp} = icmp eq i32 ${cmp}, 0`);
       return tmp;
     }
@@ -3659,7 +3984,9 @@ export class LlvmCodegen {
     const isFloat = disc.type === "f32" || disc.type === "f64";
     const cmp = isFloat ? "fcmp" : "icmp";
     const pred = isFloat ? "oeq" : "eq";
-    lines.push(`  ${tmp} = ${cmp} ${pred} ${llvmType} ${disc.llvm}, ${right.llvm}`);
+    lines.push(
+      `  ${tmp} = ${cmp} ${pred} ${llvmType} ${disc.llvm}, ${right.llvm}`,
+    );
     return tmp;
   }
 
@@ -3674,10 +4001,16 @@ export class LlvmCodegen {
 
     lines.push(`${condLabel}:`);
     const cond = this.emitExpression(stmt.condition, lines);
-    lines.push(`  br i1 ${cond.llvm}, label %${bodyLabel}, label %${exitLabel}`);
+    lines.push(
+      `  br i1 ${cond.llvm}, label %${bodyLabel}, label %${exitLabel}`,
+    );
 
     lines.push(`${bodyLabel}:`);
-    this.controlStack.push({ kind: "loop", continueLabel: condLabel, breakLabel: exitLabel });
+    this.controlStack.push({
+      kind: "loop",
+      continueLabel: condLabel,
+      breakLabel: exitLabel,
+    });
     let terminated = false;
     for (const s of stmt.body) {
       if (terminated) {
@@ -3711,13 +4044,19 @@ export class LlvmCodegen {
     lines.push(`${condLabel}:`);
     if (stmt.condition) {
       const cond = this.emitExpression(stmt.condition, lines);
-      lines.push(`  br i1 ${cond.llvm}, label %${bodyLabel}, label %${exitLabel}`);
+      lines.push(
+        `  br i1 ${cond.llvm}, label %${bodyLabel}, label %${exitLabel}`,
+      );
     } else {
       lines.push(`  br label %${bodyLabel}`);
     }
 
     lines.push(`${bodyLabel}:`);
-    this.controlStack.push({ kind: "loop", continueLabel: latchLabel, breakLabel: exitLabel });
+    this.controlStack.push({
+      kind: "loop",
+      continueLabel: latchLabel,
+      breakLabel: exitLabel,
+    });
     let terminated = false;
     for (const s of stmt.body) {
       if (terminated) {
@@ -3761,7 +4100,11 @@ export class LlvmCodegen {
     const elemLlvm = toLlvmType(elemType);
     const elemPtr = `%v.${stmt.name.name}`;
     lines.push(`  ${elemPtr} = alloca ${elemLlvm}`);
-    this.locals.set(stmt.name.name, { ptr: elemPtr, type: elemType, boxed: false });
+    this.locals.set(stmt.name.name, {
+      ptr: elemPtr,
+      type: elemType,
+      boxed: false,
+    });
 
     const length = this.emitArrayLength(iterable.llvm, lines);
 
@@ -3777,10 +4120,19 @@ export class LlvmCodegen {
     lines.push(`${bodyLabel}:`);
     const idxForLoad = this.nextTemp();
     lines.push(`  ${idxForLoad} = load i32, ptr ${idxPtr}`);
-    const element = this.emitArrayIndexLoad(iterable.llvm, idxForLoad, elemType, lines);
+    const element = this.emitArrayIndexLoad(
+      iterable.llvm,
+      idxForLoad,
+      elemType,
+      lines,
+    );
     lines.push(`  store ${elemLlvm} ${element.llvm}, ptr ${elemPtr}`);
 
-    this.controlStack.push({ kind: "loop", continueLabel: latchLabel, breakLabel: exitLabel });
+    this.controlStack.push({
+      kind: "loop",
+      continueLabel: latchLabel,
+      breakLabel: exitLabel,
+    });
     let terminated = false;
     for (const s of stmt.body) {
       if (terminated) {
@@ -3860,7 +4212,10 @@ export class LlvmCodegen {
    * Locals: value types alloca the aggregate and store a copy; reference types
    * alloca a `ptr` and store the shared reference.
    */
-  private emitVariableDeclaration(stmt: VariableDeclaration, lines: string[]): void {
+  private emitVariableDeclaration(
+    stmt: VariableDeclaration,
+    lines: string[],
+  ): void {
     if (stmt.binding.kind === "ArrayBindingPattern") {
       this.emitDestructuringDeclaration(stmt, lines);
       return;
@@ -3873,19 +4228,21 @@ export class LlvmCodegen {
     const shouldBox = mutable && this.boxedNames.has(name);
 
     if (shouldBox) {
-      this.needsTsnAlloc = true;
+      this.needsSnAlloc = true;
       this.needsCallableRuntime = true;
       const boxHolder = `%v.${name}`;
       lines.push(`  ${boxHolder} = alloca ptr`);
       this.pushGcRoot(boxHolder, lines);
       const heap = this.nextTemp();
       lines.push(
-        `  ${heap} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(llvmType)})`,
+        `  ${heap} = call ptr @sn_alloc(i64 noundef ${llvmSizeofExpr(llvmType)})`,
       );
       this.rootHeapPtr(heap, lines);
       this.needsGc = true;
       const boxTypeId = this.ensureBoxTypeInfo(type);
-      lines.push(`  call void @tsn_gc_set_type(ptr noundef ${heap}, i32 noundef ${boxTypeId})`);
+      lines.push(
+        `  call void @sn_gc_set_type(ptr noundef ${heap}, i32 noundef ${boxTypeId})`,
+      );
       lines.push(`  store ptr ${heap}, ptr ${boxHolder}`);
       this.locals.set(name, { ptr: boxHolder, type, boxed: true });
       if (stmt.initializer === null) {
@@ -3911,13 +4268,22 @@ export class LlvmCodegen {
     lines.push(`  store ${llvmType} ${init.llvm}, ptr ${ptr}`);
   }
 
-  private emitDestructuringDeclaration(stmt: VariableDeclaration, lines: string[]): void {
+  private emitDestructuringDeclaration(
+    stmt: VariableDeclaration,
+    lines: string[],
+  ): void {
     const pattern = stmt.binding;
     if (pattern.kind !== "ArrayBindingPattern" || !stmt.initializer) {
       throw new Error("Codegen: invalid destructuring declaration");
     }
-    const annotated = stmt.typeAnnotation ? this.resolveAnnotation(stmt.typeAnnotation) : null;
-    const tuple = this.emitExpression(stmt.initializer, lines, annotated ?? undefined);
+    const annotated = stmt.typeAnnotation
+      ? this.resolveAnnotation(stmt.typeAnnotation)
+      : null;
+    const tuple = this.emitExpression(
+      stmt.initializer,
+      lines,
+      annotated ?? undefined,
+    );
     if (!isTupleType(tuple.type)) {
       throw new Error("Codegen: destructuring requires a tuple");
     }
@@ -3936,7 +4302,12 @@ export class LlvmCodegen {
       }
       const elemType = tuple.type.elements[i]!;
       const elemLlvm = toLlvmType(elemType);
-      const fieldPtr = this.emitStructFieldPtr(tmp, tupleTypeName(tuple.type.elements), i, lines);
+      const fieldPtr = this.emitStructFieldPtr(
+        tmp,
+        tupleTypeName(tuple.type.elements),
+        i,
+        lines,
+      );
       const loaded = this.nextTemp();
       lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${fieldPtr}`);
       const ptr = `%v.${el.name.name}`;
@@ -4015,8 +4386,11 @@ export class LlvmCodegen {
 
     // Index assignment
     const object = this.emitExpression(stmt.target.object, lines);
-    if (isMapType(object.type) || (isObjectType(object.type) && object.type.indexType)) {
-      this.needsTsnMap = true;
+    if (
+      isMapType(object.type) ||
+      (isObjectType(object.type) && object.type.indexType)
+    ) {
+      this.needsSnMap = true;
       if (stmt.operator !== "=") {
         throw new Error("Codegen: compound assign on map element");
       }
@@ -4026,14 +4400,16 @@ export class LlvmCodegen {
       ) as ValueType;
       const value = this.emitExpression(stmt.value, lines, valueType);
       lines.push(
-        `  call void @tsn_map_set(ptr ${object.llvm}, ptr ${index.llvm}, ptr ${value.llvm})`,
+        `  call void @sn_map_set(ptr ${object.llvm}, ptr ${index.llvm}, ptr ${value.llvm})`,
       );
       return;
     }
     if (isTupleType(object.type)) {
       const constIndex = this.constantIndexValue(stmt.target.index);
       if (constIndex === null) {
-        throw new Error("Codegen: tuple element assignment requires a constant index");
+        throw new Error(
+          "Codegen: tuple element assignment requires a constant index",
+        );
       }
       if (constIndex < 0 || constIndex >= object.type.elements.length) {
         throw new Error(`Codegen: tuple index ${constIndex} out of bounds`);
@@ -4045,7 +4421,12 @@ export class LlvmCodegen {
       const llvmType = toLlvmType(object.type);
       lines.push(`  ${tmp} = alloca ${llvmType}`);
       lines.push(`  store ${llvmType} ${object.llvm}, ptr ${tmp}`);
-      const fieldPtr = this.emitStructFieldPtr(tmp, tupleName, constIndex, lines);
+      const fieldPtr = this.emitStructFieldPtr(
+        tmp,
+        tupleName,
+        constIndex,
+        lines,
+      );
 
       if (stmt.operator === "=") {
         const value = this.emitExpression(stmt.value, lines, elemType);
@@ -4064,7 +4445,9 @@ export class LlvmCodegen {
             : isFloat
               ? "fsub"
               : "sub";
-        lines.push(`  ${result} = ${opcode} ${elemLlvm} ${loaded}, ${rhs.llvm}`);
+        lines.push(
+          `  ${result} = ${opcode} ${elemLlvm} ${loaded}, ${rhs.llvm}`,
+        );
         lines.push(`  store ${elemLlvm} ${result}, ptr ${fieldPtr}`);
       }
 
@@ -4086,7 +4469,12 @@ export class LlvmCodegen {
     const indexI32 = this.asI32Index(index, lines);
     const elemType = object.type.element;
     const elemLlvm = toLlvmType(elemType);
-    const elemPtr = this.emitArrayElementPtr(object.llvm, indexI32, elemType, lines);
+    const elemPtr = this.emitArrayElementPtr(
+      object.llvm,
+      indexI32,
+      elemType,
+      lines,
+    );
 
     if (stmt.operator === "=") {
       const value = this.emitExpression(stmt.value, lines, elemType);
@@ -4155,7 +4543,10 @@ export class LlvmCodegen {
       lines.push(`  br label %${tryCtx.normalLeaveLabel}`);
       return;
     }
-    this.emitFunctionRet(lines, `  ret ${toLlvmType(value.type)} ${value.llvm}`);
+    this.emitFunctionRet(
+      lines,
+      `  ret ${toLlvmType(value.type)} ${value.llvm}`,
+    );
   }
 
   private emitCallStatement(call: CallExpression, lines: string[]): void {
@@ -4196,7 +4587,13 @@ export class LlvmCodegen {
     }
     const args: EmittedValue[] = [];
     for (let i = 0; i < call.args.length; i += 1) {
-      args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, base.constructorParams[i]));
+      args.push(
+        this.emitExpression(
+          asExpressions(call.args)[i]!,
+          lines,
+          base.constructorParams[i],
+        ),
+      );
     }
     const argList = [
       `ptr ${this.thisPtr}`,
@@ -4224,7 +4621,10 @@ export class LlvmCodegen {
       lines.push(`  ${tmp} = add i1 true, false`);
       return tmp;
     }
-    if (isNullablePointerUnion(value.type) || isSinglePtrReference(value.type)) {
+    if (
+      isNullablePointerUnion(value.type) ||
+      isSinglePtrReference(value.type)
+    ) {
       lines.push(`  ${tmp} = icmp eq ptr ${value.llvm}, null`);
       return tmp;
     }
@@ -4239,7 +4639,10 @@ export class LlvmCodegen {
     return tmp;
   }
 
-  private emitNullForResultType(resultType: ValueType, lines: string[]): EmittedValue {
+  private emitNullForResultType(
+    resultType: ValueType,
+    lines: string[],
+  ): EmittedValue {
     if (isUnionType(resultType)) {
       if (isNullablePointerUnion(resultType)) {
         return { llvm: "null", type: resultType };
@@ -4267,7 +4670,9 @@ export class LlvmCodegen {
 
     lines.push(`${accessBb}:`);
     const accessed = access(object);
-    const innerType = includesNull(resultType) ? (stripNull(resultType) as ValueType) : resultType;
+    const innerType = includesNull(resultType)
+      ? (stripNull(resultType) as ValueType)
+      : resultType;
     let accessVal = this.coerceValue(accessed, innerType, lines);
     if (isUnionType(resultType) && !isNullablePointerUnion(resultType)) {
       accessVal = this.boxUnion(accessVal, resultType, lines);
@@ -4315,7 +4720,10 @@ export class LlvmCodegen {
     return { llvm: phi, type: resultType };
   }
 
-  private inferExpressionType(expr: Expression, expected?: ValueType): ValueType {
+  private inferExpressionType(
+    expr: Expression,
+    expected?: ValueType,
+  ): ValueType {
     switch (expr.kind) {
       case "IntegerLiteral":
         return "i32";
@@ -4341,7 +4749,9 @@ export class LlvmCodegen {
           }
           throw new Error("Codegen: empty array without annotation");
         }
-        const elementTypes = expr.elements.map((el) => this.inferExpressionType(el));
+        const elementTypes = expr.elements.map((el) =>
+          this.inferExpressionType(el),
+        );
         const first = elementTypes[0]!;
         if (elementTypes.every((t) => typesEqual(t, first))) {
           return { kind: "array", element: first };
@@ -4349,14 +4759,20 @@ export class LlvmCodegen {
         return { kind: "tuple", elements: elementTypes };
       }
       case "StructLiteral": {
-        const def = this.lookupStruct(expr.namespace?.name ?? null, expr.name.name);
+        const def = this.lookupStruct(
+          expr.namespace?.name ?? null,
+          expr.name.name,
+        );
         if (!def) {
           throw new Error(`Codegen: unknown struct '${expr.name.name}'`);
         }
         return { kind: "struct", name: def.name };
       }
       case "NewExpression": {
-        const info = this.lookupClass(expr.className.name, expr.namespace?.name ?? null);
+        const info = this.lookupClass(
+          expr.className.name,
+          expr.namespace?.name ?? null,
+        );
         if (!info) {
           throw new Error(`Codegen: unknown class '${expr.className.name}'`);
         }
@@ -4374,7 +4790,10 @@ export class LlvmCodegen {
         return "string";
       case "IndexExpression": {
         let objectType = this.inferExpressionType(expr.object);
-        if (expr.optional && (includesNull(objectType) || objectType === "null")) {
+        if (
+          expr.optional &&
+          (includesNull(objectType) || objectType === "null")
+        ) {
           if (objectType === "null") {
             return "null";
           }
@@ -4429,12 +4848,20 @@ export class LlvmCodegen {
           this.localEnums.has(expr.object.name) &&
           !this.locals.has(expr.object.name)
         ) {
-          return { kind: "enum", name: this.localEnums.get(expr.object.name)!.name };
+          return {
+            kind: "enum",
+            name: this.localEnums.get(expr.object.name)!.name,
+          };
         }
-        if (expr.object.kind === "Identifier" && !this.locals.has(expr.object.name)) {
+        if (
+          expr.object.kind === "Identifier" &&
+          !this.locals.has(expr.object.name)
+        ) {
           const classInfo = this.localClasses.get(expr.object.name);
           if (classInfo) {
-            const field = classInfo.staticFields.find((f) => f.name === expr.property.name);
+            const field = classInfo.staticFields.find(
+              (f) => f.name === expr.property.name,
+            );
             if (field) {
               return field.type;
             }
@@ -4442,7 +4869,10 @@ export class LlvmCodegen {
         }
         const objectType = this.inferExpressionType(expr.object);
         let resolvedObjectType: ValueType = objectType;
-        if (expr.optional && (includesNull(objectType) || objectType === "null")) {
+        if (
+          expr.optional &&
+          (includesNull(objectType) || objectType === "null")
+        ) {
           if (objectType === "null") {
             return "null";
           }
@@ -4450,7 +4880,9 @@ export class LlvmCodegen {
         }
         let inner: ValueType;
         if (isObjectType(resolvedObjectType)) {
-          const field = resolvedObjectType.fields.find((f) => f.name === expr.property.name);
+          const field = resolvedObjectType.fields.find(
+            (f) => f.name === expr.property.name,
+          );
           if (!field) {
             throw new Error(`Codegen: unknown field '${expr.property.name}'`);
           }
@@ -4458,7 +4890,9 @@ export class LlvmCodegen {
         } else if (isStructType(resolvedObjectType)) {
           const def = this.structs.get(resolvedObjectType.name);
           if (!def) {
-            throw new Error(`Codegen: unknown struct '${resolvedObjectType.name}'`);
+            throw new Error(
+              `Codegen: unknown struct '${resolvedObjectType.name}'`,
+            );
           }
           const field = def.fields.find((f) => f.name === expr.property.name);
           if (!field) {
@@ -4468,7 +4902,9 @@ export class LlvmCodegen {
         } else if (isClassType(resolvedObjectType)) {
           const def = this.classes.get(resolvedObjectType.name);
           if (!def) {
-            throw new Error(`Codegen: unknown class '${resolvedObjectType.name}'`);
+            throw new Error(
+              `Codegen: unknown class '${resolvedObjectType.name}'`,
+            );
           }
           const field = def.fields.find((f) => f.name === expr.property.name);
           if (!field) {
@@ -4500,7 +4936,11 @@ export class LlvmCodegen {
         }
         const sig = this.localFunctions.get(expr.name);
         if (sig) {
-          return { kind: "function", params: sig.params, returnType: sig.returnType };
+          return {
+            kind: "function",
+            params: sig.params,
+            returnType: sig.returnType,
+          };
         }
         throw new Error(`Codegen: unknown variable '${expr.name}'`);
       }
@@ -4510,7 +4950,10 @@ export class LlvmCodegen {
         }
         return this.inferExpressionType(expr.operand);
       case "BinaryExpression": {
-        if (COMPARISON_OPS.has(expr.operator) || LOGICAL_OPS.has(expr.operator)) {
+        if (
+          COMPARISON_OPS.has(expr.operator) ||
+          LOGICAL_OPS.has(expr.operator)
+        ) {
           return "bool";
         }
         if (expr.operator === "+") {
@@ -4547,7 +4990,9 @@ export class LlvmCodegen {
           ) {
             const classInfo = this.localClasses.get(expr.callee.object.name);
             const methodName = expr.callee.property.name;
-            const method = classInfo?.staticMethods.find((m) => m.name === methodName);
+            const method = classInfo?.staticMethods.find(
+              (m) => m.name === methodName,
+            );
             if (method) {
               if (method.returnType === "void") {
                 throw new Error("Codegen: void static method in inference");
@@ -4556,16 +5001,23 @@ export class LlvmCodegen {
             }
           }
           const method = expr.callee.property.name;
-          const extMangled = this.extensionCallRewrites.get(expr.span.start.offset);
+          const extMangled = this.extensionCallRewrites.get(
+            expr.span.start.offset,
+          );
           if (extMangled) {
             const sig = this.functions.get(extMangled);
             if (!sig || sig.returnType === "void") {
-              throw new Error(`Codegen: unexpected extension '${extMangled}' in inference`);
+              throw new Error(
+                `Codegen: unexpected extension '${extMangled}' in inference`,
+              );
             }
             return wrapOptionalCallType(sig.returnType);
           }
           let objectType = this.inferExpressionType(expr.callee.object);
-          if (expr.optional && (includesNull(objectType) || objectType === "null")) {
+          if (
+            expr.optional &&
+            (includesNull(objectType) || objectType === "null")
+          ) {
             if (objectType === "null") {
               return "null";
             }
@@ -4591,7 +5043,9 @@ export class LlvmCodegen {
             const def = this.interfaces.get(objectType.name);
             const m = def?.methods.find((x) => x.name === method);
             if (!m || m.returnType === "void") {
-              throw new Error("Codegen: unexpected interface method in inference");
+              throw new Error(
+                "Codegen: unexpected interface method in inference",
+              );
             }
             return wrapOptionalCallType(m.returnType);
           }
@@ -4602,7 +5056,9 @@ export class LlvmCodegen {
         if (expr.callee.kind !== "Identifier") {
           // Indirect / lambda call — use expected or i32 fallback for inference
           if (expected && isFunctionType(expected)) {
-            return expected.returnType === "void" ? "i32" : (expected.returnType as ValueType);
+            return expected.returnType === "void"
+              ? "i32"
+              : (expected.returnType as ValueType);
           }
           return "i32";
         }
@@ -4612,10 +5068,16 @@ export class LlvmCodegen {
             return { kind: "map", valueType: "string" };
           }
           const local = this.locals.get(expr.callee.name);
-          if (local && isFunctionType(local.type) && local.type.returnType !== "void") {
+          if (
+            local &&
+            isFunctionType(local.type) &&
+            local.type.returnType !== "void"
+          ) {
             return local.type.returnType as ValueType;
           }
-          throw new Error(`Codegen: unexpected call in type inference '${expr.callee.name}'`);
+          throw new Error(
+            `Codegen: unexpected call in type inference '${expr.callee.name}'`,
+          );
         }
         return sig.returnType;
       }
@@ -4636,7 +5098,10 @@ export class LlvmCodegen {
         }
         let returnType: ValueType | "void" = "i32";
         if (expr.returnType) {
-          if (expr.returnType.kind === "PrimitiveType" && expr.returnType.name === "void") {
+          if (
+            expr.returnType.kind === "PrimitiveType" &&
+            expr.returnType.name === "void"
+          ) {
             returnType = "void";
           } else {
             const rt = this.resolveAnnotation(expr.returnType);
@@ -4666,7 +5131,11 @@ export class LlvmCodegen {
     }
   }
 
-  private emitExpression(expr: Expression, lines: string[], expected?: ValueType): EmittedValue {
+  private emitExpression(
+    expr: Expression,
+    lines: string[],
+    expected?: ValueType,
+  ): EmittedValue {
     const value = this.emitExpressionRaw(expr, lines, expected);
     if (expected) {
       return this.coerceValue(value, expected, lines);
@@ -4674,7 +5143,11 @@ export class LlvmCodegen {
     return value;
   }
 
-  private emitExpressionRaw(expr: Expression, lines: string[], expected?: ValueType): EmittedValue {
+  private emitExpressionRaw(
+    expr: Expression,
+    lines: string[],
+    expected?: ValueType,
+  ): EmittedValue {
     switch (expr.kind) {
       case "IntegerLiteral": {
         const type: ValueType = expected === "i64" ? "i64" : "i32";
@@ -4712,7 +5185,9 @@ export class LlvmCodegen {
         }
         if (isStructType(this.thisType)) {
           const loaded = this.nextTemp();
-          lines.push(`  ${loaded} = load %${this.thisType.name}, ptr ${this.thisPtr}`);
+          lines.push(
+            `  ${loaded} = load %${this.thisType.name}, ptr ${this.thisPtr}`,
+          );
           return { llvm: loaded, type: this.thisType };
         }
         return { llvm: this.thisPtr, type: this.thisType };
@@ -4736,7 +5211,9 @@ export class LlvmCodegen {
               `  ${objPtr} = getelementptr inbounds [${objG.length} x i8], ptr @${objG.name}, i64 0, i64 0`,
             );
             const sel = this.nextTemp();
-            lines.push(`  ${sel} = select i1 ${isNull}, ptr ${nullPtr}, ptr ${objPtr}`);
+            lines.push(
+              `  ${sel} = select i1 ${isNull}, ptr ${nullPtr}, ptr ${objPtr}`,
+            );
             return { llvm: sel, type: "string" };
           }
           this.needsUnionRuntime = true;
@@ -4781,7 +5258,9 @@ export class LlvmCodegen {
           if (def) {
             const discriminant = def.variants.get(expr.property.name);
             if (discriminant === undefined) {
-              throw new Error(`Codegen: unknown variant '${expr.property.name}'`);
+              throw new Error(
+                `Codegen: unknown variant '${expr.property.name}'`,
+              );
             }
             const type: EnumValueType = { kind: "enum", name: def.name };
             return { llvm: String(discriminant), type };
@@ -4800,10 +5279,15 @@ export class LlvmCodegen {
           const type: EnumValueType = { kind: "enum", name: def.name };
           return { llvm: String(discriminant), type };
         }
-        if (expr.object.kind === "Identifier" && !this.locals.has(expr.object.name)) {
+        if (
+          expr.object.kind === "Identifier" &&
+          !this.locals.has(expr.object.name)
+        ) {
           const classInfo = this.localClasses.get(expr.object.name);
           if (classInfo) {
-            const field = classInfo.staticFields.find((f) => f.name === expr.property.name);
+            const field = classInfo.staticFields.find(
+              (f) => f.name === expr.property.name,
+            );
             if (field?.staticGlobal) {
               const loaded = this.nextTemp();
               lines.push(
@@ -4825,33 +5309,49 @@ export class LlvmCodegen {
             const classArm = flattenUnion(objectType).find(
               (a) => typeof a === "object" && a.kind === "class",
             );
-            if (classArm && typeof classArm === "object" && classArm.kind === "class") {
+            if (
+              classArm &&
+              typeof classArm === "object" &&
+              classArm.kind === "class"
+            ) {
               const object = this.emitExpression(expr.object, lines);
               const classInfo =
-                [...this.localClasses.values()].find((c) => c.name === classArm.name) ??
-                [...this.localClasses.values()].find((c) => c.localName === classArm.name);
+                [...this.localClasses.values()].find(
+                  (c) => c.name === classArm.name,
+                ) ??
+                [...this.localClasses.values()].find(
+                  (c) => c.localName === classArm.name,
+                );
               if (!classInfo) {
                 throw new Error(`Codegen: unknown class '${classArm.name}'`);
               }
-              const field = classInfo.fields.find((f) => f.name === expr.property.name);
+              const field = classInfo.fields.find(
+                (f) => f.name === expr.property.name,
+              );
               if (!field) {
-                throw new Error(`Codegen: unknown field '${expr.property.name}'`);
+                throw new Error(
+                  `Codegen: unknown field '${expr.property.name}'`,
+                );
               }
               const fieldPtr = this.nextTemp();
               lines.push(
                 `  ${fieldPtr} = getelementptr inbounds %${classInfo.name}, ptr ${object.llvm}, i32 0, i32 ${field.fieldIndex}`,
               );
               const loaded = this.nextTemp();
-              lines.push(`  ${loaded} = load ${toLlvmType(field.type)}, ptr ${fieldPtr}`);
+              lines.push(
+                `  ${loaded} = load ${toLlvmType(field.type)}, ptr ${fieldPtr}`,
+              );
               return { llvm: loaded, type: field.type };
             }
           }
           if (expr.property.name !== "length") {
-            throw new Error(`Codegen: unknown property '${expr.property.name}'`);
+            throw new Error(
+              `Codegen: unknown property '${expr.property.name}'`,
+            );
           }
           const object = this.emitExpression(expr.object, lines);
           if (object.type === "string" || isUnionType(object.type)) {
-            this.needsTsnString = true;
+            this.needsSnString = true;
             let asString = object;
             if (isUnionType(object.type)) {
               if (isNullablePointerUnion(object.type)) {
@@ -4861,7 +5361,9 @@ export class LlvmCodegen {
               }
             }
             const len32 = this.nextTemp();
-            lines.push(`  ${len32} = call i32 @tsn_str_len(ptr ${asString.llvm})`);
+            lines.push(
+              `  ${len32} = call i32 @sn_str_len(ptr ${asString.llvm})`,
+            );
             return { llvm: len32, type: "i32" };
           }
           if (isTupleType(object.type)) {
@@ -4887,7 +5389,9 @@ export class LlvmCodegen {
         if (local) {
           const storePtr = this.storagePtr(local, lines);
           const tmp = this.nextTemp();
-          lines.push(`  ${tmp} = load ${toLlvmType(local.type)}, ptr ${storePtr}`);
+          lines.push(
+            `  ${tmp} = load ${toLlvmType(local.type)}, ptr ${storePtr}`,
+          );
           return { llvm: tmp, type: local.type };
         }
         const sig = this.localFunctions.get(expr.name);
@@ -4920,7 +5424,10 @@ export class LlvmCodegen {
           }
           return this.emitMethodCall(expr, lines, false);
         }
-        if (expr.callee.kind === "Identifier" && expr.callee.name === "createMap") {
+        if (
+          expr.callee.kind === "Identifier" &&
+          expr.callee.name === "createMap"
+        ) {
           return this.emitCreateMap(lines, expected);
         }
         return this.emitUserCall(expr, lines, false);
@@ -4936,7 +5443,11 @@ export class LlvmCodegen {
     namespaces: Map<string, NamespaceInfo>,
   ): ValueType | null {
     const indexSig = ifaceInfo.decl.indexSignature;
-    if (indexSig && ifaceInfo.methods.length === 0 && ifaceInfo.decl.methods.length === 0) {
+    if (
+      indexSig &&
+      ifaceInfo.methods.length === 0 &&
+      ifaceInfo.decl.methods.length === 0
+    ) {
       const valueType = this.resolveAnnotationInModule(
         indexSig.valueType,
         localStructs,
@@ -4952,7 +5463,10 @@ export class LlvmCodegen {
     return { kind: "interface", name: ifaceInfo.name };
   }
 
-  private lookupStruct(namespace: string | null, name: string): StructInfo | undefined {
+  private lookupStruct(
+    namespace: string | null,
+    name: string,
+  ): StructInfo | undefined {
     if (namespace) {
       return this.namespaces.get(namespace)?.structs.get(name);
     }
@@ -4973,12 +5487,17 @@ export class LlvmCodegen {
     lines: string[],
     asStatement: boolean,
   ): EmittedValue {
-    if (call.callee.kind !== "MemberExpression" || call.callee.object.kind !== "Identifier") {
+    if (
+      call.callee.kind !== "MemberExpression" ||
+      call.callee.object.kind !== "Identifier"
+    ) {
       throw new Error("Codegen: expected namespace call");
     }
     const ns = this.namespaces.get(call.callee.object.name);
     if (!ns) {
-      throw new Error(`Codegen: unknown namespace '${call.callee.object.name}'`);
+      throw new Error(
+        `Codegen: unknown namespace '${call.callee.object.name}'`,
+      );
     }
     const sig = ns.functions.get(call.callee.property.name);
     if (!sig) {
@@ -4986,10 +5505,18 @@ export class LlvmCodegen {
         `Codegen: unknown function '${call.callee.object.name}.${call.callee.property.name}'`,
       );
     }
-    return this.emitCallWithSig(sig, asExpressions(call.args), lines, asStatement);
+    return this.emitCallWithSig(
+      sig,
+      asExpressions(call.args),
+      lines,
+      asStatement,
+    );
   }
 
-  private emitStructLiteral(expr: StructLiteral, lines: string[]): EmittedValue {
+  private emitStructLiteral(
+    expr: StructLiteral,
+    lines: string[],
+  ): EmittedValue {
     const def = this.lookupStruct(expr.namespace?.name ?? null, expr.name.name);
     if (!def) {
       throw new Error(`Codegen: unknown struct '${expr.name.name}'`);
@@ -5004,11 +5531,15 @@ export class LlvmCodegen {
       const field = def.fields[i]!;
       const initExpr = inits.get(field.name);
       if (!initExpr) {
-        throw new Error(`Codegen: missing field '${field.name}' in struct literal`);
+        throw new Error(
+          `Codegen: missing field '${field.name}' in struct literal`,
+        );
       }
       const value = this.emitExpression(initExpr, lines, field.type);
       const fieldPtr = this.emitStructFieldPtr(tmp, def.name, i, lines);
-      lines.push(`  store ${toLlvmType(field.type)} ${value.llvm}, ptr ${fieldPtr}`);
+      lines.push(
+        `  store ${toLlvmType(field.type)} ${value.llvm}, ptr ${fieldPtr}`,
+      );
     }
 
     const loaded = this.nextTemp();
@@ -5016,7 +5547,10 @@ export class LlvmCodegen {
     return { llvm: loaded, type: structType };
   }
 
-  private emitStructFieldLoad(expr: MemberExpression, lines: string[]): EmittedValue {
+  private emitStructFieldLoad(
+    expr: MemberExpression,
+    lines: string[],
+  ): EmittedValue {
     const fieldPtr = this.emitMemberFieldPtr(expr, lines);
     const fieldType = this.inferExpressionType(expr);
     const loaded = this.nextTemp();
@@ -5027,10 +5561,15 @@ export class LlvmCodegen {
   /** Address of the field referenced by a MemberExpression (supports nested a.b.c). */
   private emitMemberFieldPtr(expr: MemberExpression, lines: string[]): string {
     // Static class field
-    if (expr.object.kind === "Identifier" && !this.locals.has(expr.object.name)) {
+    if (
+      expr.object.kind === "Identifier" &&
+      !this.locals.has(expr.object.name)
+    ) {
       const classInfo = this.localClasses.get(expr.object.name);
       if (classInfo) {
-        const field = classInfo.staticFields.find((f) => f.name === expr.property.name);
+        const field = classInfo.staticFields.find(
+          (f) => f.name === expr.property.name,
+        );
         if (field?.staticGlobal) {
           return `@${field.staticGlobal}`;
         }
@@ -5044,11 +5583,18 @@ export class LlvmCodegen {
       if (!def) {
         throw new Error(`Codegen: unknown struct '${objectType.name}'`);
       }
-      const fieldIndex = def.fields.findIndex((f) => f.name === expr.property.name);
+      const fieldIndex = def.fields.findIndex(
+        (f) => f.name === expr.property.name,
+      );
       if (fieldIndex < 0) {
         throw new Error(`Codegen: unknown field '${expr.property.name}'`);
       }
-      return this.emitStructFieldPtr(structPtr, objectType.name, fieldIndex, lines);
+      return this.emitStructFieldPtr(
+        structPtr,
+        objectType.name,
+        fieldIndex,
+        lines,
+      );
     }
     if (isClassType(objectType)) {
       const obj = this.emitExpression(expr.object, lines);
@@ -5069,7 +5615,10 @@ export class LlvmCodegen {
     throw new Error("Codegen: member field on non-struct/class");
   }
 
-  private emitClassFieldLoad(expr: MemberExpression, lines: string[]): EmittedValue {
+  private emitClassFieldLoad(
+    expr: MemberExpression,
+    lines: string[],
+  ): EmittedValue {
     const fieldPtr = this.emitMemberFieldPtr(expr, lines);
     const fieldType = this.inferExpressionType(expr);
     const loaded = this.nextTemp();
@@ -5108,7 +5657,9 @@ export class LlvmCodegen {
       if (!def) {
         throw new Error(`Codegen: unknown struct '${objectType.name}'`);
       }
-      const fieldIndex = def.fields.findIndex((f) => f.name === expr.property.name);
+      const fieldIndex = def.fields.findIndex(
+        (f) => f.name === expr.property.name,
+      );
       if (fieldIndex < 0) {
         throw new Error(`Codegen: unknown field '${expr.property.name}'`);
       }
@@ -5116,7 +5667,12 @@ export class LlvmCodegen {
       if (!isStructType(fieldType) || fieldType.name !== expected.name) {
         throw new Error("Codegen: nested field is not the expected struct");
       }
-      return this.emitStructFieldPtr(parentPtr, objectType.name, fieldIndex, lines);
+      return this.emitStructFieldPtr(
+        parentPtr,
+        objectType.name,
+        fieldIndex,
+        lines,
+      );
     }
 
     const value = this.emitExpression(expr, lines, expected);
@@ -5148,7 +5704,7 @@ export class LlvmCodegen {
     lines: string[],
     expected?: ValueType,
   ): EmittedValue {
-    this.needsTsnArray = true;
+    this.needsSnArray = true;
 
     let elementType: ValueType;
     if (expected && isArrayType(expected)) {
@@ -5171,17 +5727,19 @@ export class LlvmCodegen {
     const header = this.nextTemp();
     this.needsGc = true;
     lines.push(
-      `  ${header} = call ptr @tsn_array_new(i64 noundef ${length}, i64 noundef ${capacity}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
+      `  ${header} = call ptr @sn_array_new(i64 noundef ${length}, i64 noundef ${capacity}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
     this.rootHeapPtr(header, lines);
     const elemRef = this.refClassForElement(elementType);
     const elemTypeId = this.elementTypeIdForGc(elementType, elemRef);
     lines.push(
-      `  call void @tsn_gc_set_array_meta(ptr noundef ${header}, i32 noundef ${elemRef}, i32 noundef ${elemTypeId}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
+      `  call void @sn_gc_set_array_meta(ptr noundef ${header}, i32 noundef ${elemRef}, i32 noundef ${elemTypeId}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
 
     const dataField = this.nextTemp();
-    lines.push(`  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`);
+    lines.push(
+      `  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`,
+    );
     const data = this.nextTemp();
     lines.push(`  ${data} = load ptr, ptr ${dataField}`);
 
@@ -5209,7 +5767,10 @@ export class LlvmCodegen {
       const elementTypes = elements.map((el) => this.inferExpressionType(el));
       const first = elementTypes[0]!;
       if (!elementTypes.every((t) => typesEqual(t, first))) {
-        const tupleType: TupleValueType = { kind: "tuple", elements: elementTypes };
+        const tupleType: TupleValueType = {
+          kind: "tuple",
+          elements: elementTypes,
+        };
         return this.emitTupleLiteral(elements, tupleType, lines);
       }
     }
@@ -5232,7 +5793,9 @@ export class LlvmCodegen {
       const elemType = tupleType.elements[i]!;
       const value = this.emitExpression(elements[i]!, lines, elemType);
       const fieldPtr = this.emitStructFieldPtr(tmp, name, i, lines);
-      lines.push(`  store ${toLlvmType(elemType)} ${value.llvm}, ptr ${fieldPtr}`);
+      lines.push(
+        `  store ${toLlvmType(elemType)} ${value.llvm}, ptr ${fieldPtr}`,
+      );
     }
     const loaded = this.nextTemp();
     lines.push(`  ${loaded} = load ${llvmType}, ptr ${tmp}`);
@@ -5311,9 +5874,15 @@ export class LlvmCodegen {
     lines.push(`  ${resultPtr} = alloca ${resultLlvm}`);
 
     const defaultLabel = this.nextLabel("tuple_idx_default");
-    const caseLabels = tupleType.elements.map((_, i) => this.nextLabel(`tuple_idx_${i}`));
-    const switchCases = caseLabels.map((lab, i) => `i32 ${i}, label %${lab}`).join(" ");
-    lines.push(`  switch i32 ${indexI32}, label %${defaultLabel} [ ${switchCases} ]`);
+    const caseLabels = tupleType.elements.map((_, i) =>
+      this.nextLabel(`tuple_idx_${i}`),
+    );
+    const switchCases = caseLabels
+      .map((lab, i) => `i32 ${i}, label %${lab}`)
+      .join(" ");
+    lines.push(
+      `  switch i32 ${indexI32}, label %${defaultLabel} [ ${switchCases} ]`,
+    );
 
     for (let i = 0; i < tupleType.elements.length; i += 1) {
       lines.push(`${caseLabels[i]!}:`);
@@ -5321,7 +5890,11 @@ export class LlvmCodegen {
       const fieldPtr = this.emitStructFieldPtr(tmp, name, i, lines);
       const loaded = this.nextTemp();
       lines.push(`  ${loaded} = load ${toLlvmType(elemType)}, ptr ${fieldPtr}`);
-      const boxed = this.coerceValue({ llvm: loaded, type: elemType }, resultType, lines);
+      const boxed = this.coerceValue(
+        { llvm: loaded, type: elemType },
+        resultType,
+        lines,
+      );
       lines.push(`  store ${resultLlvm} ${boxed.llvm}, ptr ${resultPtr}`);
       lines.push(`  br label %${contLabel}`);
     }
@@ -5359,7 +5932,9 @@ export class LlvmCodegen {
     lines: string[],
   ): string {
     const dataField = this.nextTemp();
-    lines.push(`  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`);
+    lines.push(
+      `  ${dataField} = getelementptr inbounds i8, ptr ${header}, i64 16`,
+    );
     const data = this.nextTemp();
     lines.push(`  ${data} = load ptr, ptr ${dataField}`);
     const index64 = this.nextTemp();
@@ -5409,10 +5984,12 @@ export class LlvmCodegen {
       }
     }
     if (isMapType(obj.type) || (isObjectType(obj.type) && obj.type.indexType)) {
-      this.needsTsnMap = true;
+      this.needsSnMap = true;
       const index = this.emitExpression(expr.index, lines, "string");
       const result = this.nextTemp();
-      lines.push(`  ${result} = call ptr @tsn_map_get(ptr ${obj.llvm}, ptr ${index.llvm})`);
+      lines.push(
+        `  ${result} = call ptr @sn_map_get(ptr ${obj.llvm}, ptr ${index.llvm})`,
+      );
       const valueType = isMapType(obj.type)
         ? (obj.type.valueType as ValueType)
         : (obj.type.indexType as ValueType);
@@ -5434,7 +6011,10 @@ export class LlvmCodegen {
     object: EmittedValue,
     lines: string[],
   ): EmittedValue {
-    const objectType = object.type === "null" ? object.type : this.inferExpressionType(expr.object);
+    const objectType =
+      object.type === "null"
+        ? object.type
+        : this.inferExpressionType(expr.object);
     let resolvedType = objectType;
     if (includesNull(objectType) || objectType === "null") {
       resolvedType = stripNull(objectType) as ValueType;
@@ -5444,7 +6024,9 @@ export class LlvmCodegen {
       if (!def) {
         throw new Error(`Codegen: unknown struct '${resolvedType.name}'`);
       }
-      const fieldIndex = def.fields.findIndex((f) => f.name === expr.property.name);
+      const fieldIndex = def.fields.findIndex(
+        (f) => f.name === expr.property.name,
+      );
       if (fieldIndex < 0) {
         throw new Error(`Codegen: unknown field '${expr.property.name}'`);
       }
@@ -5454,7 +6036,9 @@ export class LlvmCodegen {
         `  ${fieldPtr} = getelementptr inbounds %${def.name}, ${toLlvmType(resolvedType)} ${object.llvm}, i32 0, i32 ${fieldIndex}`,
       );
       const loaded = this.nextTemp();
-      lines.push(`  ${loaded} = load ${toLlvmType(field.type)}, ptr ${fieldPtr}`);
+      lines.push(
+        `  ${loaded} = load ${toLlvmType(field.type)}, ptr ${fieldPtr}`,
+      );
       return { llvm: loaded, type: field.type };
     }
     if (isClassType(resolvedType)) {
@@ -5471,12 +6055,14 @@ export class LlvmCodegen {
         `  ${fieldPtr} = getelementptr inbounds %${def.name}, ptr ${object.llvm}, i32 0, i32 ${field.fieldIndex}`,
       );
       const loaded = this.nextTemp();
-      lines.push(`  ${loaded} = load ${toLlvmType(field.type)}, ptr ${fieldPtr}`);
+      lines.push(
+        `  ${loaded} = load ${toLlvmType(field.type)}, ptr ${fieldPtr}`,
+      );
       return { llvm: loaded, type: field.type };
     }
     if (expr.property.name === "length") {
       if (object.type === "string" || isUnionType(object.type)) {
-        this.needsTsnString = true;
+        this.needsSnString = true;
         let asString = object;
         if (isUnionType(object.type) && !isNullablePointerUnion(object.type)) {
           asString = this.unboxUnion(object, "string", lines);
@@ -5484,7 +6070,7 @@ export class LlvmCodegen {
           asString = { llvm: object.llvm, type: "string" };
         }
         const len32 = this.nextTemp();
-        lines.push(`  ${len32} = call i32 @tsn_str_len(ptr ${asString.llvm})`);
+        lines.push(`  ${len32} = call i32 @sn_str_len(ptr ${asString.llvm})`);
         return { llvm: len32, type: "i32" };
       }
       if (isTupleType(object.type)) {
@@ -5517,7 +6103,8 @@ export class LlvmCodegen {
       if (!sig) {
         throw new Error(`Codegen: unknown extension target '${extMangled}'`);
       }
-      const object = objectOverride ?? this.emitExpression(callee.object, lines);
+      const object =
+        objectOverride ?? this.emitExpression(callee.object, lines);
       if (objectOverride) {
         const rest = asExpressions(call.args);
         const emitted: EmittedValue[] = [object];
@@ -5531,15 +6118,28 @@ export class LlvmCodegen {
     }
 
     // Static method: ClassName.method(...)
-    if (callee.object.kind === "Identifier" && !this.locals.has(callee.object.name)) {
+    if (
+      callee.object.kind === "Identifier" &&
+      !this.locals.has(callee.object.name)
+    ) {
       const classInfo = this.localClasses.get(callee.object.name);
-      const method = classInfo?.staticMethods.find((m) => m.name === callee.property.name);
+      const method = classInfo?.staticMethods.find(
+        (m) => m.name === callee.property.name,
+      );
       if (method) {
         const args: EmittedValue[] = [];
         for (let i = 0; i < call.args.length; i += 1) {
-          args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
+          args.push(
+            this.emitExpression(
+              asExpressions(call.args)[i]!,
+              lines,
+              method.params[i],
+            ),
+          );
         }
-        const argList = args.map((a) => `${toLlvmType(a.type)} ${a.llvm}`).join(", ");
+        const argList = args
+          .map((a) => `${toLlvmType(a.type)} ${a.llvm}`)
+          .join(", ");
         if (method.returnType === "void") {
           lines.push(`  call void @${method.mangledName}(${argList})`);
           if (!asStatement) {
@@ -5549,7 +6149,9 @@ export class LlvmCodegen {
         }
         const tmp = this.nextTemp();
         const retTy = toLlvmType(method.returnType);
-        lines.push(`  ${tmp} = call ${retTy} @${method.mangledName}(${argList})`);
+        lines.push(
+          `  ${tmp} = call ${retTy} @${method.mangledName}(${argList})`,
+        );
         return { llvm: tmp, type: method.returnType };
       }
     }
@@ -5558,7 +6160,9 @@ export class LlvmCodegen {
     if (objectOverride) {
       objectType = objectOverride.type;
       if (objectType === "null") {
-        throw new Error("Codegen: optional call on null object in access block");
+        throw new Error(
+          "Codegen: optional call on null object in access block",
+        );
       }
       if (includesNull(objectType)) {
         objectType = stripNull(objectType) as ValueType;
@@ -5569,12 +6173,20 @@ export class LlvmCodegen {
       const def = this.structs.get(objectType.name);
       const method = def?.methods.find((m) => m.name === callee.property.name);
       if (!def || !method) {
-        throw new Error(`Codegen: unknown struct method '${callee.property.name}'`);
+        throw new Error(
+          `Codegen: unknown struct method '${callee.property.name}'`,
+        );
       }
       const thisAddr = this.emitStructAddress(callee.object, objectType, lines);
       const args: EmittedValue[] = [];
       for (let i = 0; i < call.args.length; i += 1) {
-        args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
+        args.push(
+          this.emitExpression(
+            asExpressions(call.args)[i]!,
+            lines,
+            method.params[i],
+          ),
+        );
       }
       const argList = [
         `ptr ${thisAddr}`,
@@ -5595,14 +6207,24 @@ export class LlvmCodegen {
 
     if (isClassType(objectType)) {
       const def = this.classes.get(objectType.name);
-      const method = def?.instanceMethods.find((m) => m.name === callee.property.name);
+      const method = def?.instanceMethods.find(
+        (m) => m.name === callee.property.name,
+      );
       if (!def || !method) {
-        throw new Error(`Codegen: unknown class method '${callee.property.name}'`);
+        throw new Error(
+          `Codegen: unknown class method '${callee.property.name}'`,
+        );
       }
       const obj = objectOverride ?? this.emitExpression(callee.object, lines);
       const args: EmittedValue[] = [];
       for (let i = 0; i < call.args.length; i += 1) {
-        args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
+        args.push(
+          this.emitExpression(
+            asExpressions(call.args)[i]!,
+            lines,
+            method.params[i],
+          ),
+        );
       }
       const argList = [
         `ptr ${obj.llvm}`,
@@ -5624,7 +6246,9 @@ export class LlvmCodegen {
         }
         const tmp = this.nextTemp();
         const retTy = toLlvmType(method.returnType);
-        lines.push(`  ${tmp} = call ${retTy} @${method.mangledName}(${argList})`);
+        lines.push(
+          `  ${tmp} = call ${retTy} @${method.mangledName}(${argList})`,
+        );
         return { llvm: tmp, type: method.returnType };
       }
 
@@ -5655,12 +6279,20 @@ export class LlvmCodegen {
       const def = this.interfaces.get(objectType.name);
       const method = def?.methods.find((m) => m.name === callee.property.name);
       if (!def || !method) {
-        throw new Error(`Codegen: unknown interface method '${callee.property.name}'`);
+        throw new Error(
+          `Codegen: unknown interface method '${callee.property.name}'`,
+        );
       }
       const obj = objectOverride ?? this.emitExpression(callee.object, lines);
       const args: EmittedValue[] = [];
       for (let i = 0; i < call.args.length; i += 1) {
-        args.push(this.emitExpression(asExpressions(call.args)[i]!, lines, method.params[i]));
+        args.push(
+          this.emitExpression(
+            asExpressions(call.args)[i]!,
+            lines,
+            method.params[i],
+          ),
+        );
       }
       const data = this.nextTemp();
       lines.push(`  ${data} = extractvalue %${def.name} ${obj.llvm}, 0`);
@@ -5700,24 +6332,28 @@ export class LlvmCodegen {
     elementType: ValueType,
     lines: string[],
   ): void {
-    this.needsTsnArray = true;
+    this.needsSnArray = true;
     const elemLlvm = toLlvmType(elementType);
     const valuePtr = this.nextTemp();
     lines.push(`  ${valuePtr} = alloca ${elemLlvm}`);
     lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${valuePtr}`);
     lines.push(
-      `  call void @tsn_array_push(ptr noundef ${header}, ptr noundef ${valuePtr}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
+      `  call void @sn_array_push(ptr noundef ${header}, ptr noundef ${valuePtr}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
   }
 
-  private emitArrayPop(header: string, elementType: ValueType, lines: string[]): EmittedValue {
-    this.needsTsnArray = true;
+  private emitArrayPop(
+    header: string,
+    elementType: ValueType,
+    lines: string[],
+  ): EmittedValue {
+    this.needsSnArray = true;
     this.needsAbort = true;
     const elemLlvm = toLlvmType(elementType);
     const dest = this.nextTemp();
     lines.push(`  ${dest} = alloca ${elemLlvm}`);
     lines.push(
-      `  call void @tsn_array_pop(ptr noundef ${header}, ptr noundef ${dest}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
+      `  call void @sn_array_pop(ptr noundef ${header}, ptr noundef ${dest}, i64 noundef ${llvmSizeofExpr(elemLlvm)})`,
     );
     const loaded = this.nextTemp();
     lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${dest}`);
@@ -5742,15 +6378,15 @@ export class LlvmCodegen {
     elementType: ValueType,
     lines: string[],
   ): EmittedValue {
-    this.needsTsnArray = true;
-    const cmpKind = this.tsnCmpKindForType(elementType);
+    this.needsSnArray = true;
+    const cmpKind = this.snCmpKindForType(elementType);
     const elemLlvm = toLlvmType(elementType);
     const needlePtr = this.nextTemp();
     lines.push(`  ${needlePtr} = alloca ${elemLlvm}`);
     lines.push(`  store ${elemLlvm} ${needle.llvm}, ptr ${needlePtr}`);
     const result = this.nextTemp();
     lines.push(
-      `  ${result} = call i32 @tsn_array_index_of(ptr noundef ${header}, ptr noundef ${needlePtr}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${cmpKind})`,
+      `  ${result} = call i32 @sn_array_index_of(ptr noundef ${header}, ptr noundef ${needlePtr}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${cmpKind})`,
     );
     return { llvm: result, type: "i32" };
   }
@@ -5820,7 +6456,9 @@ export class LlvmCodegen {
 
     // Class match via type_id ancestry (subclass is Base succeeds).
     if (typeof targetType === "object" && targetType.kind === "class") {
-      const classInfo = this.localClasses.get(targetType.name) ?? [...this.localClasses.values()].find((c) => c.name === targetType.name);
+      const classInfo =
+        this.localClasses.get(targetType.name) ??
+        [...this.localClasses.values()].find((c) => c.name === targetType.name);
       // Also search all modules
       let info = classInfo;
       if (!info) {
@@ -5858,7 +6496,9 @@ export class LlvmCodegen {
         }
       }
       if (!info) {
-        throw new Error(`Codegen: unknown class for is-check '${targetType.name}'`);
+        throw new Error(
+          `Codegen: unknown class for is-check '${targetType.name}'`,
+        );
       }
 
       this.needsTypeInfo = true;
@@ -5877,14 +6517,14 @@ export class LlvmCodegen {
         lines.push(`  ${loaded} = load ptr, ptr ${payload}`);
         const match = this.nextTemp();
         lines.push(
-          `  ${match} = call i1 @tsn_is_instance(ptr noundef ${loaded}, i32 noundef ${info.typeId})`,
+          `  ${match} = call i1 @sn_is_instance(ptr noundef ${loaded}, i32 noundef ${info.typeId})`,
         );
         lines.push(`  ${tmp} = and i1 ${isObj}, ${match}`);
         return { llvm: tmp, type: "bool" };
       }
       if (isNullablePointerUnion(value.type) || isClassType(value.type)) {
         lines.push(
-          `  ${tmp} = call i1 @tsn_is_instance(ptr noundef ${objPtr}, i32 noundef ${info.typeId})`,
+          `  ${tmp} = call i1 @sn_is_instance(ptr noundef ${objPtr}, i32 noundef ${info.typeId})`,
         );
         return { llvm: tmp, type: "bool" };
       }
@@ -5904,7 +6544,8 @@ export class LlvmCodegen {
     if (isNullablePointerUnion(value.type)) {
       const nonNull = flattenUnion(value.type).filter((a) => a !== "null");
       const matches = nonNull.some(
-        (arm) => this.unionTagForType(arm as ValueType) === wantTag ||
+        (arm) =>
+          this.unionTagForType(arm as ValueType) === wantTag ||
           (typeof targetType === "object" &&
             typeof arm === "object" &&
             arm.kind === targetType.kind &&
@@ -5923,7 +6564,9 @@ export class LlvmCodegen {
 
     // Static knowledge
     const actualTag = this.unionTagForType(value.type);
-    lines.push(`  ${tmp} = add i1 ${actualTag === wantTag ? "true" : "false"}, false`);
+    lines.push(
+      `  ${tmp} = add i1 ${actualTag === wantTag ? "true" : "false"}, false`,
+    );
     return { llvm: tmp, type: "bool" };
   }
 
@@ -5957,10 +6600,14 @@ export class LlvmCodegen {
       (expr.operator === "==" || expr.operator === "!=") &&
       (expr.left.kind === "NullLiteral" || expr.right.kind === "NullLiteral")
     ) {
-      const nonNullExpr = expr.left.kind === "NullLiteral" ? expr.right : expr.left;
+      const nonNullExpr =
+        expr.left.kind === "NullLiteral" ? expr.right : expr.left;
       const value = this.emitExpression(nonNullExpr, lines);
       const tmp = this.nextTemp();
-      if (isNullablePointerUnion(value.type) || isSinglePtrReference(value.type)) {
+      if (
+        isNullablePointerUnion(value.type) ||
+        isSinglePtrReference(value.type)
+      ) {
         const pred = expr.operator === "==" ? "eq" : "ne";
         lines.push(`  ${tmp} = icmp ${pred} ptr ${value.llvm}, null`);
         return { llvm: tmp, type: "bool" };
@@ -5974,7 +6621,9 @@ export class LlvmCodegen {
         return { llvm: tmp, type: "bool" };
       }
       // Fallback: never null
-      lines.push(`  ${tmp} = add i1 ${expr.operator === "==" ? "false" : "true"}, false`);
+      lines.push(
+        `  ${tmp} = add i1 ${expr.operator === "==" ? "false" : "true"}, false`,
+      );
       return { llvm: tmp, type: "bool" };
     }
 
@@ -5989,7 +6638,10 @@ export class LlvmCodegen {
         right = this.unboxUnion(right, left.type, lines);
       }
     } else if (isUnionType(left.type) && isUnionType(right.type)) {
-      if (!isNullablePointerUnion(left.type) && !isNullablePointerUnion(right.type)) {
+      if (
+        !isNullablePointerUnion(left.type) &&
+        !isNullablePointerUnion(right.type)
+      ) {
         left = this.unboxUnion(left, "i32", lines);
         right = this.unboxUnion(right, "i32", lines);
       }
@@ -6016,7 +6668,9 @@ export class LlvmCodegen {
     ) {
       this.needsStrcmp = true;
       const cmp = this.nextTemp();
-      lines.push(`  ${cmp} = call i32 @strcmp(ptr ${left.llvm}, ptr ${right.llvm})`);
+      lines.push(
+        `  ${cmp} = call i32 @strcmp(ptr ${left.llvm}, ptr ${right.llvm})`,
+      );
       const pred = expr.operator === "==" ? "eq" : "ne";
       lines.push(`  ${tmp} = icmp ${pred} i32 ${cmp}, 0`);
       return { llvm: tmp, type: "bool" };
@@ -6026,7 +6680,9 @@ export class LlvmCodegen {
       const pred = comparisonPredicate(expr.operator, left.type);
       const isFloat = left.type === "f32" || left.type === "f64";
       const cmp = isFloat ? "fcmp" : "icmp";
-      lines.push(`  ${tmp} = ${cmp} ${pred} ${llvmType} ${left.llvm}, ${right.llvm}`);
+      lines.push(
+        `  ${tmp} = ${cmp} ${pred} ${llvmType} ${left.llvm}, ${right.llvm}`,
+      );
       return { llvm: tmp, type: "bool" };
     }
 
@@ -6049,14 +6705,22 @@ export class LlvmCodegen {
         opcode = isFloat ? "frem" : "srem";
         break;
       default:
-        throw new Error(`Codegen: unexpected arithmetic operator '${expr.operator}'`);
+        throw new Error(
+          `Codegen: unexpected arithmetic operator '${expr.operator}'`,
+        );
     }
     lines.push(`  ${tmp} = ${opcode} ${llvmType} ${left.llvm}, ${right.llvm}`);
     return { llvm: tmp, type: left.type };
   }
 
-  private emitStringConcat(expr: BinaryExpression, lines: string[]): EmittedValue {
-    if (expr.left.kind === "StringLiteral" && expr.right.kind === "StringLiteral") {
+  private emitStringConcat(
+    expr: BinaryExpression,
+    lines: string[],
+  ): EmittedValue {
+    if (
+      expr.left.kind === "StringLiteral" &&
+      expr.right.kind === "StringLiteral"
+    ) {
       const folded = expr.left.value + expr.right.value;
       const global = this.internString(folded);
       const tmp = this.nextTemp();
@@ -6066,7 +6730,7 @@ export class LlvmCodegen {
       return { llvm: tmp, type: "string" };
     }
 
-    this.needsTsnString = true;
+    this.needsSnString = true;
     this.needsGc = true;
     let left = this.emitExpression(expr.left, lines);
     let right = this.emitExpression(expr.right, lines);
@@ -6074,34 +6738,54 @@ export class LlvmCodegen {
     right = this.coerceToString(right, lines);
     const buf = this.nextTemp();
     lines.push(
-      `  ${buf} = call ptr @tsn_str_concat(ptr noundef ${left.llvm}, ptr noundef ${right.llvm})`,
+      `  ${buf} = call ptr @sn_str_concat(ptr noundef ${left.llvm}, ptr noundef ${right.llvm})`,
     );
     this.rootHeapPtr(buf, lines);
     return { llvm: buf, type: "string" };
   }
 
-  /** Coerce a printable scalar to a heap string via tsn_*_to_string. */
+  /** Coerce a printable scalar to a heap string via sn_*_to_string. */
   private coerceToString(value: EmittedValue, lines: string[]): EmittedValue {
-    if (value.type === "string" || (isLiteralType(value.type) && value.type.literalKind === "string")) {
+    if (
+      value.type === "string" ||
+      (isLiteralType(value.type) && value.type.literalKind === "string")
+    ) {
       return { llvm: value.llvm, type: "string" };
     }
-    this.needsTsnFormat = true;
+    this.needsSnFormat = true;
     this.needsGc = true;
     const buf = this.nextTemp();
     if (value.type === "i32" || isEnumType(value.type)) {
-      lines.push(`  ${buf} = call ptr @tsn_i32_to_string(i32 noundef ${value.llvm})`);
+      lines.push(
+        `  ${buf} = call ptr @sn_i32_to_string(i32 noundef ${value.llvm})`,
+      );
     } else if (value.type === "i64") {
-      lines.push(`  ${buf} = call ptr @tsn_i64_to_string(i64 noundef ${value.llvm})`);
+      lines.push(
+        `  ${buf} = call ptr @sn_i64_to_string(i64 noundef ${value.llvm})`,
+      );
     } else if (value.type === "f32") {
-      lines.push(`  ${buf} = call ptr @tsn_f32_to_string(float noundef ${value.llvm})`);
+      lines.push(
+        `  ${buf} = call ptr @sn_f32_to_string(float noundef ${value.llvm})`,
+      );
     } else if (value.type === "f64") {
-      lines.push(`  ${buf} = call ptr @tsn_f64_to_string(double noundef ${value.llvm})`);
+      lines.push(
+        `  ${buf} = call ptr @sn_f64_to_string(double noundef ${value.llvm})`,
+      );
     } else if (value.type === "bool") {
-      lines.push(`  ${buf} = call ptr @tsn_bool_to_string(i1 noundef ${value.llvm})`);
+      lines.push(
+        `  ${buf} = call ptr @sn_bool_to_string(i1 noundef ${value.llvm})`,
+      );
     } else if (value.type === "char") {
-      lines.push(`  ${buf} = call ptr @tsn_char_to_string(i8 noundef ${value.llvm})`);
-    } else if (isLiteralType(value.type) && value.type.literalKind === "number") {
-      lines.push(`  ${buf} = call ptr @tsn_i32_to_string(i32 noundef ${value.llvm})`);
+      lines.push(
+        `  ${buf} = call ptr @sn_char_to_string(i8 noundef ${value.llvm})`,
+      );
+    } else if (
+      isLiteralType(value.type) &&
+      value.type.literalKind === "number"
+    ) {
+      lines.push(
+        `  ${buf} = call ptr @sn_i32_to_string(i32 noundef ${value.llvm})`,
+      );
     } else {
       throw new Error(
         `Codegen: cannot coerce type '${typeof value.type === "object" ? value.type.kind : value.type}' to string`,
@@ -6112,10 +6796,10 @@ export class LlvmCodegen {
   }
 
   private emitCreateMap(lines: string[], expected?: ValueType): EmittedValue {
-    this.needsTsnMap = true;
+    this.needsSnMap = true;
     this.needsGc = true;
     const tmp = this.nextTemp();
-    lines.push(`  ${tmp} = call ptr @tsn_map_new()`);
+    lines.push(`  ${tmp} = call ptr @sn_map_new()`);
     this.rootHeapPtr(tmp, lines);
 
     let valueType: ValueType = "string";
@@ -6130,15 +6814,15 @@ export class LlvmCodegen {
 
     const valueRef = this.refClassForElement(valueType);
     const valueTypeId =
-      valueRef === TSN_REF_VALUE
+      valueRef === SN_REF_VALUE
         ? 0
-        : valueRef === TSN_REF_PTR
+        : valueRef === SN_REF_PTR
           ? this.relatedTypeId(valueType)
           : isFunctionType(valueType)
-            ? TSN_TYPEID_CLOSURE
+            ? SN_TYPEID_CLOSURE
             : this.ensureAggregateTypeInfo(valueType);
     lines.push(
-      `  call void @tsn_gc_set_map_meta(ptr noundef ${tmp}, i32 noundef ${TSN_REF_PTR}, i32 noundef ${TSN_TYPEID_STRING}, i32 noundef ${valueRef}, i32 noundef ${valueTypeId})`,
+      `  call void @sn_gc_set_map_meta(ptr noundef ${tmp}, i32 noundef ${SN_REF_PTR}, i32 noundef ${SN_TYPEID_STRING}, i32 noundef ${valueRef}, i32 noundef ${valueTypeId})`,
     );
     return { llvm: tmp, type: resultType };
   }
@@ -6155,14 +6839,25 @@ export class LlvmCodegen {
         sig = this.functions.get(call.callee.name);
       }
       if (sig) {
-        return this.emitCallWithSig(sig, asExpressions(call.args), lines, asStatement);
+        return this.emitCallWithSig(
+          sig,
+          asExpressions(call.args),
+          lines,
+          asStatement,
+        );
       }
     }
     const callee = this.emitExpression(call.callee, lines);
     if (!isFunctionType(callee.type)) {
       throw new Error("Codegen: calling non-function value");
     }
-    return this.emitIndirectCall(callee, callee.type, asExpressions(call.args), lines, asStatement);
+    return this.emitIndirectCall(
+      callee,
+      callee.type,
+      asExpressions(call.args),
+      lines,
+      asStatement,
+    );
   }
 
   private storagePtr(local: LocalBinding, lines: string[]): string {
@@ -6197,7 +6892,10 @@ export class LlvmCodegen {
       } else if (e.kind === "BinaryExpression") {
         visitExpr(e.left);
         visitExpr(e.right);
-      } else if (e.kind === "UnaryExpression" || e.kind === "TypeofExpression") {
+      } else if (
+        e.kind === "UnaryExpression" ||
+        e.kind === "TypeofExpression"
+      ) {
         visitExpr(e.operand);
       } else if (e.kind === "IsExpression") {
         visitExpr(e.value);
@@ -6231,7 +6929,8 @@ export class LlvmCodegen {
         case "IfStatement":
           visitExpr(s.condition);
           for (const st of s.consequent) visitStmt(st);
-          if (Array.isArray(s.alternate)) for (const st of s.alternate) visitStmt(st);
+          if (Array.isArray(s.alternate))
+            for (const st of s.alternate) visitStmt(st);
           else if (s.alternate) visitStmt(s.alternate);
           break;
         case "WhileStatement":
@@ -6264,15 +6963,23 @@ export class LlvmCodegen {
     return names;
   }
 
-  private emitNamedFunctionRef(sig: FunctionSig, lines: string[]): EmittedValue {
-    this.needsTsnAlloc = true;
+  private emitNamedFunctionRef(
+    sig: FunctionSig,
+    lines: string[],
+  ): EmittedValue {
+    this.needsSnAlloc = true;
     this.needsCallableRuntime = true;
     const trampoline = this.ensureTrampoline(sig);
-    return this.emitCallableValue(`@${trampoline}`, "null", {
-      kind: "function",
-      params: sig.params,
-      returnType: sig.returnType,
-    }, lines);
+    return this.emitCallableValue(
+      `@${trampoline}`,
+      "null",
+      {
+        kind: "function",
+        params: sig.params,
+        returnType: sig.returnType,
+      },
+      lines,
+    );
   }
 
   private ensureTrampoline(sig: FunctionSig): string {
@@ -6289,7 +6996,9 @@ export class LlvmCodegen {
     const lines: string[] = [];
     lines.push(`define ${ret} @${name}(${params}) {`);
     lines.push("entry:");
-    const argList = sig.params.map((t, i) => `${toLlvmType(t)} %arg${i}`).join(", ");
+    const argList = sig.params
+      .map((t, i) => `${toLlvmType(t)} %arg${i}`)
+      .join(", ");
     if (sig.returnType === "void") {
       lines.push(`  call void @${sig.mangledName}(${argList})`);
       lines.push("  ret void");
@@ -6311,15 +7020,19 @@ export class LlvmCodegen {
     type: FunctionValueType,
     lines: string[],
   ): EmittedValue {
-    this.needsTsnAlloc = true;
+    this.needsSnAlloc = true;
     this.needsCallableRuntime = true;
     const alloca = this.nextTemp();
     lines.push(`  ${alloca} = alloca %__Callable`);
     const codeSlot = this.nextTemp();
-    lines.push(`  ${codeSlot} = getelementptr inbounds %__Callable, ptr ${alloca}, i32 0, i32 0`);
+    lines.push(
+      `  ${codeSlot} = getelementptr inbounds %__Callable, ptr ${alloca}, i32 0, i32 0`,
+    );
     lines.push(`  store ptr ${codePtr}, ptr ${codeSlot}`);
     const envSlot = this.nextTemp();
-    lines.push(`  ${envSlot} = getelementptr inbounds %__Callable, ptr ${alloca}, i32 0, i32 1`);
+    lines.push(
+      `  ${envSlot} = getelementptr inbounds %__Callable, ptr ${alloca}, i32 0, i32 1`,
+    );
     lines.push(`  store ptr ${envPtr}, ptr ${envSlot}`);
     const loaded = this.nextTemp();
     lines.push(`  ${loaded} = load %__Callable, ptr ${alloca}`);
@@ -6333,23 +7046,29 @@ export class LlvmCodegen {
     lines: string[],
     asStatement: boolean,
   ): EmittedValue {
-    this.needsTsnAlloc = true;
+    this.needsSnAlloc = true;
     this.needsCallableRuntime = true;
     const tmpAlloca = this.nextTemp();
     lines.push(`  ${tmpAlloca} = alloca %__Callable`);
     lines.push(`  store %__Callable ${callee.llvm}, ptr ${tmpAlloca}`);
     const codeSlot = this.nextTemp();
-    lines.push(`  ${codeSlot} = getelementptr inbounds %__Callable, ptr ${tmpAlloca}, i32 0, i32 0`);
+    lines.push(
+      `  ${codeSlot} = getelementptr inbounds %__Callable, ptr ${tmpAlloca}, i32 0, i32 0`,
+    );
     const code = this.nextTemp();
     lines.push(`  ${code} = load ptr, ptr ${codeSlot}`);
     const envSlot = this.nextTemp();
-    lines.push(`  ${envSlot} = getelementptr inbounds %__Callable, ptr ${tmpAlloca}, i32 0, i32 1`);
+    lines.push(
+      `  ${envSlot} = getelementptr inbounds %__Callable, ptr ${tmpAlloca}, i32 0, i32 1`,
+    );
     const env = this.nextTemp();
     lines.push(`  ${env} = load ptr, ptr ${envSlot}`);
 
     const emittedArgs: EmittedValue[] = [];
     for (let i = 0; i < args.length; i += 1) {
-      emittedArgs.push(this.emitExpression(args[i]!, lines, fnType.params[i] as ValueType));
+      emittedArgs.push(
+        this.emitExpression(args[i]!, lines, fnType.params[i] as ValueType),
+      );
     }
     const argList = [
       `ptr ${env}`,
@@ -6374,13 +7093,18 @@ export class LlvmCodegen {
     lines: string[],
     expected?: ValueType,
   ): EmittedValue {
-    this.needsTsnAlloc = true;
+    this.needsSnAlloc = true;
     this.needsCallableRuntime = true;
-    const fnType = this.inferExpressionType(expr, expected) as FunctionValueType;
+    const fnType = this.inferExpressionType(
+      expr,
+      expected,
+    ) as FunctionValueType;
     const capRecords = this.lambdaCaptures.get(expr.span.start.offset) ?? [];
     const captures: LambdaCaptureLowering[] = capRecords.map((c) => {
       const local = this.locals.get(c.name);
-      const fromLayout = this.currentLambdaCaptureLayout.find((x) => x.name === c.name);
+      const fromLayout = this.currentLambdaCaptureLayout.find(
+        (x) => x.name === c.name,
+      );
       const type = local?.type ?? fromLayout?.type;
       if (!type) {
         throw new Error(`Codegen: missing capture type for '${c.name}'`);
@@ -6396,10 +7120,12 @@ export class LlvmCodegen {
       envPtr = this.nextTemp();
       this.needsGc = true;
       lines.push(
-        `  ${envPtr} = call ptr @tsn_alloc(i64 noundef ${llvmSizeofExpr(`%${envTypeName}`)})`,
+        `  ${envPtr} = call ptr @sn_alloc(i64 noundef ${llvmSizeofExpr(`%${envTypeName}`)})`,
       );
       this.rootHeapPtr(envPtr, lines);
-      lines.push(`  call void @tsn_gc_set_type(ptr noundef ${envPtr}, i32 noundef ${envTypeId})`);
+      lines.push(
+        `  call void @sn_gc_set_type(ptr noundef ${envPtr}, i32 noundef ${envTypeId})`,
+      );
       for (let i = 0; i < captures.length; i += 1) {
         const cap = captures[i]!;
         const fieldPtr = this.nextTemp();
@@ -6420,7 +7146,9 @@ export class LlvmCodegen {
           }
         } else {
           const value = this.loadCaptureValue(cap.name, cap.type, lines);
-          lines.push(`  store ${toLlvmType(cap.type)} ${value}, ptr ${fieldPtr}`);
+          lines.push(
+            `  store ${toLlvmType(cap.type)} ${value}, ptr ${fieldPtr}`,
+          );
         }
       }
     }
@@ -6428,7 +7156,11 @@ export class LlvmCodegen {
     return this.emitCallableValue(`@${mangled}`, envPtr, fnType, lines);
   }
 
-  private loadCaptureValue(name: string, type: ValueType, lines: string[]): string {
+  private loadCaptureValue(
+    name: string,
+    type: ValueType,
+    lines: string[],
+  ): string {
     const local = this.locals.get(name);
     if (local) {
       const ptr = this.storagePtr(local, lines);
@@ -6436,7 +7168,9 @@ export class LlvmCodegen {
       lines.push(`  ${tmp} = load ${toLlvmType(type)}, ptr ${ptr}`);
       return tmp;
     }
-    const idx = this.currentLambdaCaptureLayout.findIndex((c) => c.name === name);
+    const idx = this.currentLambdaCaptureLayout.findIndex(
+      (c) => c.name === name,
+    );
     if (idx < 0 || !this.currentLambdaEnv || !this.currentLambdaEnvTypeName) {
       throw new Error(`Codegen: cannot load capture '${name}'`);
     }
@@ -6445,7 +7179,9 @@ export class LlvmCodegen {
       `  ${fieldPtr} = getelementptr inbounds %${this.currentLambdaEnvTypeName}, ptr ${this.currentLambdaEnv}, i32 0, i32 ${idx}`,
     );
     const tmp = this.nextTemp();
-    const llvmTy = this.currentLambdaCaptureLayout[idx]!.mutable ? "ptr" : toLlvmType(type);
+    const llvmTy = this.currentLambdaCaptureLayout[idx]!.mutable
+      ? "ptr"
+      : toLlvmType(type);
     lines.push(`  ${tmp} = load ${llvmTy}, ptr ${fieldPtr}`);
     if (this.currentLambdaCaptureLayout[idx]!.mutable) {
       const val = this.nextTemp();
@@ -6456,7 +7192,9 @@ export class LlvmCodegen {
   }
 
   private loadCaptureFromCurrentEnv(name: string, lines: string[]): string {
-    const idx = this.currentLambdaCaptureLayout.findIndex((c) => c.name === name);
+    const idx = this.currentLambdaCaptureLayout.findIndex(
+      (c) => c.name === name,
+    );
     if (idx < 0 || !this.currentLambdaEnv || !this.currentLambdaEnvTypeName) {
       throw new Error(`Codegen: capture '${name}' not in current env`);
     }
@@ -6469,7 +7207,10 @@ export class LlvmCodegen {
     return tmp;
   }
 
-  private envTypeName(offset: number, captures: LambdaCaptureLowering[]): string {
+  private envTypeName(
+    offset: number,
+    captures: LambdaCaptureLowering[],
+  ): string {
     const name =
       `__env_${captures.map((c) => `${c.name}_${c.mutable ? "m" : "c"}`).join("__") || "empty"}` +
       `_${offset}`;
@@ -6489,7 +7230,8 @@ export class LlvmCodegen {
   ): string {
     const offset = expr.span.start.offset;
     const mangled =
-      (this.currentModuleId ? `${this.currentModuleId}__` : "") + `lambda_${offset}`;
+      (this.currentModuleId ? `${this.currentModuleId}__` : "") +
+      `lambda_${offset}`;
     if (this.emittedLambdas.has(offset)) {
       return mangled;
     }
@@ -6503,7 +7245,8 @@ export class LlvmCodegen {
     mangled: string,
     layout: LambdaCaptureLowering[],
   ): string {
-    const envName = layout.length > 0 ? this.envTypeName(expr.span.start.offset, layout) : "";
+    const envName =
+      layout.length > 0 ? this.envTypeName(expr.span.start.offset, layout) : "";
 
     const savedLocals = this.locals;
     const savedTemp = this.tempCounter;
@@ -6526,7 +7269,9 @@ export class LlvmCodegen {
     );
 
     const ret =
-      fnType.returnType === "void" ? "void" : toLlvmType(fnType.returnType as ValueType);
+      fnType.returnType === "void"
+        ? "void"
+        : toLlvmType(fnType.returnType as ValueType);
     const params = [
       "ptr %env",
       ...fnType.params.map((t, i) => `${toLlvmType(t as ValueType)} %arg${i}`),
@@ -6554,7 +7299,11 @@ export class LlvmCodegen {
         const box = this.nextTemp();
         lines.push(`  ${box} = load ptr, ptr ${fieldPtr}`);
         lines.push(`  store ptr ${box}, ptr ${boxHolder}`);
-        this.locals.set(cap.name, { ptr: boxHolder, type: cap.type, boxed: true });
+        this.locals.set(cap.name, {
+          ptr: boxHolder,
+          type: cap.type,
+          boxed: true,
+        });
         this.pushGcRoot(boxHolder, lines);
       } else {
         const llvmTy = toLlvmType(cap.type);
@@ -6582,12 +7331,21 @@ export class LlvmCodegen {
     let terminated = false;
     if (expr.body.kind === "expression") {
       const expectedRet =
-        fnType.returnType !== "void" ? (fnType.returnType as ValueType) : undefined;
-      const value = this.emitExpression(expr.body.expression, lines, expectedRet);
+        fnType.returnType !== "void"
+          ? (fnType.returnType as ValueType)
+          : undefined;
+      const value = this.emitExpression(
+        expr.body.expression,
+        lines,
+        expectedRet,
+      );
       if (fnType.returnType === "void") {
         this.emitFunctionRet(lines, "  ret void");
       } else {
-        this.emitFunctionRet(lines, `  ret ${toLlvmType(value.type)} ${value.llvm}`);
+        this.emitFunctionRet(
+          lines,
+          `  ret ${toLlvmType(value.type)} ${value.llvm}`,
+        );
       }
       terminated = true;
     } else {
@@ -6639,30 +7397,30 @@ export class LlvmCodegen {
     asStatement: boolean,
   ): EmittedValue {
     // Well-known array runtime helpers: inject elem_size / cmp_kind.
-    if (sig.mangledName === "tsn_array_push" && emittedArgs.length >= 2) {
+    if (sig.mangledName === "sn_array_push" && emittedArgs.length >= 2) {
       const arr = emittedArgs[0]!;
       const value = emittedArgs[1]!;
       if (!isArrayType(arr.type)) {
-        throw new Error("Codegen: tsn_array_push expects array receiver");
+        throw new Error("Codegen: sn_array_push expects array receiver");
       }
       this.emitArrayPush(arr.llvm, value, arr.type.element, lines);
       if (!asStatement) {
-        throw new Error("Codegen: tsn_array_push used as value");
+        throw new Error("Codegen: sn_array_push used as value");
       }
       return { llvm: "void", type: "i32" };
     }
-    if (sig.mangledName === "tsn_array_pop" && emittedArgs.length >= 1) {
+    if (sig.mangledName === "sn_array_pop" && emittedArgs.length >= 1) {
       const arr = emittedArgs[0]!;
       if (!isArrayType(arr.type)) {
-        throw new Error("Codegen: tsn_array_pop expects array receiver");
+        throw new Error("Codegen: sn_array_pop expects array receiver");
       }
       return this.emitArrayPop(arr.llvm, arr.type.element, lines);
     }
-    if (sig.mangledName === "tsn_array_index_of" && emittedArgs.length >= 2) {
+    if (sig.mangledName === "sn_array_index_of" && emittedArgs.length >= 2) {
       const arr = emittedArgs[0]!;
       const needle = emittedArgs[1]!;
       if (!isArrayType(arr.type)) {
-        throw new Error("Codegen: tsn_array_index_of expects array receiver");
+        throw new Error("Codegen: sn_array_index_of expects array receiver");
       }
       return this.emitArrayIndexOf(arr.llvm, needle, arr.type.element, lines);
     }
@@ -6671,7 +7429,9 @@ export class LlvmCodegen {
       this.noteExternUse(sig);
     }
 
-    const argList = emittedArgs.map((a) => `${toLlvmType(a.type)} ${a.llvm}`).join(", ");
+    const argList = emittedArgs
+      .map((a) => `${toLlvmType(a.type)} ${a.llvm}`)
+      .join(", ");
     const argSuffix = argList ? argList : "";
 
     if (sig.returnType === "void") {
@@ -6690,85 +7450,94 @@ export class LlvmCodegen {
 
   private noteExternUse(sig: FunctionSig): void {
     this.externDeclares.add(sig.mangledName);
-    if (sig.mangledName.startsWith("tsn_str_") && sig.mangledName !== "tsn_str_len" && sig.mangledName !== "tsn_str_concat") {
-      this.needsTsnStrExtras = true;
+    if (
+      sig.mangledName.startsWith("sn_str_") &&
+      sig.mangledName !== "sn_str_len" &&
+      sig.mangledName !== "sn_str_concat"
+    ) {
+      this.needsSnStrExtras = true;
     }
     if (
-      sig.mangledName === "tsn_array_push" ||
-      sig.mangledName === "tsn_array_pop" ||
-      sig.mangledName === "tsn_array_index_of" ||
-      sig.mangledName === "tsn_array_new" ||
-      sig.mangledName === "tsn_array_length"
+      sig.mangledName === "sn_array_push" ||
+      sig.mangledName === "sn_array_pop" ||
+      sig.mangledName === "sn_array_index_of" ||
+      sig.mangledName === "sn_array_new" ||
+      sig.mangledName === "sn_array_length"
     ) {
-      this.needsTsnArray = true;
+      this.needsSnArray = true;
     }
-    if (sig.mangledName === "tsn_str_len" || sig.mangledName === "tsn_str_concat") {
-      this.needsTsnString = true;
+    if (
+      sig.mangledName === "sn_str_len" ||
+      sig.mangledName === "sn_str_concat"
+    ) {
+      this.needsSnString = true;
     }
   }
 
   private emitPrintCall(call: CallExpression, lines: string[]): void {
-    this.needsTsnPrint = true;
+    this.needsSnPrint = true;
     const args = asExpressions(call.args);
     for (let i = 0; i < args.length; i += 1) {
       const value = this.emitExpression(args[i]!, lines);
       this.emitPrintValue(value, lines);
       if (i < args.length - 1) {
-        lines.push("  call void @tsn_print_space()");
+        lines.push("  call void @sn_print_space()");
       }
     }
-    lines.push("  call void @tsn_print_newline()");
+    lines.push("  call void @sn_print_newline()");
   }
 
   private emitPrintValue(value: EmittedValue, lines: string[]): void {
     if (isArrayType(value.type)) {
-      this.needsTsnFormat = true;
+      this.needsSnFormat = true;
       const elemLlvm = toLlvmType(value.type.element);
-      const fmtKind = this.tsnFmtKindForType(value.type.element);
+      const fmtKind = this.snFmtKindForType(value.type.element);
       const arrayStr = this.nextTemp();
       lines.push(
-        `  ${arrayStr} = call ptr @tsn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${fmtKind})`,
+        `  ${arrayStr} = call ptr @sn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${fmtKind})`,
       );
-      lines.push(`  call void @tsn_print_str(ptr noundef ${arrayStr})`);
+      lines.push(`  call void @sn_print_str(ptr noundef ${arrayStr})`);
       return;
     }
     if (value.type === "bool") {
-      lines.push(`  call void @tsn_print_bool(i1 ${value.llvm})`);
+      lines.push(`  call void @sn_print_bool(i1 ${value.llvm})`);
       return;
     }
     if (value.type === "string") {
-      lines.push(`  call void @tsn_print_str(ptr noundef ${value.llvm})`);
+      lines.push(`  call void @sn_print_str(ptr noundef ${value.llvm})`);
       return;
     }
     if (value.type === "i32" || isEnumType(value.type)) {
-      lines.push(`  call void @tsn_print_i32(i32 ${value.llvm})`);
+      lines.push(`  call void @sn_print_i32(i32 ${value.llvm})`);
       return;
     }
     if (value.type === "i64") {
-      lines.push(`  call void @tsn_print_i64(i64 ${value.llvm})`);
+      lines.push(`  call void @sn_print_i64(i64 ${value.llvm})`);
       return;
     }
     if (value.type === "f32") {
-      lines.push(`  call void @tsn_print_f32(float ${value.llvm})`);
+      lines.push(`  call void @sn_print_f32(float ${value.llvm})`);
       return;
     }
     if (value.type === "f64") {
-      lines.push(`  call void @tsn_print_f64(double ${value.llvm})`);
+      lines.push(`  call void @sn_print_f64(double ${value.llvm})`);
       return;
     }
     if (value.type === "char") {
-      lines.push(`  call void @tsn_print_char(i8 ${value.llvm})`);
+      lines.push(`  call void @sn_print_char(i8 ${value.llvm})`);
       return;
     }
     if (isLiteralType(value.type)) {
       if (value.type.literalKind === "string") {
-        lines.push(`  call void @tsn_print_str(ptr noundef ${value.llvm})`);
+        lines.push(`  call void @sn_print_str(ptr noundef ${value.llvm})`);
         return;
       }
-      lines.push(`  call void @tsn_print_i32(i32 ${value.llvm})`);
+      lines.push(`  call void @sn_print_i32(i32 ${value.llvm})`);
       return;
     }
-    throw new Error(`Codegen: cannot print type '${typeof value.type === "object" ? value.type.kind : value.type}'`);
+    throw new Error(
+      `Codegen: cannot print type '${typeof value.type === "object" ? value.type.kind : value.type}'`,
+    );
   }
 
   private nextTemp(): string {
@@ -6837,7 +7606,10 @@ function llvmSizeofI32Expr(llvmType: string): string {
 }
 
 /** `offsetof` via GEP-null, truncated to i32 for TypeInfo field offsets. */
-function llvmOffsetOfExpr(aggregateTy: string, indices: readonly number[]): string {
+function llvmOffsetOfExpr(
+  aggregateTy: string,
+  indices: readonly number[],
+): string {
   const idxList = ["i32 0", ...indices.map((i) => `i32 ${i}`)].join(", ");
   return `trunc (i64 ptrtoint (ptr getelementptr inbounds (${aggregateTy}, ptr null, ${idxList}) to i64) to i32)`;
 }
@@ -6861,7 +7633,11 @@ function toLlvmType(type: ValueType | "void"): string {
     return "void";
   }
   if (typeof type === "object") {
-    if (type.kind === "struct" || type.kind === "interface" || type.kind === "object") {
+    if (
+      type.kind === "struct" ||
+      type.kind === "interface" ||
+      type.kind === "object"
+    ) {
       return `%${type.name}`;
     }
     if (type.kind === "tuple") {
@@ -6874,10 +7650,14 @@ function toLlvmType(type: ValueType | "void"): string {
       if (isNullablePointerUnion(type)) {
         return "ptr";
       }
-      if (type.arms.every((a) => isLiteralType(a) && a.literalKind === "string")) {
+      if (
+        type.arms.every((a) => isLiteralType(a) && a.literalKind === "string")
+      ) {
         return "ptr";
       }
-      if (type.arms.every((a) => isLiteralType(a) && a.literalKind === "number")) {
+      if (
+        type.arms.every((a) => isLiteralType(a) && a.literalKind === "number")
+      ) {
         return "i32";
       }
       return "%__Union";
@@ -6893,7 +7673,10 @@ function toLlvmType(type: ValueType | "void"): string {
     }
     if (type.kind === "intersection") {
       for (const arm of type.arms) {
-        if (typeof arm === "object" && (arm.kind === "object" || arm.kind === "struct")) {
+        if (
+          typeof arm === "object" &&
+          (arm.kind === "object" || arm.kind === "struct")
+        ) {
           return toLlvmType(arm as ValueType);
         }
       }
@@ -6942,7 +7725,11 @@ function zeroInitializer(type: ValueType): string {
       }
       return "zeroinitializer";
     }
-    if (type.kind === "struct" || type.kind === "interface" || type.kind === "object") {
+    if (
+      type.kind === "struct" ||
+      type.kind === "interface" ||
+      type.kind === "object"
+    ) {
       return "zeroinitializer";
     }
     if (type.kind === "tuple") {

@@ -9,13 +9,13 @@ import { runRun } from "./commands/run.js";
 const program = new Command();
 
 program
-  .name("tsn")
-  .description("Compile and run TypeScript-native (.tsn) programs")
+  .name("sn")
+  .description("Compile and run Sonite (.sn) programs")
   .version("0.0.0");
 
 program
   .command("init")
-  .description("Create a new tsn project with project.toml")
+  .description("Create a new sn project with project.toml")
   .argument("[directory]", "project directory", ".")
   .option("-f, --force", "overwrite existing files", false)
   .option("-n, --name <name>", "package name (default: directory name)")
@@ -62,18 +62,19 @@ program
 
 program
   .command("run")
-  .description("Compile and run a .tsn file, or build and run the current project")
-  .argument("[input]", "path to a .tsn source file (default: project entry)")
+  .description(
+    "Compile and run a .sn file, or build and run the current project",
+  )
+  .argument("[input]", "path to a .sn source file (default: project entry)")
   .action(async (input: string | undefined) => {
     const dashIndex = process.argv.indexOf("--");
-    const programArgs =
-      dashIndex >= 0 ? process.argv.slice(dashIndex + 1) : [];
+    const programArgs = dashIndex >= 0 ? process.argv.slice(dashIndex + 1) : [];
     process.exitCode = await runRun(input, programArgs);
   });
 
 program
   .command("fmt")
-  .description("Format .tsn source files")
+  .description("Format .sn source files")
   .argument("[paths...]", "files or directories to format")
   .option("-c, --check", "check formatting without writing", false)
   .action((paths: string[], options: { check: boolean }) => {
@@ -82,16 +83,19 @@ program
 
 program
   .command("compile")
-  .description("Compile a .tsn file (or project entry) to LLVM IR")
-  .argument("[input]", "path to a .tsn source file (default: project entry)")
-  .option("-o, --output <file>", "write LLVM IR to this file (default: <input>.ll)")
+  .description("Compile a .sn file (or project entry) to LLVM IR")
+  .argument("[input]", "path to a .sn source file (default: project entry)")
+  .option(
+    "-o, --output <file>",
+    "write LLVM IR to this file (default: <input>.ll)",
+  )
   .action((input: string | undefined, options: { output?: string }) => {
     process.exitCode = runCompile(input, options.output);
   });
 
-// `tsn examples/hello.tsn` is shorthand for `tsn run examples/hello.tsn`
+// `sn examples/hello.sn` is shorthand for `sn run examples/hello.sn`
 program
-  .argument("[input]", "path to a .tsn source file (shorthand for run)")
+  .argument("[input]", "path to a .sn source file (shorthand for run)")
   .action(async (input?: string) => {
     if (!input) {
       program.help({ error: true });

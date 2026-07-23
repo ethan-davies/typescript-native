@@ -13,22 +13,22 @@ const oniguruma = require("vscode-oniguruma");
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(packageRoot, "../..");
-const grammarPath = path.join(packageRoot, "syntaxes/tsn.tmLanguage.json");
+const grammarPath = path.join(packageRoot, "syntaxes/sn.tmLanguage.json");
 const examplesRoot = path.join(repoRoot, "examples");
 
 /**
  * @param {string} dir
  * @returns {Promise<string[]>}
  */
-async function collectTsnFiles(dir) {
+async function collectSnFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   /** @type {string[]} */
   const files = [];
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...(await collectTsnFiles(full)));
-    } else if (entry.name.endsWith(".tsn")) {
+      files.push(...(await collectSnFiles(full)));
+    } else if (entry.name.endsWith(".sn")) {
       files.push(full);
     }
   }
@@ -41,7 +41,12 @@ async function collectTsnFiles(dir) {
 async function loadGrammar() {
   const wasmPath = require.resolve("vscode-oniguruma/release/onig.wasm");
   const wasmBin = await readFile(wasmPath);
-  await oniguruma.loadWASM(wasmBin.buffer.slice(wasmBin.byteOffset, wasmBin.byteOffset + wasmBin.byteLength));
+  await oniguruma.loadWASM(
+    wasmBin.buffer.slice(
+      wasmBin.byteOffset,
+      wasmBin.byteOffset + wasmBin.byteLength,
+    ),
+  );
 
   const registry = new vsctm.Registry({
     onigLib: Promise.resolve({
@@ -49,7 +54,7 @@ async function loadGrammar() {
       createOnigString: (s) => new oniguruma.OnigString(s),
     }),
     loadGrammar: async (scopeName) => {
-      if (scopeName !== "source.tsn") {
+      if (scopeName !== "source.sn") {
         return null;
       }
       const raw = await readFile(grammarPath, "utf8");
@@ -57,8 +62,8 @@ async function loadGrammar() {
     },
   });
 
-  const grammar = await registry.loadGrammar("source.tsn");
-  assert.ok(grammar, "failed to load source.tsn grammar");
+  const grammar = await registry.loadGrammar("source.sn");
+  assert.ok(grammar, "failed to load source.sn grammar");
   return grammar;
 }
 
@@ -72,7 +77,10 @@ function tokenize(grammar, source) {
   const tokens = [];
   let ruleStack = vsctm.INITIAL;
   for (const line of source.split(/\r?\n/)) {
-    const { tokens: lineTokens, ruleStack: next } = grammar.tokenizeLine(line, ruleStack);
+    const { tokens: lineTokens, ruleStack: next } = grammar.tokenizeLine(
+      line,
+      ruleStack,
+    );
     ruleStack = next;
     for (const token of lineTokens) {
       tokens.push({
@@ -90,7 +98,9 @@ function tokenize(grammar, source) {
  * @param {string} scopeSubstring
  */
 function assertTokenScoped(tokens, text, scopeSubstring) {
-  const match = tokens.find((t) => t.text === text && t.scopes.some((s) => s.includes(scopeSubstring)));
+  const match = tokens.find(
+    (t) => t.text === text && t.scopes.some((s) => s.includes(scopeSubstring)),
+  );
   assert.ok(
     match,
     `expected token ${JSON.stringify(text)} with scope containing ${JSON.stringify(scopeSubstring)}; got ${JSON.stringify(
@@ -107,37 +117,47 @@ function assertTokenScoped(tokens, text, scopeSubstring) {
  * @param {string} scopeSubstring
  */
 function assertSomeTokenScoped(tokens, textPattern, scopeSubstring) {
-  const match = tokens.find((t) => textPattern.test(t.text) && t.scopes.some((s) => s.includes(scopeSubstring)));
+  const match = tokens.find(
+    (t) =>
+      textPattern.test(t.text) &&
+      t.scopes.some((s) => s.includes(scopeSubstring)),
+  );
   assert.ok(
     match,
     `expected some token matching ${textPattern} with scope containing ${JSON.stringify(scopeSubstring)}`,
   );
 }
 
-test("grammar JSON is valid and declares source.tsn", async () => {
+test("grammar JSON is valid and declares source.sn", async () => {
   const raw = await readFile(grammarPath, "utf8");
   const grammar = JSON.parse(raw);
-  assert.equal(grammar.scopeName, "source.tsn");
+  assert.equal(grammar.scopeName, "source.sn");
   assert.ok(grammar.repository);
   assert.ok(Array.isArray(grammar.patterns));
 });
 
 test("loads with vscode-textmate and tokenizes all examples", async () => {
   const grammar = await loadGrammar();
-  const files = await collectTsnFiles(examplesRoot);
-  assert.ok(files.length > 0, "expected example .tsn files");
+  const files = await collectSnFiles(examplesRoot);
+  assert.ok(files.length > 0, "expected example .sn files");
 
   for (const file of files) {
     const source = await readFile(file, "utf8");
     const tokens = tokenize(grammar, source);
-    assert.ok(tokens.length > 0, `no tokens for ${path.relative(repoRoot, file)}`);
+    assert.ok(
+      tokens.length > 0,
+      `no tokens for ${path.relative(repoRoot, file)}`,
+    );
     for (const token of tokens) {
-      assert.ok(token.scopes.includes("source.tsn"), `token missing source.tsn in ${file}: ${JSON.stringify(token)}`);
+      assert.ok(
+        token.scopes.includes("source.sn"),
+        `token missing source.sn in ${file}: ${JSON.stringify(token)}`,
+      );
     }
   }
 });
 
-test("scopes TSN-specific keywords, operators, literals, and builtins", async () => {
+test("scopes SN-specific keywords, operators, literals, and builtins", async () => {
   const grammar = await loadGrammar();
   const source = `
 // line comment
@@ -303,13 +323,13 @@ function main(): void {
   assertTokenScoped(tokens, "?", "keyword.operator.ternary");
 });
 
-test("example corpus contains expected TSN markers with correct scopes", async () => {
+test("example corpus contains expected SN markers with correct scopes", async () => {
   const grammar = await loadGrammar();
 
   /** @type {{ file: string, checks: [string, string][] }[]} */
   const cases = [
     {
-      file: "control-flow.tsn",
+      file: "control-flow.sn",
       checks: [
         ["elseif", "keyword.control"],
         ["if", "keyword.control"],
@@ -317,7 +337,7 @@ test("example corpus contains expected TSN markers with correct scopes", async (
       ],
     },
     {
-      file: "structs.tsn",
+      file: "structs.sn",
       checks: [
         ["struct", "storage.type"],
         ["string", "support.type.primitive"],
@@ -325,14 +345,14 @@ test("example corpus contains expected TSN markers with correct scopes", async (
       ],
     },
     {
-      file: "null-operators.tsn",
+      file: "null-operators.sn",
       checks: [
         ["??", "keyword.operator.nullish"],
         ["?.", "keyword.operator.optional"],
       ],
     },
     {
-      file: "errors.tsn",
+      file: "errors.sn",
       checks: [
         ["throw", "keyword.control"],
         ["try", "keyword.control"],
@@ -342,11 +362,11 @@ test("example corpus contains expected TSN markers with correct scopes", async (
       ],
     },
     {
-      file: "lambdas.tsn",
+      file: "lambdas.sn",
       checks: [["=>", "storage.type.function.arrow"]],
     },
     {
-      file: "type-operators.tsn",
+      file: "type-operators.sn",
       checks: [
         ["keyof", "keyword.operator"],
         ["typeof", "keyword.operator"],
@@ -355,7 +375,7 @@ test("example corpus contains expected TSN markers with correct scopes", async (
       ],
     },
     {
-      file: "modules/named-main.tsn",
+      file: "modules/named-main.sn",
       checks: [
         ["import", "keyword.control.import"],
         ["from", "keyword.control.import"],
@@ -363,11 +383,11 @@ test("example corpus contains expected TSN markers with correct scopes", async (
       ],
     },
     {
-      file: "enums.tsn",
+      file: "enums.sn",
       checks: [["enum", "storage.type"]],
     },
     {
-      file: "inheritance.tsn",
+      file: "inheritance.sn",
       checks: [
         ["abstract", "storage.modifier"],
         ["class", "storage.type"],
@@ -376,7 +396,7 @@ test("example corpus contains expected TSN markers with correct scopes", async (
       ],
     },
     {
-      file: "interfaces.tsn",
+      file: "interfaces.sn",
       checks: [
         ["interface", "storage.type"],
         ["implements", "keyword.control"],

@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import { compile, compileFile } from "../src/compiler.js";
 import { encodeLlvmString } from "../src/codegen/llvm.js";
 
-const examplesDir = join(dirname(fileURLToPath(import.meta.url)), "../../../examples");
+const examplesDir = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../examples",
+);
 const modulesDir = join(examplesDir, "modules");
 
 const helloSource = `
@@ -19,11 +22,11 @@ describe("compile pipeline", () => {
     it("compiles hello world to LLVM IR with runtime print", () => {
       const result = compile(helloSource);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare void @tsn_print_str");
-      expect(result.ir).toContain("declare void @tsn_print_newline");
+      expect(result.ir).toContain("declare void @sn_print_str");
+      expect(result.ir).toContain("declare void @sn_print_newline");
       expect(result.ir).toContain("define i32 @main()");
-      expect(result.ir).toContain("call void @tsn_print_str");
-      expect(result.ir).toContain("call void @tsn_print_newline");
+      expect(result.ir).toContain("call void @sn_print_str");
+      expect(result.ir).toContain("call void @sn_print_newline");
       expect(result.ir).toContain(encodeLlvmString("Hello, world!"));
       expect(result.ast.body[0]?.kind).toBe("FunctionDeclaration");
       if (result.ast.body[0]?.kind === "FunctionDeclaration") {
@@ -50,7 +53,7 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      const calls = result.ir?.match(/call void @tsn_print_newline/g) ?? [];
+      const calls = result.ir?.match(/call void @sn_print_newline/g) ?? [];
       expect(calls).toHaveLength(2);
     });
 
@@ -106,7 +109,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("%v.c = alloca i8");
       expect(result.ir).toContain("%v.s = alloca ptr");
       expect(result.ir).toContain(encodeLlvmString("Hello world"));
-      expect(result.ir).toContain("call void @tsn_print_space");
+      expect(result.ir).toContain("call void @sn_print_space");
     });
 
     it("compiles f32 annotations and float arithmetic", () => {
@@ -156,8 +159,8 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare ptr @tsn_str_concat");
-      expect(result.ir).toContain("call ptr @tsn_str_concat");
+      expect(result.ir).toContain("declare ptr @sn_str_concat");
+      expect(result.ir).toContain("call ptr @sn_str_concat");
     });
 
     it("compiles user-defined functions with parameters and calls", () => {
@@ -235,7 +238,7 @@ describe("compile pipeline", () => {
       expect(result.ir).toContain("xor i1");
       expect(result.ir).toContain("and i1");
       expect(result.ir).toContain("or i1");
-      expect(result.ir).toContain("call void @tsn_print_bool");
+      expect(result.ir).toContain("call void @sn_print_bool");
     });
 
     it("compiles if / elseif / else branches", () => {
@@ -453,30 +456,30 @@ describe("compile pipeline", () => {
 
     it("compiles the hello, variables, arithmetic, control-flow, loops, arrays, structs, enums, struct-methods, classes, inheritance, interfaces, and generics examples", () => {
       for (const name of [
-        "hello.tsn",
-        "variables.tsn",
-        "arithmetic.tsn",
-        "control-flow.tsn",
-        "loops.tsn",
-        "switch.tsn",
-        "arrays.tsn",
-        "structs.tsn",
-        "enums.tsn",
-        "struct-methods.tsn",
-        "classes.tsn",
-        "inheritance.tsn",
-        "interfaces.tsn",
-        "generics.tsn",
-        "type-aliases.tsn",
-        "unions.tsn",
-        "nullability.tsn",
-        "null-operators.tsn",
-        "multi-constraints.tsn",
-        "dictionaries.tsn",
-        "type-operators.tsn",
-        "function-types.tsn",
-        "default-named-args.tsn",
-        "lambdas.tsn",
+        "hello.sn",
+        "variables.sn",
+        "arithmetic.sn",
+        "control-flow.sn",
+        "loops.sn",
+        "switch.sn",
+        "arrays.sn",
+        "structs.sn",
+        "enums.sn",
+        "struct-methods.sn",
+        "classes.sn",
+        "inheritance.sn",
+        "interfaces.sn",
+        "generics.sn",
+        "type-aliases.sn",
+        "unions.sn",
+        "nullability.sn",
+        "null-operators.sn",
+        "multi-constraints.sn",
+        "dictionaries.sn",
+        "type-operators.sn",
+        "function-types.sn",
+        "default-named-args.sn",
+        "lambdas.sn",
       ]) {
         const source = readFileSync(join(examplesDir, name), "utf8");
         const result = compile(source);
@@ -603,7 +606,7 @@ describe("compile pipeline", () => {
       expect(result.success).toBe(true);
       expect(result.ir).toContain("%ObjectHeader = type { i32, ptr }");
       expect(result.ir).toContain("%Counter = type { %ObjectHeader, i32 }");
-      expect(result.ir).toContain("call ptr @tsn_alloc");
+      expect(result.ir).toContain("call ptr @sn_alloc");
       expect(result.ir).toContain("@Counter__vtable");
       expect(result.ir).toContain("define void @Counter__constructor");
       expect(result.ir).toContain("define void @Counter__bump");
@@ -854,12 +857,12 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare ptr @tsn_array_new");
-      expect(result.ir).toContain("declare void @tsn_array_push");
+      expect(result.ir).toContain("declare ptr @sn_array_new");
+      expect(result.ir).toContain("declare void @sn_array_push");
       expect(result.ir).toContain("%v.numbers = alloca ptr");
       expect(result.ir).toContain("forin.cond.");
       expect(result.ir).toContain("forin.body.");
-      expect(result.ir).toContain("call void @tsn_array_push");
+      expect(result.ir).toContain("call void @sn_array_push");
     });
 
     it("allows mutating const array elements and push", () => {
@@ -1064,8 +1067,8 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("tsn_i32_to_string");
-      expect(result.ir).toContain("tsn_str_concat");
+      expect(result.ir).toContain("sn_i32_to_string");
+      expect(result.ir).toContain("sn_str_concat");
     });
 
     it("fails on mixed numeric widths in arithmetic", () => {
@@ -1269,8 +1272,8 @@ describe("compile pipeline", () => {
         }
       `);
       expect(result.success).toBe(true);
-      expect(result.ir).toContain("declare ptr @tsn_array_to_string");
-      expect(result.ir).toContain("call ptr @tsn_array_to_string");
+      expect(result.ir).toContain("declare ptr @sn_array_to_string");
+      expect(result.ir).toContain("call ptr @sn_array_to_string");
     });
 
     it("infers heterogeneous literals as tuples", () => {
@@ -1573,8 +1576,8 @@ describe("compile pipeline", () => {
 });
 
 describe("modules / compileFile", () => {
-  it("compiles examples/generics.tsn with module-mangled symbols", () => {
-    const result = compileFile(join(examplesDir, "generics.tsn"));
+  it("compiles examples/generics.sn with module-mangled symbols", () => {
+    const result = compileFile(join(examplesDir, "generics.sn"));
     expect(result.success).toBe(true);
     expect(result.ir).toContain("Box__i32");
     expect(result.ir).toContain("rank__Num");
@@ -1582,9 +1585,11 @@ describe("modules / compileFile", () => {
   });
 
   it("compiles import math and emits mangled calls", () => {
-    const result = compileFile(join(modulesDir, "main.tsn"));
+    const result = compileFile(join(modulesDir, "main.sn"));
     expect(result.success).toBe(true);
-    const userModules = result.modules.filter((m) => !m.moduleId.startsWith("std_prelude_"));
+    const userModules = result.modules.filter(
+      (m) => !m.moduleId.startsWith("std_prelude_"),
+    );
     expect(userModules).toHaveLength(2);
     expect(result.ir).toContain("define i32 @math__add(i32 %arg0, i32 %arg1)");
     expect(result.ir).toContain("define i32 @math__mul(i32 %arg0, i32 %arg1)");
@@ -1594,14 +1599,16 @@ describe("modules / compileFile", () => {
   });
 
   it("compiles aliased nested imports", () => {
-    const result = compileFile(join(modulesDir, "alias.tsn"));
+    const result = compileFile(join(modulesDir, "alias.sn"));
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("define i32 @vector__add(i32 %arg0, i32 %arg1)");
+    expect(result.ir).toContain(
+      "define i32 @vector__add(i32 %arg0, i32 %arg1)",
+    );
     expect(result.ir).toContain("call i32 @vector__add(i32 5, i32 10)");
   });
 
   it("compiles exported structs and enums via namespaces", () => {
-    const result = compileFile(join(modulesDir, "types-main.tsn"));
+    const result = compileFile(join(modulesDir, "types-main.sn"));
     expect(result.success).toBe(true);
     expect(result.ir).toContain("%types__Point = type { i32, i32 }");
     expect(result.ir).toContain("define %types__Point @types__origin()");
@@ -1611,7 +1618,7 @@ describe("modules / compileFile", () => {
   it("errors when calling a non-exported function", () => {
     const files = new Map<string, string>([
       [
-        "/virt/main.tsn",
+        "/virt/main.sn",
         `import "lib";
 function main(): void {
   print(lib.secret());
@@ -1619,14 +1626,14 @@ function main(): void {
 `,
       ],
       [
-        "/virt/lib.tsn",
+        "/virt/lib.sn",
         `function secret(): i32 {
   return 1;
 }
 `,
       ],
     ]);
-    const result = compileFile("/virt/main.tsn", {
+    const result = compileFile("/virt/main.sn", {
       readFile: (path) => {
         const source = files.get(path);
         if (source === undefined) {
@@ -1637,13 +1644,15 @@ function main(): void {
     });
     expect(result.success).toBe(false);
     expect(result.diagnostics.some((d) => d.code === "E0408")).toBe(true);
-    expect(result.diagnostics.some((d) => d.message.includes('does not export "secret"'))).toBe(
-      true,
-    );
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.includes('does not export "secret"'),
+      ),
+    ).toBe(true);
   });
 
   it("compiles named imports and aliases to mangled calls", () => {
-    const result = compileFile(join(modulesDir, "named-main.tsn"));
+    const result = compileFile(join(modulesDir, "named-main.sn"));
     expect(result.success).toBe(true);
     expect(result.ir).toContain("define i32 @math__add(i32 %arg0, i32 %arg1)");
     expect(result.ir).toContain("define i32 @math__mul(i32 %arg0, i32 %arg1)");
@@ -1654,7 +1663,7 @@ function main(): void {
   it("compiles explicit import * as namespace syntax", () => {
     const files = new Map<string, string>([
       [
-        "/virt/main.tsn",
+        "/virt/main.sn",
         `import * as math from "math";
 function main(): void {
   print(math.add(1, 2));
@@ -1662,14 +1671,14 @@ function main(): void {
 `,
       ],
       [
-        "/virt/math.tsn",
+        "/virt/math.sn",
         `export function add(a: i32, b: i32): i32 {
   return a + b;
 }
 `,
       ],
     ]);
-    const result = compileFile("/virt/main.tsn", {
+    const result = compileFile("/virt/main.sn", {
       readFile: (path) => {
         const source = files.get(path);
         if (source === undefined) {
@@ -1685,7 +1694,7 @@ function main(): void {
   it("errors when a named import is not exported", () => {
     const files = new Map<string, string>([
       [
-        "/virt/main.tsn",
+        "/virt/main.sn",
         `import { helper } from "math";
 function main(): void {
   helper();
@@ -1693,7 +1702,7 @@ function main(): void {
 `,
       ],
       [
-        "/virt/math.tsn",
+        "/virt/math.sn",
         `function helper(): void {}
 export function add(a: i32, b: i32): i32 {
   return a + b;
@@ -1701,7 +1710,7 @@ export function add(a: i32, b: i32): i32 {
 `,
       ],
     ]);
-    const result = compileFile("/virt/main.tsn", {
+    const result = compileFile("/virt/main.sn", {
       readFile: (path) => {
         const source = files.get(path);
         if (source === undefined) {
@@ -1713,7 +1722,9 @@ export function add(a: i32, b: i32): i32 {
     expect(result.success).toBe(false);
     expect(result.diagnostics.some((d) => d.code === "E0408")).toBe(true);
     expect(
-      result.diagnostics.some((d) => d.message === 'Module "math" does not export "helper".'),
+      result.diagnostics.some(
+        (d) => d.message === 'Module "math" does not export "helper".',
+      ),
     ).toBe(true);
   });
 });
@@ -1794,9 +1805,9 @@ describe("type aliases and advanced types", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("tsn_map_new");
-    expect(result.ir).toContain("tsn_map_set");
-    expect(result.ir).toContain("tsn_map_get");
+    expect(result.ir).toContain("sn_map_new");
+    expect(result.ir).toContain("sn_map_set");
+    expect(result.ir).toContain("sn_map_get");
   });
 
   it("expands keyof and conditional types", () => {
@@ -1892,7 +1903,9 @@ describe("nullability and control-flow narrowing", () => {
       }
     `);
     expect(result.success).toBe(false);
-    expect(result.diagnostics.some((d) => d.message.includes("may be null"))).toBe(true);
+    expect(
+      result.diagnostics.some((d) => d.message.includes("may be null")),
+    ).toBe(true);
     expect(result.diagnostics.some((d) => d.code === "E0397")).toBe(true);
   });
 
@@ -2277,7 +2290,7 @@ describe("lambdas and closures", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_alloc");
+    expect(result.ir).toContain("call ptr @sn_alloc");
   });
 
   it("compiles mutable captures with heap boxes", () => {
@@ -2295,7 +2308,7 @@ describe("lambdas and closures", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call ptr @tsn_alloc");
+    expect(result.ir).toContain("call ptr @sn_alloc");
   });
 
   it("promotes named functions to callable values", () => {
@@ -2352,7 +2365,9 @@ describe("default and named arguments", () => {
     expect(result.success).toBe(false);
     expect(
       result.diagnostics.some((d) =>
-        d.message.includes("Default value of type string is not assignable to parameter type i32"),
+        d.message.includes(
+          "Default value of type string is not assignable to parameter type i32",
+        ),
       ),
     ).toBe(true);
   });
@@ -2401,7 +2416,9 @@ describe("default and named arguments", () => {
     `);
     expect(dup.success).toBe(false);
     expect(
-      dup.diagnostics.some((d) => d.message.includes("Argument 'name' was provided more than once")),
+      dup.diagnostics.some((d) =>
+        d.message.includes("Argument 'name' was provided more than once"),
+      ),
     ).toBe(true);
 
     const unknown = compile(`
@@ -2415,7 +2432,9 @@ describe("default and named arguments", () => {
     expect(unknown.success).toBe(false);
     expect(
       unknown.diagnostics.some((d) =>
-        d.message.includes("Function 'createPerson' has no parameter named 'username'"),
+        d.message.includes(
+          "Function 'createPerson' has no parameter named 'username'",
+        ),
       ),
     ).toBe(true);
   });
@@ -2471,7 +2490,9 @@ describe("default and named arguments", () => {
     expect(named.success).toBe(false);
     expect(
       named.diagnostics.some((d) =>
-        d.message.includes("Named arguments require a direct function reference"),
+        d.message.includes(
+          "Named arguments require a direct function reference",
+        ),
       ),
     ).toBe(true);
   });
@@ -2516,9 +2537,9 @@ describe("default and named arguments", () => {
     expect(ok.success).toBe(true);
     expect(ok.ir).toContain("%ObjectHeader = type { i32, ptr }");
     expect(ok.ir).toContain("%Error = type { %ObjectHeader, ptr }");
-    expect(ok.ir).toContain("declare void @tsn_throw");
+    expect(ok.ir).toContain("declare void @sn_throw");
     expect(ok.ir).toContain("declare i32 @setjmp");
-    expect(ok.ir).toContain("call void @tsn_throw");
+    expect(ok.ir).toContain("call void @sn_throw");
 
     const badString = compile(`
       function main(): void {
@@ -2551,7 +2572,7 @@ describe("default and named arguments", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("call void @tsn_throw");
+    expect(result.ir).toContain("call void @sn_throw");
   });
 });
 

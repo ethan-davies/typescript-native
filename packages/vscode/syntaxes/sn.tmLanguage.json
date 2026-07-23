@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "TypeScript Native",
-  "scopeName": "source.tsn",
-  "fileTypes": ["tsn"],
+  "name": "Sonite",
+  "scopeName": "source.sn",
+  "fileTypes": ["sn"],
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
@@ -22,34 +22,34 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.line.double-slash.tsn",
+          "name": "comment.line.double-slash.sn",
           "match": "//.*$"
         },
         {
-          "name": "comment.block.tsn",
+          "name": "comment.block.sn",
           "begin": "/\\*",
           "end": "\\*/"
         }
       ]
     },
     "strings": {
-      "name": "string.quoted.double.tsn",
+      "name": "string.quoted.double.sn",
       "begin": "\"",
       "end": "\"",
       "patterns": [
         {
-          "name": "constant.character.escape.tsn",
+          "name": "constant.character.escape.sn",
           "match": "\\\\[ntr\\\\\"'0]"
         }
       ]
     },
     "chars": {
-      "name": "string.quoted.single.tsn",
+      "name": "string.quoted.single.sn",
       "begin": "'",
       "end": "'",
       "patterns": [
         {
-          "name": "constant.character.escape.tsn",
+          "name": "constant.character.escape.sn",
           "match": "\\\\[ntr\\\\\"'0]"
         }
       ]
@@ -57,11 +57,11 @@
     "numbers": {
       "patterns": [
         {
-          "name": "constant.numeric.float.tsn",
+          "name": "constant.numeric.float.sn",
           "match": "\\b\\d+\\.\\d+\\b"
         },
         {
-          "name": "constant.numeric.integer.tsn",
+          "name": "constant.numeric.integer.sn",
           "match": "\\b\\d+\\b"
         }
       ]
@@ -69,10 +69,10 @@
     "imports": {
       "patterns": [
         {
-          "name": "meta.import.tsn",
+          "name": "meta.import.sn",
           "begin": "\\b(import)\\b",
           "beginCaptures": {
-            "1": { "name": "keyword.control.import.tsn" }
+            "1": { "name": "keyword.control.import.sn" }
           },
           "end": "(?=;|$)",
           "patterns": [
@@ -80,25 +80,25 @@
             { "include": "#strings" },
             {
               "match": "\\b(from|as)\\b",
-              "name": "keyword.control.import.tsn"
+              "name": "keyword.control.import.sn"
             },
             {
               "match": "\\*",
-              "name": "constant.language.import-export-all.tsn"
+              "name": "constant.language.import-export-all.sn"
             },
             {
               "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
-              "name": "variable.other.readwrite.tsn"
+              "name": "variable.other.readwrite.sn"
             },
             {
               "match": "[{},]",
-              "name": "punctuation.definition.block.tsn"
+              "name": "punctuation.definition.block.sn"
             }
           ]
         },
         {
           "match": "\\b(export)\\b",
-          "name": "keyword.control.export.tsn"
+          "name": "keyword.control.export.sn"
         }
       ]
     },
@@ -107,56 +107,56 @@
         {
           "match": "\\b(function)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.type.function.tsn" },
-            "2": { "name": "entity.name.function.tsn" }
+            "1": { "name": "storage.type.function.sn" },
+            "2": { "name": "entity.name.function.sn" }
           }
         },
         {
           "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.type.struct.tsn" },
-            "2": { "name": "entity.name.type.struct.tsn" }
+            "1": { "name": "storage.type.struct.sn" },
+            "2": { "name": "entity.name.type.struct.sn" }
           }
         },
         {
           "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.type.enum.tsn" },
-            "2": { "name": "entity.name.type.enum.tsn" }
+            "1": { "name": "storage.type.enum.sn" },
+            "2": { "name": "entity.name.type.enum.sn" }
           }
         },
         {
           "match": "\\b(abstract)\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.modifier.tsn" },
-            "2": { "name": "storage.type.class.tsn" },
-            "3": { "name": "entity.name.type.class.tsn" }
+            "1": { "name": "storage.modifier.sn" },
+            "2": { "name": "storage.type.class.sn" },
+            "3": { "name": "entity.name.type.class.sn" }
           }
         },
         {
           "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.type.class.tsn" },
-            "2": { "name": "entity.name.type.class.tsn" }
+            "1": { "name": "storage.type.class.sn" },
+            "2": { "name": "entity.name.type.class.sn" }
           }
         },
         {
           "match": "\\b(interface)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.type.interface.tsn" },
-            "2": { "name": "entity.name.type.interface.tsn" }
+            "1": { "name": "storage.type.interface.sn" },
+            "2": { "name": "entity.name.type.interface.sn" }
           }
         },
         {
           "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
-            "1": { "name": "storage.type.alias.tsn" },
-            "2": { "name": "entity.name.type.alias.tsn" }
+            "1": { "name": "storage.type.alias.sn" },
+            "2": { "name": "entity.name.type.alias.sn" }
           }
         },
         {
           "match": "\\b(constructor)\\b",
-          "name": "storage.type.constructor.tsn"
+          "name": "storage.type.constructor.sn"
         }
       ]
     },
@@ -164,35 +164,35 @@
       "patterns": [
         {
           "match": "\\b(if|elseif|else|while|for|switch|case|default|break|continue|return|throw|try|catch|finally)\\b",
-          "name": "keyword.control.tsn"
+          "name": "keyword.control.sn"
         },
         {
           "match": "\\b(let|const)\\b",
-          "name": "storage.type.tsn"
+          "name": "storage.type.sn"
         },
         {
           "match": "\\b(abstract|public|private|readonly|static)\\b",
-          "name": "storage.modifier.tsn"
+          "name": "storage.modifier.sn"
         },
         {
           "match": "\\b(extends|implements|in)\\b",
-          "name": "keyword.control.inheritance.tsn"
+          "name": "keyword.control.inheritance.sn"
         },
         {
           "match": "\\b(new|typeof|keyof|is|as)\\b",
-          "name": "keyword.operator.expression.tsn"
+          "name": "keyword.operator.expression.sn"
         },
         {
           "match": "\\b(this|super)\\b",
-          "name": "variable.language.tsn"
+          "name": "variable.language.sn"
         },
         {
           "match": "\\b(function|struct|enum|class|interface|type)\\b",
-          "name": "storage.type.tsn"
+          "name": "storage.type.sn"
         },
         {
           "match": "\\b(from)\\b",
-          "name": "keyword.control.import.tsn"
+          "name": "keyword.control.import.sn"
         }
       ]
     },
@@ -200,11 +200,11 @@
       "patterns": [
         {
           "match": "\\b(true|false)\\b",
-          "name": "constant.language.boolean.tsn"
+          "name": "constant.language.boolean.sn"
         },
         {
           "match": "\\b(null)\\b",
-          "name": "constant.language.null.tsn"
+          "name": "constant.language.null.sn"
         }
       ]
     },
@@ -212,71 +212,71 @@
       "patterns": [
         {
           "match": "\\b(print|createMap)\\b(?=\\s*\\()",
-          "name": "support.function.builtin.tsn"
+          "name": "support.function.builtin.sn"
         },
         {
           "match": "\\b(Error)\\b",
-          "name": "support.class.builtin.tsn"
+          "name": "support.class.builtin.sn"
         }
       ]
     },
     "primitives": {
       "match": "\\b(i32|i64|f32|f64|bool|string|char|void)\\b",
-      "name": "support.type.primitive.tsn"
+      "name": "support.type.primitive.sn"
     },
     "operators": {
       "patterns": [
         {
           "match": "(\\+\\+|\\-\\-|\\+\\=|\\-\\=)",
-          "name": "keyword.operator.assignment.compound.tsn"
+          "name": "keyword.operator.assignment.compound.sn"
         },
         {
           "match": "(=\\=|!=|<=|>=|<|>)",
-          "name": "keyword.operator.comparison.tsn"
+          "name": "keyword.operator.comparison.sn"
         },
         {
           "match": "(&&|\\|\\|)",
-          "name": "keyword.operator.logical.tsn"
+          "name": "keyword.operator.logical.sn"
         },
         {
           "match": "(\\?\\?)",
-          "name": "keyword.operator.nullish.tsn"
+          "name": "keyword.operator.nullish.sn"
         },
         {
           "match": "(\\?\\.)",
-          "name": "keyword.operator.optional.tsn"
+          "name": "keyword.operator.optional.sn"
         },
         {
           "match": "(=>)",
-          "name": "storage.type.function.arrow.tsn"
+          "name": "storage.type.function.arrow.sn"
         },
         {
           "match": "(\\?\\[)",
-          "name": "keyword.operator.optional.tsn"
+          "name": "keyword.operator.optional.sn"
         },
         {
           "match": "([+\\-*/%])",
-          "name": "keyword.operator.arithmetic.tsn"
+          "name": "keyword.operator.arithmetic.sn"
         },
         {
           "match": "(=)",
-          "name": "keyword.operator.assignment.tsn"
+          "name": "keyword.operator.assignment.sn"
         },
         {
           "match": "(!)",
-          "name": "keyword.operator.logical.tsn"
+          "name": "keyword.operator.logical.sn"
         },
         {
           "match": "(\\?)",
-          "name": "keyword.operator.ternary.tsn"
+          "name": "keyword.operator.ternary.sn"
         },
         {
           "match": "(&)",
-          "name": "keyword.operator.bitwise.tsn"
+          "name": "keyword.operator.bitwise.sn"
         },
         {
           "match": "(\\|)",
-          "name": "keyword.operator.bitwise.tsn"
+          "name": "keyword.operator.bitwise.sn"
         }
       ]
     },
@@ -284,31 +284,31 @@
       "patterns": [
         {
           "match": "[{}]",
-          "name": "punctuation.definition.block.tsn"
+          "name": "punctuation.definition.block.sn"
         },
         {
           "match": "[\\[\\]]",
-          "name": "punctuation.definition.bracket.tsn"
+          "name": "punctuation.definition.bracket.sn"
         },
         {
           "match": "[()]",
-          "name": "punctuation.definition.parameters.tsn"
+          "name": "punctuation.definition.parameters.sn"
         },
         {
           "match": ";",
-          "name": "punctuation.terminator.statement.tsn"
+          "name": "punctuation.terminator.statement.sn"
         },
         {
           "match": ",",
-          "name": "punctuation.separator.comma.tsn"
+          "name": "punctuation.separator.comma.sn"
         },
         {
           "match": ":",
-          "name": "punctuation.separator.colon.tsn"
+          "name": "punctuation.separator.colon.sn"
         },
         {
           "match": "\\.",
-          "name": "punctuation.accessor.tsn"
+          "name": "punctuation.accessor.sn"
         }
       ]
     },
@@ -317,16 +317,16 @@
         {
           "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
           "captures": {
-            "1": { "name": "entity.name.function.tsn" }
+            "1": { "name": "entity.name.function.sn" }
           }
         },
         {
           "match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
-          "name": "entity.name.type.tsn"
+          "name": "entity.name.type.sn"
         },
         {
           "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b",
-          "name": "variable.other.readwrite.tsn"
+          "name": "variable.other.readwrite.sn"
         }
       ]
     }
