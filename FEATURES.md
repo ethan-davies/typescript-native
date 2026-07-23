@@ -11,7 +11,7 @@ Currently supported features:
 - Struct declarations, literals (`Person { name: "...", age: 16 }`), field access, field assignment, and instance methods
 - Classes: `new`, constructors, instance/static fields and methods, `public`/`private`, `readonly`, inheritance (`extends`), and `abstract` classes (heap reference types)
 - Interfaces: method contracts with `implements` / `extends`, optional index signatures, compile-time compliance checks, and fat-pointer dynamic dispatch when typed as an interface
-- `let` / `const` variables with optional annotations and inference (`5` → `i32`, `3.14` → `f64`); annotated `let` may omit an initializer (`let x: T | null;`); tuple destructuring (`let [a, b] = pair`)
+- `let` / `const` variables with optional annotations and inference (`5` → `i32`, `3.14` → `f64`); annotated `let` may omit an initializer (`let x: T | null;`); tuple destructuring (`let [a, b] = pair`); module-level `export const` / `export let` / `const` / `let` (simple names, required initializer)
 - Reassignment for `let` only (`=`, `+=`, `-=`, `++`, `--` on numeric lets)
 - Arrays: literals `[1, 2, 3]`, indexing, element assignment, `.length`, and prelude methods (`.push` / `.pop` / `.map` / `.filter` / `.forEach` / `.findIndex` / …)
 - String methods via the auto-loaded prelude (`.contains`, `.startsWith`, `.trim`, `.trimStart`, `.slice`, `.replaceAll`, `.join`, …)
@@ -19,7 +19,7 @@ Currently supported features:
 - Extension methods: `export function contains(this: string, needle: string): bool` callable as `"hi".contains("h")`
 - `extern function` declarations for calling C runtime symbols from SN
 - Explicit standard-library modules via `import { … } from "std/…"`:
-  - `std/math` — abs/min/max/clamp/floor/ceil/round/sqrt/pow, trig (sin/cos/tan/asin/acos/atan/atan2), `PI`/`E`/`TAU`
+  - `std/math` — abs/min/max/clamp/floor/ceil/round/sqrt/pow, trig (sin/cos/tan/asin/acos/atan/atan2), constants `PI`/`E`/`TAU`
   - `std/random` — `random` / `randomInt` / `randomFloat` / `randomBool` / `seed` (pseudo-random, not crypto)
   - `std/collections` — `Stack`, `Queue`, `Set`, `List`, `Map`, `Deque`
   - `std/io` — `readLine`, stream write helpers (`console.*` builtins need no import)
@@ -27,6 +27,13 @@ Currently supported features:
   - `std/process` — `args`, `getEnv`, `setEnv`, `cwd`, `exit`
   - `std/time` — `Instant`, `Duration`, `sleep`, `now`
   - `std/encoding` — UTF-8 helpers, base64, hex
+- Modules / imports:
+  - Relative imports require `./` or `../` (e.g. `import { User } from "./models"`)
+  - Core std via `std/…`; installed packages via bare name or `pkg/subpath` (versions from `project.lock`)
+  - Named imports with aliases, `import * as ns from "…"`, and legacy `import "./mod"` / `import "./mod" as a`
+  - `export` on declarations; re-exports `export { X as Y } from "…"` and `export * from "…"`
+  - Formal export tables; private declarations are not importable; circular imports/re-exports diagnosed
+  - No default exports
 - Tuples: fixed-length heterogeneous products `[string, i32]`, const/dynamic indexing (dynamic → union), `.length`, element assignment with constant indexes, destructuring with holes
 - Function types `(i32, i32) => i32`: annotate variables, parameters, and return types; use in `type` aliases; assign and pass named functions as first-class values; call through function-typed expressions
 - Default parameter values (`greeting: string = "Hello"`) evaluated at the call site when omitted; required parameters must precede defaults

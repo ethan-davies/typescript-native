@@ -17,5 +17,6 @@ Speaks LSP over stdio. Used by `sonite-vscode`.
 - Diagnostics (lexer / parser / validate / typecheck via `analyzeFile`)
 - Hover
 - Go to definition
-- Completion (keywords, in-scope bindings, module symbols, members after `.`)
+- Find references
+- Completion (keywords, in-scope bindings, module symbols, members after `.`, import path strings, auto-import)
 - Document symbols

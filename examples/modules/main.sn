@@ -1,4 +1,4 @@
-import "math";
+import "./math";
 
 function main(): void {
   let result = math.add(5, 10);

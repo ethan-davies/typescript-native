@@ -1,30 +1,7 @@
-extern function sn_random_seed(seed: i64): void;
-extern function sn_random(): f64;
-extern function sn_random_int(min: i32, max: i32): i32;
-extern function sn_random_float(min: f64, max: f64): f64;
-extern function sn_random_bool(): bool;
-
-/** Uniform value in [0, 1). Pseudo-random — not cryptographically secure. */
-export function random(): f64 {
-  return sn_random();
-}
-
-/** Inclusive integer in [min, max]. Pseudo-random — not cryptographically secure. */
-export function randomInt(min: i32, max: i32): i32 {
-  return sn_random_int(min, max);
-}
-
-/** Half-open float in [min, max). Pseudo-random — not cryptographically secure. */
-export function randomFloat(min: f64, max: f64): f64 {
-  return sn_random_float(min, max);
-}
-
-/** Random boolean. Pseudo-random — not cryptographically secure. */
-export function randomBool(): bool {
-  return sn_random_bool();
-}
-
-/** Set the RNG seed (useful for reproducible tests). */
-export function seed(value: i64): void {
-  sn_random_seed(value);
-}
+export {
+  random,
+  randomInt,
+  randomFloat,
+  randomBool,
+  seed,
+} from "./random";

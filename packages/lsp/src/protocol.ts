@@ -9,12 +9,14 @@ import {
   documentSymbolsForFile,
   hoverAt,
   offsetToPosition,
+  referencesAt,
   type AnalyzeResult,
   type Diagnostic as SnDiagnostic,
   type DocumentSymbolInfo,
   type DocumentSymbolKind,
   type ExportIndexEntry,
   type ScopeBindingInfo,
+  type SemanticLocation,
   type SemanticModel,
   type SourceSpan,
 } from "@sonite/compiler";
@@ -124,6 +126,10 @@ function symbolKindToLsp(kind: DocumentSymbolKind): SymbolKind {
       return SymbolKind.Constructor;
     case "variant":
       return SymbolKind.EnumMember;
+    case "variable":
+      return SymbolKind.Variable;
+    case "constant":
+      return SymbolKind.Constant;
   }
 }
 
@@ -330,21 +336,40 @@ export function definitionAtPosition(
   };
 }
 
+export function referencesAtPosition(
+  semantic: SemanticModel,
+  filePath: string,
+  source: string,
+  position: Position,
+): Location[] {
+  const offset = positionToOffset(source, position);
+  const locs = referencesAt(semantic, filePath, offset);
+  return locs.map((loc: SemanticLocation) => ({
+    uri: pathToUri(loc.file),
+    range: spanToRange(loc.span),
+  }));
+}
+
 export function completionsAtPosition(
   semantic: SemanticModel,
   filePath: string,
   source: string,
   position: Position,
   exportIndex?: readonly ExportIndexEntry[],
+  workspaceRoots?: readonly string[],
 ): CompletionItem[] {
   const offset = positionToOffset(source, position);
-  const result = completionsAt(
-    semantic,
-    filePath,
-    offset,
-    source,
-    exportIndex ? { exportIndex } : undefined,
-  );
+  const options: {
+    exportIndex?: readonly ExportIndexEntry[];
+    workspaceRoots?: readonly string[];
+  } = {};
+  if (exportIndex) {
+    options.exportIndex = exportIndex;
+  }
+  if (workspaceRoots) {
+    options.workspaceRoots = workspaceRoots;
+  }
+  const result = completionsAt(semantic, filePath, offset, source, options);
   return toCompletionItems(result.items, result.prefix, position, {
     source,
     semantic,

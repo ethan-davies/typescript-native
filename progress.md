@@ -47,6 +47,7 @@ Target pipeline:
 - [x] Post-parse validation requiring exactly one `main(): void` (other functions allowed)
 - [x] Type checker for the current language surface
 - [x] Source formatter (`formatSource` / `sn fmt`) — parse → pretty-print; comments not preserved yet
+- [x] Module system — relative / `std/…` / package (+ subpath) resolution; named & namespace imports; re-exports / `export *`; formal export tables; module-level values; lockfile-backed package roots in compile + LSP; import-path completion, auto-import, find-references
 
 ### CLI / toolchain
 - [x] `sn` entrypoint using **Commander**

@@ -32,7 +32,11 @@ export type AstNode =
   | Program
   | ImportDeclaration
   | ImportSpecifier
+  | ExportNamedFromDeclaration
+  | ExportAllFromDeclaration
+  | ExportSpecifier
   | FunctionDeclaration
+  | ModuleVariableDeclaration
   | StructDeclaration
   | StructField
   | StructMethod
@@ -101,7 +105,10 @@ interface AstNodeBase {
 
 export type TopLevelDeclaration =
   | ImportDeclaration
+  | ExportNamedFromDeclaration
+  | ExportAllFromDeclaration
   | FunctionDeclaration
+  | ModuleVariableDeclaration
   | StructDeclaration
   | EnumDeclaration
   | ClassDeclaration
@@ -136,6 +143,28 @@ export interface ImportDeclaration extends AstNodeBase {
   readonly kind: "ImportDeclaration";
   readonly source: StringLiteral;
   readonly clause: ImportClause;
+}
+
+/** `export { User as UserModel } from "./models"` specifier. */
+export interface ExportSpecifier extends AstNodeBase {
+  readonly kind: "ExportSpecifier";
+  /** Name looked up in the source module's export table. */
+  readonly importedName: Identifier;
+  /** Name added to this module's export table (same as importedName without `as`). */
+  readonly exportName: Identifier;
+}
+
+/** `export { a, b as c } from "./mod"` */
+export interface ExportNamedFromDeclaration extends AstNodeBase {
+  readonly kind: "ExportNamedFromDeclaration";
+  readonly source: StringLiteral;
+  readonly specifiers: readonly ExportSpecifier[];
+}
+
+/** `export * from "./mod"` */
+export interface ExportAllFromDeclaration extends AstNodeBase {
+  readonly kind: "ExportAllFromDeclaration";
+  readonly source: StringLiteral;
 }
 
 export type Statement =
@@ -194,6 +223,16 @@ export interface FunctionDeclaration extends AstNodeBase {
   readonly returnType: TypeAnnotation;
   /** null when `isExtern`. */
   readonly body: Statement[] | null;
+}
+
+/** Module-level `export const` / `export let` / `const` / `let` (simple name only). */
+export interface ModuleVariableDeclaration extends AstNodeBase {
+  readonly kind: "ModuleVariableDeclaration";
+  readonly exported: boolean;
+  readonly mutability: "let" | "const";
+  readonly name: Identifier;
+  readonly typeAnnotation: TypeAnnotation | null;
+  readonly initializer: Expression;
 }
 
 export interface StructField extends AstNodeBase {

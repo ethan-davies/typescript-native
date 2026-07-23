@@ -77,8 +77,10 @@ describe("LSP protocol helpers", () => {
           body: [],
         },
         moduleId: "main",
+        identity: "file:///test/main.sn",
         isEntry: true,
         imports: [],
+        reexportSources: [],
       },
     ]);
     const items = toCompletionItems(

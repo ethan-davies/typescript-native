@@ -7,16 +7,30 @@ export interface ImportTextEdit {
   readonly newText: string;
 }
 
+export interface ComputeNamedImportEditOptions {
+  /** Local names already bound in the module (imports + declarations). */
+  readonly occupiedNames?: ReadonlySet<string>;
+}
+
 /**
  * Compute a text edit that adds `exportName` via a named import from
  * `moduleSpecifier`, merging into an existing named import when possible.
+ * When `exportName` conflicts with an occupied local name, uses `as Alias`.
  */
 export function computeNamedImportEdit(
   source: string,
   ast: Program | undefined,
   moduleSpecifier: string,
   exportName: string,
+  options: ComputeNamedImportEditOptions = {},
 ): ImportTextEdit | null {
+  const localName = pickLocalImportName(
+    exportName,
+    options.occupiedNames ?? collectOccupiedNames(ast),
+  );
+  const specifierText =
+    localName === exportName ? exportName : `${exportName} as ${localName}`;
+
   if (ast) {
     for (const decl of ast.body) {
       if (decl.kind !== "ImportDeclaration") {
@@ -29,17 +43,18 @@ export function computeNamedImportEdit(
         continue;
       }
       const already = decl.clause.specifiers.some(
-        (s) => s.importedName.name === exportName || s.localName.name === exportName,
+        (s) =>
+          s.importedName.name === exportName || s.localName.name === localName,
       );
       if (already) {
         return null;
       }
-      return mergeIntoNamedImport(source, decl, exportName);
+      return mergeIntoNamedImport(source, decl, specifierText);
     }
   }
 
   const insertOffset = importInsertOffset(source, ast);
-  const line = `import { ${exportName} } from "${moduleSpecifier}";\n`;
+  const line = `import { ${specifierText} } from "${moduleSpecifier}";\n`;
   return {
     startOffset: insertOffset,
     endOffset: insertOffset,
@@ -47,18 +62,64 @@ export function computeNamedImportEdit(
   };
 }
 
+function pickLocalImportName(
+  exportName: string,
+  occupied: ReadonlySet<string>,
+): string {
+  if (!occupied.has(exportName)) {
+    return exportName;
+  }
+  let n = 2;
+  while (occupied.has(`${exportName}${n}`)) {
+    n += 1;
+  }
+  return `${exportName}${n}`;
+}
+
+function collectOccupiedNames(ast: Program | undefined): Set<string> {
+  const names = new Set<string>();
+  if (!ast) {
+    return names;
+  }
+  for (const decl of ast.body) {
+    if (decl.kind === "ImportDeclaration") {
+      if (decl.clause.kind === "NamespaceImport") {
+        if (decl.clause.localName) {
+          names.add(decl.clause.localName.name);
+        }
+      } else {
+        for (const spec of decl.clause.specifiers) {
+          names.add(spec.localName.name);
+        }
+      }
+      continue;
+    }
+    if (
+      decl.kind === "FunctionDeclaration" ||
+      decl.kind === "StructDeclaration" ||
+      decl.kind === "EnumDeclaration" ||
+      decl.kind === "ClassDeclaration" ||
+      decl.kind === "InterfaceDeclaration" ||
+      decl.kind === "TypeAliasDeclaration" ||
+      decl.kind === "ModuleVariableDeclaration"
+    ) {
+      names.add(decl.name.name);
+    }
+  }
+  return names;
+}
+
 function mergeIntoNamedImport(
   source: string,
   decl: ImportDeclaration,
-  exportName: string,
+  specifierText: string,
 ): ImportTextEdit | null {
   if (decl.clause.kind !== "NamedImports") {
     return null;
   }
   const specs = decl.clause.specifiers;
   if (specs.length === 0) {
-    // import { } from "..." — rare; rewrite the whole declaration.
-    const newText = `import { ${exportName} } from "${decl.source.value}";`;
+    const newText = `import { ${specifierText} } from "${decl.source.value}";`;
     return {
       startOffset: decl.span.start.offset,
       endOffset: decl.span.end.offset,
@@ -68,11 +129,10 @@ function mergeIntoNamedImport(
 
   const last = specs[specs.length - 1]!;
   const insertAt = last.span.end.offset;
-  // Insert `, exportName` before the closing `}` — after the last specifier.
   return {
     startOffset: insertAt,
     endOffset: insertAt,
-    newText: `, ${exportName}`,
+    newText: `, ${specifierText}`,
   };
 }
 
@@ -89,7 +149,6 @@ function importInsertOffset(source: string, ast: Program | undefined): number {
       }
     }
     if (sawImport) {
-      // Place after the last import line (consume trailing newline if present).
       let offset = lastImportEnd;
       if (source[offset] === "\r") {
         offset += 1;
@@ -101,7 +160,6 @@ function importInsertOffset(source: string, ast: Program | undefined): number {
     }
   }
 
-  // Skip leading shebang / blank lines.
   let offset = 0;
   if (source.startsWith("#!")) {
     const nl = source.indexOf("\n");

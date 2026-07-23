@@ -1,4 +1,4 @@
-import { add as sum, mul } from "math";
+import { add as sum, mul } from "./math";
 
 function main(): void {
   print(sum(5, 10));

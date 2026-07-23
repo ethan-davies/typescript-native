@@ -1,15 +1,2 @@
-extern function sn_read_line(): string;
-extern function sn_print_str(value: string): void;
-extern function sn_eprint_str(value: string): void;
-
-export function readLine(): string {
-  return sn_read_line();
-}
-
-export function write(text: string): void {
-  sn_print_str(text);
-}
-
-export function writeError(text: string): void {
-  sn_eprint_str(text);
-}
+export { readLine } from "./console";
+export { write, writeError } from "./stream";

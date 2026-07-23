@@ -1566,7 +1566,7 @@ describe("compile pipeline", () => {
 
     it("rejects imports in compile(source)", () => {
       const result = compile(`
-        import "math";
+        import "./math";
         function main(): void {}
       `);
       expect(result.success).toBe(false);
@@ -1619,7 +1619,7 @@ describe("modules / compileFile", () => {
     const files = new Map<string, string>([
       [
         "/virt/main.sn",
-        `import "lib";
+        `import "./lib";
 function main(): void {
   print(lib.secret());
 }
@@ -1664,7 +1664,7 @@ function main(): void {
     const files = new Map<string, string>([
       [
         "/virt/main.sn",
-        `import * as math from "math";
+        `import * as math from "./math";
 function main(): void {
   print(math.add(1, 2));
 }
@@ -1695,7 +1695,7 @@ function main(): void {
     const files = new Map<string, string>([
       [
         "/virt/main.sn",
-        `import { helper } from "math";
+        `import { helper } from "./math";
 function main(): void {
   helper();
 }
@@ -1723,9 +1723,102 @@ export function add(a: i32, b: i32): i32 {
     expect(result.diagnostics.some((d) => d.code === "E0408")).toBe(true);
     expect(
       result.diagnostics.some(
-        (d) => d.message === 'Module "math" does not export "helper".',
+        (d) =>
+          d.message ===
+          '"helper" is declared in "./math" but is not exported.',
       ),
     ).toBe(true);
+  });
+
+  it("compiles export const import and use", () => {
+    const files = new Map<string, string>([
+      [
+        "/virt/main.sn",
+        `import { PI } from "./math";
+function main(): void {
+  print(PI);
+}
+`,
+      ],
+      [
+        "/virt/math.sn",
+        `export const PI: f64 = 3.141592653589793;
+`,
+      ],
+    ]);
+    const result = compileFile("/virt/main.sn", {
+      readFile: (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+    });
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("@math__PI = global double");
+    expect(result.ir).toContain("load double, ptr @math__PI");
+  });
+
+  it("errors when importing a private module const", () => {
+    const files = new Map<string, string>([
+      [
+        "/virt/main.sn",
+        `import { SECRET } from "./math";
+function main(): void {
+  print(SECRET);
+}
+`,
+      ],
+      [
+        "/virt/math.sn",
+        `const SECRET: i32 = 42;
+export function ok(): i32 {
+  return SECRET;
+}
+`,
+      ],
+    ]);
+    const result = compileFile("/virt/main.sn", {
+      readFile: (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0408")).toBe(true);
+  });
+
+  it("rejects assignment to an imported const", () => {
+    const files = new Map<string, string>([
+      [
+        "/virt/main.sn",
+        `import { PI } from "./math";
+function main(): void {
+  PI = 1.0;
+}
+`,
+      ],
+      [
+        "/virt/math.sn",
+        `export const PI: f64 = 3.14;
+`,
+      ],
+    ]);
+    const result = compileFile("/virt/main.sn", {
+      readFile: (path) => {
+        const source = files.get(path);
+        if (source === undefined) {
+          throw new Error(`ENOENT: ${path}`);
+        }
+        return source;
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.diagnostics.some((d) => d.code === "E0305")).toBe(true);
   });
 });
 

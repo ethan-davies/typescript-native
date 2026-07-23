@@ -15,6 +15,7 @@ import type {
   InterfaceDeclaration,
   LambdaExpression,
   MemberExpression,
+  ModuleVariableDeclaration,
   NewExpression,
   Parameter,
   Program,
@@ -37,6 +38,8 @@ import type {
 import type { TypecheckInstantiations } from "../generics/monomorphize.js";
 import { mangleTypeAnnotation } from "../generics/mangle.js";
 import { valueTypeToAnnotation } from "../generics/value-type.js";
+import { DiagnosticCollector } from "../diagnostics/diagnostic.js";
+import { buildExportTables } from "../modules/exports.js";
 import { mangleSymbol } from "../modules/mangle.js";
 import type { ResolvedModule } from "../modules/resolve.js";
 import {
@@ -150,6 +153,25 @@ interface FunctionSig {
   readonly isExtern: boolean;
 }
 
+interface ModuleValueInfo {
+  readonly name: string;
+  readonly mangledName: string;
+  readonly type: ValueType;
+  readonly mutability: "let" | "const";
+  readonly decl: ModuleVariableDeclaration;
+  /** True when the global initializer was emitted as a compile-time constant. */
+  readonly hasConstantInit: boolean;
+}
+
+interface NamespaceInfo {
+  readonly functions: ReadonlyMap<string, FunctionSig>;
+  readonly structs: ReadonlyMap<string, StructInfo>;
+  readonly enums: ReadonlyMap<string, EnumInfo>;
+  readonly classes: ReadonlyMap<string, ClassInfo>;
+  readonly interfaces: ReadonlyMap<string, InterfaceInfo>;
+  readonly values: ReadonlyMap<string, ModuleValueInfo>;
+}
+
 type ControlContext =
   | {
       readonly kind: "loop";
@@ -247,14 +269,6 @@ interface InterfaceInfo {
   readonly decl: InterfaceDeclaration;
 }
 
-interface NamespaceInfo {
-  readonly functions: ReadonlyMap<string, FunctionSig>;
-  readonly structs: ReadonlyMap<string, StructInfo>;
-  readonly enums: ReadonlyMap<string, EnumInfo>;
-  readonly classes: ReadonlyMap<string, ClassInfo>;
-  readonly interfaces: ReadonlyMap<string, InterfaceInfo>;
-}
-
 const COMPARISON_OPS = new Set(["==", "!=", "<", "<=", ">", ">="]);
 const LOGICAL_OPS = new Set(["&&", "||"]);
 
@@ -310,6 +324,12 @@ export class LlvmCodegen {
   private functions = new Map<string, FunctionSig>();
   /** Current module: local name → mangled function. */
   private localFunctions = new Map<string, FunctionSig>();
+  /** Current module: local name → module-level value. */
+  private localValues = new Map<string, ModuleValueInfo>();
+  /** All module values by mangled name. */
+  private readonly allModuleValues = new Map<string, ModuleValueInfo>();
+  /** Module init helpers that must run before main (mangled function names). */
+  private readonly moduleInitFns: string[] = [];
   private structs = new Map<string, StructInfo>();
   private localStructs = new Map<string, StructInfo>();
   private enums = new Map<string, EnumInfo>();
@@ -388,11 +408,13 @@ export class LlvmCodegen {
     return this.emitModules([
       {
         path: "<source>",
+        identity: "file://<source>",
         source: "",
         ast: program,
         moduleId: "",
         isEntry: true,
         imports: [],
+        reexportSources: [],
       },
     ]);
   }
@@ -416,6 +438,9 @@ export class LlvmCodegen {
     this.emittedTrampolines.clear();
     this.needsCallableRuntime = false;
     this.localFunctions.clear();
+    this.localValues.clear();
+    this.allModuleValues.clear();
+    this.moduleInitFns.length = 0;
     this.structs.clear();
     this.localStructs.clear();
     this.enums.clear();
@@ -464,6 +489,7 @@ export class LlvmCodegen {
         enums: Map<string, EnumInfo>;
         classes: Map<string, ClassInfo>;
         interfaces: Map<string, InterfaceInfo>;
+        values: Map<string, ModuleValueInfo>;
       }
     >();
 
@@ -761,13 +787,88 @@ export class LlvmCodegen {
         this.functions.set(mangledName, sig);
       }
 
+      const localValues = new Map<string, ModuleValueInfo>();
+      for (const decl of mod.ast.body) {
+        if (decl.kind !== "ModuleVariableDeclaration") {
+          continue;
+        }
+        const type =
+          decl.typeAnnotation !== null
+            ? this.resolveAnnotationInModule(
+                decl.typeAnnotation,
+                localStructs,
+                localEnums,
+                localClasses,
+                localInterfaces,
+                new Map(),
+              )
+            : inferLiteralModuleType(decl.initializer);
+        if (!type) {
+          throw new Error(
+            `Codegen: invalid module variable type for '${decl.name.name}'`,
+          );
+        }
+        const mangledName = mangleSymbol(mod.moduleId, decl.name.name);
+        const hasConstantInit = isConstantModuleInit(decl.initializer);
+        const info: ModuleValueInfo = {
+          name: decl.name.name,
+          mangledName,
+          type,
+          mutability: decl.mutability,
+          decl,
+          hasConstantInit,
+        };
+        localValues.set(decl.name.name, info);
+        this.allModuleValues.set(mangledName, info);
+        this.emitModuleValueGlobal(info);
+      }
+
       moduleSymbols.set(mod.path, {
         functions: localFns,
         structs: localStructs,
         enums: localEnums,
         classes: localClasses,
         interfaces: localInterfaces,
+        values: localValues,
       });
+    }
+
+    // Emit deferred module value inits (non-constant initializers).
+    // Prefer non-entry modules first so dependents see initialized values.
+    const modsForInit = [
+      ...modules.filter((m) => !m.isEntry),
+      ...modules.filter((m) => m.isEntry),
+    ];
+    for (const mod of modsForInit) {
+      const symbols = moduleSymbols.get(mod.path)!;
+      const deferred = [...symbols.values.values()].filter(
+        (v) => !v.hasConstantInit,
+      );
+      if (deferred.length === 0) {
+        continue;
+      }
+      const initName = `__sn_init_${mod.moduleId || "main"}`;
+      this.moduleInitFns.push(initName);
+      const lines: string[] = [];
+      lines.push(`define void @${initName}() {`);
+      lines.push("entry:");
+      this.localValues = new Map(symbols.values);
+      this.localFunctions = new Map(symbols.functions);
+      this.localStructs = new Map(symbols.structs);
+      this.localEnums = new Map(symbols.enums);
+      this.localClasses = new Map(symbols.classes);
+      this.localInterfaces = new Map(symbols.interfaces);
+      this.tempCounter = 0;
+      for (const val of deferred) {
+        const value = this.emitExpression(val.decl.initializer, lines, val.type);
+        lines.push(
+          `  store ${toLlvmType(val.type)} ${value.llvm}, ptr @${val.mangledName}`,
+        );
+      }
+      lines.push("  ret void");
+      lines.push("}");
+      lines.push("");
+      this.functionBodies.push(...lines);
     }
 
     // Emit function/method bodies with per-module local/namespace context.
@@ -778,71 +879,70 @@ export class LlvmCodegen {
       const localEnums = new Map(symbols.enums);
       const localClasses = new Map(symbols.classes);
       const localInterfaces = new Map(symbols.interfaces);
+      const localValues = new Map(symbols.values);
       this.currentModuleId = mod.moduleId;
 
       const namespaces = new Map<string, NamespaceInfo>();
+      const exportTables = buildExportTables(
+        modules.map((m) => ({
+          path: m.path,
+          ast: m.ast,
+          reexportSources: m.reexportSources,
+        })),
+        new DiagnosticCollector(),
+      );
+
       for (const binding of mod.imports) {
         const imported = moduleSymbols.get(binding.modulePath);
         if (!imported) {
           continue;
         }
-        const importedMod = modules.find((m) => m.path === binding.modulePath);
-        if (!importedMod) {
+        const importedTable = exportTables.get(binding.modulePath);
+        if (!importedTable) {
           continue;
         }
 
         if (binding.kind === "namespace") {
           const exportedFns = new Map<string, FunctionSig>();
-          for (const [name, sig] of imported.functions) {
-            const fnDecl = importedMod.ast.body.find(
-              (d) => d.kind === "FunctionDeclaration" && d.name.name === name,
-            );
-            if (
-              fnDecl &&
-              fnDecl.kind === "FunctionDeclaration" &&
-              fnDecl.exported
-            ) {
-              exportedFns.set(name, sig);
-            }
-          }
           const exportedStructs = new Map<string, StructInfo>();
-          for (const [name, info] of imported.structs) {
-            const sDecl = importedMod.ast.body.find(
-              (d) => d.kind === "StructDeclaration" && d.name.name === name,
-            );
-            if (sDecl && sDecl.kind === "StructDeclaration" && sDecl.exported) {
-              exportedStructs.set(name, info);
-            }
-          }
           const exportedEnums = new Map<string, EnumInfo>();
-          for (const [name, info] of imported.enums) {
-            const eDecl = importedMod.ast.body.find(
-              (d) => d.kind === "EnumDeclaration" && d.name.name === name,
-            );
-            if (eDecl && eDecl.kind === "EnumDeclaration" && eDecl.exported) {
-              exportedEnums.set(name, info);
-            }
-          }
           const exportedClasses = new Map<string, ClassInfo>();
-          for (const [name, info] of imported.classes) {
-            const cDecl = importedMod.ast.body.find(
-              (d) => d.kind === "ClassDeclaration" && d.name.name === name,
-            );
-            if (cDecl && cDecl.kind === "ClassDeclaration" && cDecl.exported) {
-              exportedClasses.set(name, info);
-            }
-          }
           const exportedInterfaces = new Map<string, InterfaceInfo>();
-          for (const [name, info] of imported.interfaces) {
-            const iDecl = importedMod.ast.body.find(
-              (d) => d.kind === "InterfaceDeclaration" && d.name.name === name,
-            );
-            if (
-              iDecl &&
-              iDecl.kind === "InterfaceDeclaration" &&
-              iDecl.exported
-            ) {
-              exportedInterfaces.set(name, info);
+          const exportedValues = new Map<string, ModuleValueInfo>();
+
+          for (const [exportName, entry] of importedTable) {
+            const origin = moduleSymbols.get(entry.sourceModulePath);
+            if (!origin) {
+              continue;
+            }
+            const fn = origin.functions.get(entry.originalName);
+            if (fn) {
+              exportedFns.set(exportName, fn);
+              continue;
+            }
+            const st = origin.structs.get(entry.originalName);
+            if (st) {
+              exportedStructs.set(exportName, st);
+              continue;
+            }
+            const en = origin.enums.get(entry.originalName);
+            if (en) {
+              exportedEnums.set(exportName, en);
+              continue;
+            }
+            const cl = origin.classes.get(entry.originalName);
+            if (cl) {
+              exportedClasses.set(exportName, cl);
+              continue;
+            }
+            const iface = origin.interfaces.get(entry.originalName);
+            if (iface) {
+              exportedInterfaces.set(exportName, iface);
+              continue;
+            }
+            const val = origin.values.get(entry.originalName);
+            if (val) {
+              exportedValues.set(exportName, val);
             }
           }
           namespaces.set(binding.alias, {
@@ -851,75 +951,60 @@ export class LlvmCodegen {
             enums: exportedEnums,
             classes: exportedClasses,
             interfaces: exportedInterfaces,
+            values: exportedValues,
           });
           continue;
         }
 
-        // Named import: bind export under local name in this module's maps.
-        const exportName = binding.exportName;
+        const entry = importedTable.get(binding.exportName);
+        if (!entry) {
+          continue;
+        }
+        const origin = moduleSymbols.get(entry.sourceModulePath);
+        const originMod = modules.find((m) => m.path === entry.sourceModulePath);
+        if (!origin || !originMod) {
+          continue;
+        }
         const localName = binding.localName;
 
-        const fnDecl = importedMod.ast.body.find(
-          (d) => d.kind === "FunctionDeclaration" && d.name.name === exportName,
-        );
-        if (fnDecl?.kind === "FunctionDeclaration" && fnDecl.exported) {
-          const sig = imported.functions.get(exportName);
-          if (sig) {
-            localFunctions.set(localName, sig);
-          }
+        const fnSig = origin.functions.get(entry.originalName);
+        if (fnSig) {
+          localFunctions.set(localName, fnSig);
+          continue;
+        }
+        const stInfo = origin.structs.get(entry.originalName);
+        if (stInfo) {
+          localStructs.set(localName, stInfo);
+          continue;
+        }
+        const enInfo = origin.enums.get(entry.originalName);
+        if (enInfo) {
+          localEnums.set(localName, enInfo);
+          continue;
+        }
+        const clInfo = origin.classes.get(entry.originalName);
+        if (clInfo) {
+          localClasses.set(localName, clInfo);
+          continue;
+        }
+        const ifaceInfo = origin.interfaces.get(entry.originalName);
+        if (ifaceInfo) {
+          localInterfaces.set(localName, ifaceInfo);
+          continue;
+        }
+        const valInfo = origin.values.get(entry.originalName);
+        if (valInfo) {
+          localValues.set(localName, valInfo);
           continue;
         }
 
-        const sDecl = importedMod.ast.body.find(
-          (d) => d.kind === "StructDeclaration" && d.name.name === exportName,
-        );
-        if (sDecl?.kind === "StructDeclaration" && sDecl.exported) {
-          const info = imported.structs.get(exportName);
-          if (info) {
-            localStructs.set(localName, info);
-          }
-          continue;
-        }
-
-        const eDecl = importedMod.ast.body.find(
-          (d) => d.kind === "EnumDeclaration" && d.name.name === exportName,
-        );
-        if (eDecl?.kind === "EnumDeclaration" && eDecl.exported) {
-          const info = imported.enums.get(exportName);
-          if (info) {
-            localEnums.set(localName, info);
-          }
-          continue;
-        }
-
-        const cDecl = importedMod.ast.body.find(
-          (d) => d.kind === "ClassDeclaration" && d.name.name === exportName,
-        );
-        if (cDecl?.kind === "ClassDeclaration" && cDecl.exported) {
-          const info = imported.classes.get(exportName);
-          if (info) {
-            localClasses.set(localName, info);
-          }
-          continue;
-        }
-
-        const iDecl = importedMod.ast.body.find(
+        const tDecl = originMod.ast.body.find(
           (d) =>
-            d.kind === "InterfaceDeclaration" && d.name.name === exportName,
+            d.kind === "TypeAliasDeclaration" &&
+            d.name.name === entry.originalName &&
+            d.exported,
         );
-        if (iDecl?.kind === "InterfaceDeclaration" && iDecl.exported) {
-          const info = imported.interfaces.get(exportName);
-          if (info) {
-            localInterfaces.set(localName, info);
-          }
-          continue;
-        }
-
-        const tDecl = importedMod.ast.body.find(
-          (d) =>
-            d.kind === "TypeAliasDeclaration" && d.name.name === exportName,
-        );
-        if (tDecl?.kind === "TypeAliasDeclaration" && tDecl.exported) {
+        if (tDecl?.kind === "TypeAliasDeclaration") {
           if (tDecl.typeParams.length === 0) {
             this.typeAliases.set(localName, tDecl.type);
           } else {
@@ -933,6 +1018,7 @@ export class LlvmCodegen {
       this.localEnums = localEnums;
       this.localClasses = localClasses;
       this.localInterfaces = localInterfaces;
+      this.localValues = localValues;
       this.namespaces = namespaces;
 
       for (const decl of mod.ast.body) {
@@ -2002,6 +2088,28 @@ export class LlvmCodegen {
       }
     }
     return lines;
+  }
+
+  private emitModuleValueGlobal(info: ModuleValueInfo): void {
+    const llvmTy = toLlvmType(info.type);
+    if (info.hasConstantInit) {
+      const init = info.decl.initializer;
+      if (init.kind === "StringLiteral") {
+        const global = this.internString(init.value);
+        this.globalDefs.push(
+          `@${info.mangledName} = global ptr getelementptr inbounds ([${global.length} x i8], ptr @${global.name}, i64 0, i64 0)`,
+        );
+        return;
+      }
+      const constant = constantLlvmValue(init, info.type);
+      this.globalDefs.push(
+        `@${info.mangledName} = global ${llvmTy} ${constant}`,
+      );
+      return;
+    }
+    this.globalDefs.push(
+      `@${info.mangledName} = global ${llvmTy} ${zeroInitializer(info.type)}`,
+    );
   }
 
   private emitClassGlobals(): void {
@@ -3487,6 +3595,10 @@ export class LlvmCodegen {
     lines.push("entry:");
 
     if (isMain) {
+      // Non-entry module inits first (moduleInitFns already ordered that way).
+      for (const initFn of this.moduleInitFns) {
+        lines.push(`  call void @${initFn}()`);
+      }
       lines.push("  call void @sn_init_typeinfo()");
       lines.push("  call void @sn_runtime_init(i32 %argc, ptr %argv)");
     }
@@ -4338,23 +4450,50 @@ export class LlvmCodegen {
   private emitAssignment(stmt: AssignmentStatement, lines: string[]): void {
     if (stmt.target.kind === "Identifier") {
       const local = this.locals.get(stmt.target.name);
-      if (!local) {
-        throw new Error(`Codegen: unknown variable '${stmt.target.name}'`);
-      }
-      const llvmType = toLlvmType(local.type);
-      const storePtr = this.storagePtr(local, lines);
+      if (local) {
+        const llvmType = toLlvmType(local.type);
+        const storePtr = this.storagePtr(local, lines);
 
-      if (stmt.operator === "=") {
-        const value = this.emitExpression(stmt.value, lines, local.type);
-        lines.push(`  store ${llvmType} ${value.llvm}, ptr ${storePtr}`);
+        if (stmt.operator === "=") {
+          const value = this.emitExpression(stmt.value, lines, local.type);
+          lines.push(`  store ${llvmType} ${value.llvm}, ptr ${storePtr}`);
+          return;
+        }
+
+        const loaded = this.nextTemp();
+        lines.push(`  ${loaded} = load ${llvmType}, ptr ${storePtr}`);
+        const rhs = this.emitExpression(stmt.value, lines, local.type);
+        const result = this.nextTemp();
+        const isFloat = local.type === "f32" || local.type === "f64";
+        const opcode =
+          stmt.operator === "+="
+            ? isFloat
+              ? "fadd"
+              : "add"
+            : isFloat
+              ? "fsub"
+              : "sub";
+        lines.push(`  ${result} = ${opcode} ${llvmType} ${loaded}, ${rhs.llvm}`);
+        lines.push(`  store ${llvmType} ${result}, ptr ${storePtr}`);
         return;
       }
 
+      const modVal = this.localValues.get(stmt.target.name);
+      if (!modVal) {
+        throw new Error(`Codegen: unknown variable '${stmt.target.name}'`);
+      }
+      const llvmType = toLlvmType(modVal.type);
+      const globalPtr = `@${modVal.mangledName}`;
+      if (stmt.operator === "=") {
+        const value = this.emitExpression(stmt.value, lines, modVal.type);
+        lines.push(`  store ${llvmType} ${value.llvm}, ptr ${globalPtr}`);
+        return;
+      }
       const loaded = this.nextTemp();
-      lines.push(`  ${loaded} = load ${llvmType}, ptr ${storePtr}`);
-      const rhs = this.emitExpression(stmt.value, lines, local.type);
+      lines.push(`  ${loaded} = load ${llvmType}, ptr ${globalPtr}`);
+      const rhs = this.emitExpression(stmt.value, lines, modVal.type);
       const result = this.nextTemp();
-      const isFloat = local.type === "f32" || local.type === "f64";
+      const isFloat = modVal.type === "f32" || modVal.type === "f64";
       const opcode =
         stmt.operator === "+="
           ? isFloat
@@ -4364,7 +4503,7 @@ export class LlvmCodegen {
             ? "fsub"
             : "sub";
       lines.push(`  ${result} = ${opcode} ${llvmType} ${loaded}, ${rhs.llvm}`);
-      lines.push(`  store ${llvmType} ${result}, ptr ${storePtr}`);
+      lines.push(`  store ${llvmType} ${result}, ptr ${globalPtr}`);
       return;
     }
 
@@ -4514,16 +4653,36 @@ export class LlvmCodegen {
 
   private emitUpdate(stmt: UpdateStatement, lines: string[]): void {
     const local = this.locals.get(stmt.name.name);
-    if (!local) {
+    if (local) {
+      const llvmType = toLlvmType(local.type);
+      const storePtr = this.storagePtr(local, lines);
+      const loaded = this.nextTemp();
+      lines.push(`  ${loaded} = load ${llvmType}, ptr ${storePtr}`);
+      const result = this.nextTemp();
+      const isFloat = local.type === "f32" || local.type === "f64";
+      const one = typedOne(local.type);
+      if (stmt.operator === "++") {
+        const opcode = isFloat ? "fadd" : "add";
+        lines.push(`  ${result} = ${opcode} ${llvmType} ${loaded}, ${one}`);
+      } else {
+        const opcode = isFloat ? "fsub" : "sub";
+        lines.push(`  ${result} = ${opcode} ${llvmType} ${loaded}, ${one}`);
+      }
+      lines.push(`  store ${llvmType} ${result}, ptr ${storePtr}`);
+      return;
+    }
+
+    const modVal = this.localValues.get(stmt.name.name);
+    if (!modVal) {
       throw new Error(`Codegen: unknown variable '${stmt.name.name}'`);
     }
-    const llvmType = toLlvmType(local.type);
-    const storePtr = this.storagePtr(local, lines);
+    const llvmType = toLlvmType(modVal.type);
+    const globalPtr = `@${modVal.mangledName}`;
     const loaded = this.nextTemp();
-    lines.push(`  ${loaded} = load ${llvmType}, ptr ${storePtr}`);
+    lines.push(`  ${loaded} = load ${llvmType}, ptr ${globalPtr}`);
     const result = this.nextTemp();
-    const isFloat = local.type === "f32" || local.type === "f64";
-    const one = typedOne(local.type);
+    const isFloat = modVal.type === "f32" || modVal.type === "f64";
+    const one = typedOne(modVal.type);
     if (stmt.operator === "++") {
       const opcode = isFloat ? "fadd" : "add";
       lines.push(`  ${result} = ${opcode} ${llvmType} ${loaded}, ${one}`);
@@ -4531,7 +4690,7 @@ export class LlvmCodegen {
       const opcode = isFloat ? "fsub" : "sub";
       lines.push(`  ${result} = ${opcode} ${llvmType} ${loaded}, ${one}`);
     }
-    lines.push(`  store ${llvmType} ${result}, ptr ${storePtr}`);
+    lines.push(`  store ${llvmType} ${result}, ptr ${globalPtr}`);
   }
 
   /** Returns copy value aggregates / scalars; reference returns copy the ptr. */
@@ -4885,6 +5044,13 @@ export class LlvmCodegen {
               return field.type;
             }
           }
+          const ns = this.namespaces.get(expr.object.name);
+          if (ns) {
+            const val = ns.values.get(expr.property.name);
+            if (val) {
+              return val.type;
+            }
+          }
         }
         const objectType = this.inferExpressionType(expr.object);
         let resolvedObjectType: ValueType = objectType;
@@ -4952,6 +5118,10 @@ export class LlvmCodegen {
         const local = this.locals.get(expr.name);
         if (local) {
           return local.type;
+        }
+        const modVal = this.localValues.get(expr.name);
+        if (modVal) {
+          return modVal.type;
         }
         const sig = this.localFunctions.get(expr.name);
         if (sig) {
@@ -5324,6 +5494,17 @@ export class LlvmCodegen {
               return { llvm: loaded, type: field.type };
             }
           }
+          const ns = this.namespaces.get(expr.object.name);
+          if (ns) {
+            const val = ns.values.get(expr.property.name);
+            if (val) {
+              const loaded = this.nextTemp();
+              lines.push(
+                `  ${loaded} = load ${toLlvmType(val.type)}, ptr @${val.mangledName}`,
+              );
+              return { llvm: loaded, type: val.type };
+            }
+          }
         }
         const objectType = this.inferExpressionType(expr.object);
         const emitMemberValue = (): EmittedValue => {
@@ -5421,6 +5602,14 @@ export class LlvmCodegen {
             `  ${tmp} = load ${toLlvmType(local.type)}, ptr ${storePtr}`,
           );
           return { llvm: tmp, type: local.type };
+        }
+        const modVal = this.localValues.get(expr.name);
+        if (modVal) {
+          const tmp = this.nextTemp();
+          lines.push(
+            `  ${tmp} = load ${toLlvmType(modVal.type)}, ptr @${modVal.mangledName}`,
+          );
+          return { llvm: tmp, type: modVal.type };
         }
         const sig = this.localFunctions.get(expr.name);
         if (sig) {
@@ -7930,6 +8119,56 @@ function formatFloat(value: number, _type: ValueType): string {
     return `${value}.0`;
   }
   return String(value);
+}
+
+function isConstantModuleInit(expr: Expression): boolean {
+  switch (expr.kind) {
+    case "IntegerLiteral":
+    case "FloatLiteral":
+    case "BooleanLiteral":
+    case "CharLiteral":
+    case "NullLiteral":
+    case "StringLiteral":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function inferLiteralModuleType(expr: Expression): ValueType | null {
+  switch (expr.kind) {
+    case "IntegerLiteral":
+      return "i32";
+    case "FloatLiteral":
+      return "f64";
+    case "BooleanLiteral":
+      return "bool";
+    case "CharLiteral":
+      return "char";
+    case "NullLiteral":
+      return "null";
+    case "StringLiteral":
+      return "string";
+    default:
+      return null;
+  }
+}
+
+function constantLlvmValue(expr: Expression, type: ValueType): string {
+  switch (expr.kind) {
+    case "IntegerLiteral":
+      return String(expr.value);
+    case "FloatLiteral":
+      return formatFloat(expr.value, type);
+    case "BooleanLiteral":
+      return expr.value ? "true" : "false";
+    case "CharLiteral":
+      return String(expr.value.codePointAt(0) ?? 0);
+    case "NullLiteral":
+      return "null";
+    default:
+      return zeroInitializer(type);
+  }
 }
 
 /** Escape a UTF-8 string for an LLVM `c"..."` constant (without the trailing NUL). */

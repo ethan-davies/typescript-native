@@ -33,8 +33,27 @@ function printTopLevel(decl: TopLevelDeclaration): string {
   switch (decl.kind) {
     case "ImportDeclaration":
       return printImport(decl.clause, decl.source.value);
+    case "ExportNamedFromDeclaration": {
+      const specs = decl.specifiers
+        .map((s) =>
+          s.importedName.name === s.exportName.name
+            ? s.importedName.name
+            : `${s.importedName.name} as ${s.exportName.name}`,
+        )
+        .join(", ");
+      return `export { ${specs} } from ${escapeStringLiteral(decl.source.value)};`;
+    }
+    case "ExportAllFromDeclaration":
+      return `export * from ${escapeStringLiteral(decl.source.value)};`;
     case "FunctionDeclaration":
       return printFunction(decl);
+    case "ModuleVariableDeclaration": {
+      const exp = decl.exported ? "export " : "";
+      const ann = decl.typeAnnotation
+        ? `: ${printType(decl.typeAnnotation)}`
+        : "";
+      return `${exp}${decl.mutability} ${decl.name.name}${ann} = ${printExpr(decl.initializer)};`;
+    }
     case "StructDeclaration":
       return printStruct(decl);
     case "EnumDeclaration":

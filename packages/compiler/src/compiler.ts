@@ -14,6 +14,7 @@ import {
 } from "./generics/monomorphize.js";
 import { Lexer } from "./lexer/lexer.js";
 import { attachPrelude, setPreludePathsProvider } from "./modules/prelude.js";
+import { applyPackageRootsFromProject } from "./modules/project-roots.js";
 import {
   resolveModules,
   setStdRootProvider,
@@ -103,11 +104,13 @@ export function compile(
 
   const synthetic: ResolvedModule = {
     path: fileName,
+    identity: `file://${fileName}`,
     source,
     ast,
     moduleId: "",
     isEntry: true,
     imports: [],
+    reexportSources: [],
   };
 
   const modules = attachPrelude([synthetic], diagnostics);
@@ -172,6 +175,7 @@ export function compileFile(
     options.readFile ??
     ((absolutePath: string) => readFileSync(absolutePath, "utf8"));
   const absoluteEntry = resolvePath(entryPath);
+  applyPackageRootsFromProject(dirname(absoluteEntry));
 
   const resolved = resolveModules(absoluteEntry, readFile, diagnostics);
   const modules = attachPrelude(resolved.modules, diagnostics, readFile);
@@ -253,6 +257,7 @@ export function analyzeFile(
     options.readFile ??
     ((absolutePath: string) => readFileSync(absolutePath, "utf8"));
   const absoluteEntry = resolvePath(entryPath);
+  applyPackageRootsFromProject(dirname(absoluteEntry));
 
   const resolved = resolveModules(absoluteEntry, readFile, diagnostics);
   const modules = attachPrelude(resolved.modules, diagnostics, readFile);

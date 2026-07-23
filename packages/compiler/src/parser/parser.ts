@@ -33,6 +33,9 @@ import type {
   ImportClause,
   ImportDeclaration,
   ImportSpecifier,
+  ExportAllFromDeclaration,
+  ExportNamedFromDeclaration,
+  ExportSpecifier,
   IndexedAccessType,
   IndexExpression,
   IntegerLiteral,
@@ -48,6 +51,7 @@ import type {
   LiteralType,
   MappedType,
   MemberExpression,
+  ModuleVariableDeclaration,
   NamedArgument,
   NamedType,
   NewExpression,
@@ -160,6 +164,21 @@ export class Parser {
 
       sawNonImport = true;
       const exported = this.match(TokenKind.Export);
+
+      // export * from "path";
+      // export { a, b as c } from "path";
+      if (exported && (this.check(TokenKind.Star) || this.check(TokenKind.LBrace))) {
+        const reexport = this.parseReExportDeclaration(
+          this.previous().span.start,
+        );
+        if (reexport) {
+          body.push(reexport);
+        } else {
+          break;
+        }
+        continue;
+      }
+
       const isExtern = this.match(TokenKind.Extern);
       const isAbstract = this.match(TokenKind.Abstract);
 
@@ -276,16 +295,32 @@ export class Parser {
         } else {
           break;
         }
+      } else if (this.check(TokenKind.Const) || this.check(TokenKind.Let)) {
+        if (isAbstract || isExtern) {
+          this.diagnostics.error(
+            isExtern
+              ? "'extern' can only be used with functions"
+              : "'abstract' can only be used with classes",
+            this.peek().span,
+            "E0103",
+          );
+        }
+        const decl = this.parseModuleVariableDeclaration(exported);
+        if (decl) {
+          body.push(decl);
+        } else {
+          break;
+        }
       } else {
         if (exported || isAbstract || isExtern) {
           this.diagnostics.error(
-            `Expected 'function', 'struct', 'enum', 'class', 'interface', or 'type' after modifiers, found '${this.peek().lexeme}'`,
+            `Expected 'function', 'struct', 'enum', 'class', 'interface', 'type', 'const', or 'let' after modifiers, found '${this.peek().lexeme}'`,
             this.peek().span,
             "E0103",
           );
         } else {
           this.diagnostics.error(
-            `Expected 'function', 'struct', 'enum', 'class', 'interface', 'type', or 'import', found '${this.peek().lexeme}'`,
+            `Expected 'function', 'struct', 'enum', 'class', 'interface', 'type', 'const', 'let', or 'import', found '${this.peek().lexeme}'`,
             this.peek().span,
             "E0103",
           );
@@ -473,6 +508,120 @@ export class Parser {
     );
     this.synchronizeToTopLevel();
     return null;
+  }
+
+  private parseReExportDeclaration(
+    start: { line: number; column: number; offset: number },
+  ): ExportNamedFromDeclaration | ExportAllFromDeclaration | null {
+    // export * from "path";
+    if (this.check(TokenKind.Star)) {
+      this.advance();
+      if (!this.expect(TokenKind.From, "Expected 'from' after 'export *'")) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      const source = this.parseImportSource();
+      if (!source) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      const semicolon = this.expect(
+        TokenKind.Semicolon,
+        "Expected ';' after re-export",
+      );
+      if (!semicolon) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      return {
+        kind: "ExportAllFromDeclaration",
+        source,
+        span: { start, end: semicolon.span.end },
+      };
+    }
+
+    // export { a, b as c } from "path";
+    if (!this.expect(TokenKind.LBrace, "Expected '{' after 'export'")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const specifiers: ExportSpecifier[] = [];
+    while (!this.check(TokenKind.RBrace) && !this.check(TokenKind.Eof)) {
+      const nameToken = this.expect(
+        TokenKind.Identifier,
+        "Expected export specifier name",
+      );
+      if (!nameToken) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+      const importedName: Identifier = {
+        kind: "Identifier",
+        name: nameToken.lexeme,
+        span: nameToken.span,
+      };
+
+      let exportName: Identifier = importedName;
+      if (this.check(TokenKind.As)) {
+        this.advance();
+        const aliasToken = this.expect(
+          TokenKind.Identifier,
+          "Expected identifier after 'as'",
+        );
+        if (!aliasToken) {
+          this.synchronizeToTopLevel();
+          return null;
+        }
+        exportName = {
+          kind: "Identifier",
+          name: aliasToken.lexeme,
+          span: aliasToken.span,
+        };
+      }
+
+      specifiers.push({
+        kind: "ExportSpecifier",
+        importedName,
+        exportName,
+        span: { start: importedName.span.start, end: exportName.span.end },
+      });
+
+      if (this.check(TokenKind.Comma)) {
+        this.advance();
+        continue;
+      }
+      break;
+    }
+
+    if (!this.expect(TokenKind.RBrace, "Expected '}' after export specifiers")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+    if (!this.expect(TokenKind.From, "Expected 'from' after export specifiers")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+    const source = this.parseImportSource();
+    if (!source) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+    const semicolon = this.expect(
+      TokenKind.Semicolon,
+      "Expected ';' after re-export",
+    );
+    if (!semicolon) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    return {
+      kind: "ExportNamedFromDeclaration",
+      source,
+      specifiers,
+      span: { start, end: semicolon.span.end },
+    };
   }
 
   private parseImportSource(): StringLiteral | null {
@@ -1312,6 +1461,79 @@ export class Parser {
         span: nameToken.span,
       },
       span: nameToken.span,
+    };
+  }
+
+  private parseModuleVariableDeclaration(
+    exported: boolean,
+  ): ModuleVariableDeclaration | null {
+    const start = this.peek().span.start;
+    const mutabilityToken = this.advance();
+    const mutability =
+      mutabilityToken.kind === TokenKind.Const ? "const" : "let";
+
+    if (this.check(TokenKind.LBracket)) {
+      this.diagnostics.error(
+        "Module-level variable declarations do not support destructuring",
+        this.peek().span,
+        "E0102",
+      );
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const nameToken = this.expect(
+      TokenKind.Identifier,
+      "Expected variable name",
+    );
+    if (!nameToken) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+    const name: Identifier = {
+      kind: "Identifier",
+      name: nameToken.lexeme,
+      span: nameToken.span,
+    };
+
+    let typeAnnotation: TypeAnnotation | null = null;
+    if (this.check(TokenKind.Colon)) {
+      this.advance();
+      typeAnnotation = this.parseType();
+      if (!typeAnnotation) {
+        this.synchronizeToTopLevel();
+        return null;
+      }
+    }
+
+    if (!this.expect(TokenKind.Equal, "Module-level variables require an initializer")) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const initializer = this.parseExpression();
+    if (!initializer) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    const semicolon = this.expect(
+      TokenKind.Semicolon,
+      "Expected ';' after variable declaration",
+    );
+    if (!semicolon) {
+      this.synchronizeToTopLevel();
+      return null;
+    }
+
+    return {
+      kind: "ModuleVariableDeclaration",
+      exported,
+      mutability,
+      name,
+      typeAnnotation,
+      initializer,
+      span: { start, end: semicolon.span.end },
     };
   }
 
@@ -4323,6 +4545,8 @@ export class Parser {
         this.check(TokenKind.Class) ||
         this.check(TokenKind.Interface) ||
         this.check(TokenKind.Type) ||
+        this.check(TokenKind.Const) ||
+        this.check(TokenKind.Let) ||
         this.check(TokenKind.Abstract)
       ) {
         return;

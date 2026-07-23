@@ -32,17 +32,23 @@ export type {
 export {
   mangleSymbol,
   moduleIdFromPath,
+  moduleIdentityForPath,
+  applyPackageRootsFromProject,
   resolveImportSpecifier,
   resolveModules,
+  resolveSpecifierDetailed,
   setPackageRootsProvider,
   setStdRootProvider,
 } from "./modules/index.js";
 export type {
+  ModuleIdentity,
   ModuleImportBinding,
+  PackageRootInfo,
   PackageRootsProvider,
   ReadFileFn,
   ResolveResult,
   ResolvedModule,
+  ResolvedSpecifier,
 } from "./modules/index.js";
 
 export type { AstNode, Expression, Program, Statement } from "./ast/index.js";
@@ -50,6 +56,7 @@ export type { AstNode, Expression, Program, Statement } from "./ast/index.js";
 export {
   SemanticCollector,
   buildExportIndex,
+  completeImportPaths,
   collectDocumentSymbols,
   completionsAt,
   computeNamedImportEdit,
@@ -60,6 +67,7 @@ export {
   identifierStartOffset,
   offsetToPosition,
   positionToOffset,
+  referencesAt,
   semanticKey,
 } from "./analysis/index.js";
 export type {

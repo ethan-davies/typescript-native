@@ -1,24 +1,18 @@
 /** π as f64. */
-export function PI(): f64 {
-  return 3.141592653589793;
-}
+export const PI: f64 = 3.141592653589793;
 
 /** Euler's number e as f64. */
-export function E(): f64 {
-  return 2.718281828459045;
-}
+export const E: f64 = 2.718281828459045;
 
 /** τ = 2π as f64. */
-export function TAU(): f64 {
-  return 6.283185307179586;
-}
+export const TAU: f64 = 6.283185307179586;
 
-/** @deprecated Prefer PI() */
+/** @deprecated Prefer PI */
 export function pi(): f64 {
-  return PI();
+  return PI;
 }
 
-/** @deprecated Prefer E() */
+/** @deprecated Prefer E */
 export function e(): f64 {
-  return E();
+  return E;
 }

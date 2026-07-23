@@ -225,14 +225,14 @@ export function removeInstalledPackage(
 /** Map package names → global package roots for this project's lockfile. */
 export function discoverInstalledPackages(
   project: Project,
-): Map<string, string> {
-  const map = new Map<string, string>();
+): Map<string, { dir: string; version: string }> {
+  const map = new Map<string, { dir: string; version: string }>();
   const lock = lockPackageMap(loadLockfile(project.root));
 
   for (const [name, entry] of lock) {
     const dir = packageVersionPath(name, entry.version);
     if (existsSync(join(dir, "project.toml"))) {
-      map.set(name, dir);
+      map.set(name, { dir, version: entry.version });
     }
   }
   return map;

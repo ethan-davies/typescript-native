@@ -7,6 +7,7 @@ import type {
   Expression,
   FunctionDeclaration,
   InterfaceDeclaration,
+  ModuleVariableDeclaration,
   Parameter,
   PrimitiveTypeName,
   Program,
@@ -46,6 +47,11 @@ import {
 } from "./generics/substitute.js";
 import type { TypecheckInstantiations } from "./generics/monomorphize.js";
 import { mangleSymbol } from "./modules/mangle.js";
+import {
+  buildExportTables,
+  hasPrivateDeclarationInAst,
+  type ExportTable,
+} from "./modules/exports.js";
 import type { ModuleImportBinding, ResolvedModule } from "./modules/resolve.js";
 import {
   BUILTIN_ERROR_LOCAL_NAME,
@@ -287,6 +293,17 @@ interface FunctionSig {
   readonly modulePath: string;
 }
 
+export interface ModuleValueDef {
+  readonly name: string;
+  readonly type: ValueType;
+  readonly mutability: "let" | "const";
+  readonly exported: boolean;
+  readonly mangledName: string;
+  readonly modulePath: string;
+  readonly span: SourceSpan;
+  readonly decl: ModuleVariableDeclaration;
+}
+
 export interface ModuleNamespace {
   readonly moduleId: string;
   readonly functions: ReadonlyMap<string, FunctionSig>;
@@ -295,6 +312,7 @@ export interface ModuleNamespace {
   readonly classes: ReadonlyMap<string, ClassDef>;
   readonly interfaces: ReadonlyMap<string, InterfaceDef>;
   readonly typeAliases: ReadonlyMap<string, TypeAliasDef>;
+  readonly values: ReadonlyMap<string, ModuleValueDef>;
 }
 
 interface ModuleSymbols {
@@ -306,6 +324,7 @@ interface ModuleSymbols {
   readonly classes: Map<string, ClassDef>;
   readonly interfaces: Map<string, InterfaceDef>;
   readonly typeAliases: Map<string, TypeAliasDef>;
+  readonly values: Map<string, ModuleValueDef>;
   readonly genericStructs: Map<string, GenericStructTemplate>;
   readonly genericClasses: Map<string, GenericClassTemplate>;
   readonly genericInterfaces: Map<string, GenericInterfaceTemplate>;
@@ -364,6 +383,8 @@ let syntheticObjectStructs: Map<string, StructDef> = new Map();
 let aliasExpandStack: string[] = [];
 /** Active function sigs for typeof type queries. */
 let activeFunctions: Map<string, FunctionSig> = new Map();
+/** Active module-level values (local + named imports). */
+let activeValues: Map<string, ModuleValueDef> = new Map();
 /** All class defs by mangled name (for inheritance lookups). */
 let classesByMangled: Map<string, ClassDef> = new Map();
 /** All interface defs by mangled name. */
@@ -419,11 +440,13 @@ export function typecheck(
     [
       {
         path: "<source>",
+        identity: "file://<source>",
         source: "",
         ast: program,
         moduleId: "",
         isEntry: true,
         imports: [],
+        reexportSources: [],
       },
     ],
     diagnostics,
@@ -468,6 +491,7 @@ export function typecheckModules(
         local.classes,
         local.interfaces,
         local.typeAliases,
+        local.values,
       );
     }
   }
@@ -482,6 +506,16 @@ export function typecheckModules(
       interfacesByMangled.set(def.name, def);
     }
   }
+
+  // Formal export tables (local exports + re-exports) — authoritative for imports.
+  const exportTables = buildExportTables(
+    modules.map((m) => ({
+      path: m.path,
+      ast: m.ast,
+      reexportSources: m.reexportSources,
+    })),
+    diagnostics,
+  );
 
   // Keep going for IDE analysis even when the parser already reported errors.
   // Symbol tables from collectModuleSymbols are still useful for completions.
@@ -498,6 +532,7 @@ export function typecheckModules(
     const classes = new Map(local.classes);
     const interfaces = new Map(local.interfaces);
     const typeAliases = new Map(local.typeAliases);
+    const values = new Map(local.values);
     const genericStructs = new Map(local.genericStructs);
     const genericClasses = new Map(local.genericClasses);
     const genericInterfaces = new Map(local.genericInterfaces);
@@ -511,6 +546,7 @@ export function typecheckModules(
       ...local.classes.keys(),
       ...local.interfaces.keys(),
       ...local.typeAliases.keys(),
+      ...local.values.keys(),
       ...local.genericStructs.keys(),
       ...local.genericClasses.keys(),
       ...local.genericInterfaces.keys(),
@@ -519,44 +555,74 @@ export function typecheckModules(
     ]);
 
     const errorsBeforeImports = diagnostics.diagnostics.length;
+    const exportTable = exportTables.get(mod.path);
+
     for (const binding of mod.imports) {
       const imported = byPath.get(binding.modulePath);
-      if (!imported) {
+      const importedTable = exportTables.get(binding.modulePath);
+      if (!imported || !importedTable) {
         continue;
       }
 
       if (binding.kind === "namespace") {
         if (localNames.has(binding.alias)) {
           diagnostics.error(
-            `Import binding '${binding.alias}' conflicts with a local declaration`,
+            `Import "${binding.alias}" conflicts with an existing declaration.`,
             binding.span,
             "E0405",
           );
           continue;
         }
-        namespaces.set(binding.alias, {
-          moduleId: imported.moduleId,
-          functions: exportedFunctions(imported.functions),
-          structs: exportedStructs(imported.structs),
-          enums: exportedEnums(imported.enums),
-          classes: exportedClasses(imported.classes),
-          interfaces: exportedInterfaces(imported.interfaces),
-          typeAliases: exportedTypeAliases(imported.typeAliases),
-        });
+        namespaces.set(
+          binding.alias,
+          namespaceFromExportTable(
+            imported.moduleId,
+            importedTable,
+            byPath,
+          ),
+        );
         continue;
       }
 
       // Named import
       if (localNames.has(binding.localName)) {
         diagnostics.error(
-          `Import binding '${binding.localName}' conflicts with a local declaration`,
+          `Import "${binding.localName}" conflicts with an existing declaration.`,
           binding.span,
           "E0405",
         );
         continue;
       }
 
-      const resolved = lookupExport(imported, binding.exportName);
+      const entry = importedTable.get(binding.exportName);
+      if (!entry) {
+        const sourceAst = modules.find(
+          (m) => m.path === binding.modulePath,
+        )?.ast;
+        if (
+          sourceAst &&
+          hasPrivateDeclarationInAst(sourceAst, binding.exportName)
+        ) {
+          diagnostics.error(
+            `"${binding.exportName}" is declared in "${binding.specifier}" but is not exported.`,
+            binding.span,
+            "E0408",
+          );
+        } else {
+          diagnostics.error(
+            `Module "${binding.specifier}" does not export "${binding.exportName}".`,
+            binding.span,
+            "E0408",
+          );
+        }
+        continue;
+      }
+
+      const origin = byPath.get(entry.sourceModulePath);
+      if (!origin) {
+        continue;
+      }
+      const resolved = lookupExport(origin, entry.originalName);
       if (!resolved) {
         diagnostics.error(
           `Module "${binding.specifier}" does not export "${binding.exportName}".`,
@@ -573,6 +639,7 @@ export function typecheckModules(
         classes,
         interfaces,
         typeAliases,
+        values,
         genericStructs,
         genericClasses,
         genericInterfaces,
@@ -581,6 +648,8 @@ export function typecheckModules(
       });
       localNames.add(binding.localName);
     }
+
+    void exportTable;
 
     // Only skip body checking when imports for this module failed (not prior parse errors).
     if (diagnostics.diagnostics.length > errorsBeforeImports) {
@@ -605,6 +674,7 @@ export function typecheckModules(
     syntheticObjectStructs = new Map();
     aliasExpandStack = [];
     activeFunctions = functions;
+    activeValues = values;
     activeExtensions = collectExtensionsFromMaps(functions, genericFunctions);
     indexMembersByType(structs, classes, enums, functions, genericFunctions);
 
@@ -664,6 +734,7 @@ export function typecheckModules(
   activeInterfaces = new Map();
   activeTypeAliases = new Map();
   activeGenericTypeAliases = new Map();
+  activeValues = new Map();
   syntheticObjectStructs = new Map();
   aliasExpandStack = [];
   classesByMangled = new Map();
@@ -881,6 +952,7 @@ type NamedExportKind =
   | { kind: "class"; value: ClassDef }
   | { kind: "interface"; value: InterfaceDef }
   | { kind: "typeAlias"; value: TypeAliasDef }
+  | { kind: "value"; value: ModuleValueDef }
   | { kind: "genericStruct"; value: GenericStructTemplate }
   | { kind: "genericClass"; value: GenericClassTemplate }
   | { kind: "genericInterface"; value: GenericInterfaceTemplate }
@@ -915,6 +987,10 @@ function lookupExport(
   if (alias) {
     return alias.exported ? { kind: "typeAlias", value: alias } : null;
   }
+  const val = symbols.values.get(exportName);
+  if (val) {
+    return val.exported ? { kind: "value", value: val } : null;
+  }
   const gs = symbols.genericStructs.get(exportName);
   if (gs) {
     return gs.decl.exported ? { kind: "genericStruct", value: gs } : null;
@@ -945,6 +1021,7 @@ interface NamedImportMaps {
   classes: Map<string, ClassDef>;
   interfaces: Map<string, InterfaceDef>;
   typeAliases: Map<string, TypeAliasDef>;
+  values: Map<string, ModuleValueDef>;
   genericStructs: Map<string, GenericStructTemplate>;
   genericClasses: Map<string, GenericClassTemplate>;
   genericInterfaces: Map<string, GenericInterfaceTemplate>;
@@ -976,6 +1053,9 @@ function injectNamedImport(
     case "typeAlias":
       maps.typeAliases.set(localName, resolved.value);
       break;
+    case "value":
+      maps.values.set(localName, resolved.value);
+      break;
     case "genericStruct":
       maps.genericStructs.set(localName, resolved.value);
       break;
@@ -992,6 +1072,68 @@ function injectNamedImport(
       maps.genericTypeAliases.set(localName, resolved.value);
       break;
   }
+}
+
+function namespaceFromExportTable(
+  moduleId: string,
+  table: ExportTable,
+  byPath: Map<string, ModuleSymbols>,
+): ModuleNamespace {
+  const functions = new Map<string, FunctionSig>();
+  const structs = new Map<string, StructDef>();
+  const enums = new Map<string, EnumDef>();
+  const classes = new Map<string, ClassDef>();
+  const interfaces = new Map<string, InterfaceDef>();
+  const typeAliases = new Map<string, TypeAliasDef>();
+  const values = new Map<string, ModuleValueDef>();
+
+  for (const [exportName, entry] of table) {
+    const origin = byPath.get(entry.sourceModulePath);
+    if (!origin) {
+      continue;
+    }
+    const resolved = lookupExport(origin, entry.originalName);
+    if (!resolved) {
+      continue;
+    }
+    switch (resolved.kind) {
+      case "function":
+        functions.set(exportName, resolved.value);
+        break;
+      case "struct":
+        structs.set(exportName, resolved.value);
+        break;
+      case "enum":
+        enums.set(exportName, resolved.value);
+        break;
+      case "class":
+        classes.set(exportName, resolved.value);
+        break;
+      case "interface":
+        interfaces.set(exportName, resolved.value);
+        break;
+      case "typeAlias":
+        typeAliases.set(exportName, resolved.value);
+        break;
+      case "value":
+        values.set(exportName, resolved.value);
+        break;
+      default:
+        // Generics are available via named import injection; skip in namespace maps for now.
+        break;
+    }
+  }
+
+  return {
+    moduleId,
+    functions,
+    structs,
+    enums,
+    classes,
+    interfaces,
+    typeAliases,
+    values,
+  };
 }
 
 function exportedFunctions(
@@ -1102,6 +1244,10 @@ function exportLocation(
   if (alias) {
     return { file: imported.modulePath, span: alias.decl.name.span };
   }
+  const val = imported.values.get(exportName);
+  if (val) {
+    return { file: imported.modulePath, span: val.span };
+  }
   return null;
 }
 
@@ -1127,6 +1273,9 @@ function firstModuleLocation(
   }
   for (const def of imported.typeAliases.values()) {
     return { file: imported.modulePath, span: def.decl.name.span };
+  }
+  for (const def of imported.values.values()) {
+    return { file: imported.modulePath, span: def.span };
   }
   return null;
 }
@@ -1187,6 +1336,16 @@ function namespaceMemberCompletions(
     }
     members.push({ name: def.decl.name.name, kind: "type", detail: "type" });
   }
+  for (const def of imported.values.values()) {
+    if (!def.exported) {
+      continue;
+    }
+    members.push({
+      name: def.name,
+      kind: def.mutability === "const" ? "constant" : "variable",
+      detail: typeToString(def.type),
+    });
+  }
   return members;
 }
 
@@ -1220,6 +1379,7 @@ function indexModuleSymbols(
   classes: Map<string, ClassDef>,
   interfaces: Map<string, InterfaceDef>,
   typeAliases: Map<string, TypeAliasDef>,
+  values: Map<string, ModuleValueDef>,
 ): void {
   if (!activeSemantic) {
     return;
@@ -1276,6 +1436,10 @@ function indexModuleSymbols(
         } else if (imported.typeAliases.has(binding.exportName)) {
           kind = "type";
           detail = "type";
+        } else if (imported.values.has(binding.exportName)) {
+          const val = imported.values.get(binding.exportName)!;
+          kind = val.mutability === "const" ? "constant" : "variable";
+          detail = typeToString(val.type);
         }
         const defLoc = exportLocation(imported, binding.exportName);
         if (defLoc) {
@@ -1351,6 +1515,15 @@ function indexModuleSymbols(
       location: { file, span: def.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, def.decl.name.span);
+  }
+  for (const def of values.values()) {
+    activeSemantic.addModuleSymbol(file, {
+      name: def.name,
+      kind: def.mutability === "const" ? "constant" : "variable",
+      detail: typeToString(def.type),
+      location: { file, span: def.span },
+    });
+    activeSemantic.recordDeclaration(file, def.span);
   }
 }
 
@@ -1560,6 +1733,100 @@ function collectModuleSymbols(
     });
   }
 
+  const values = new Map<string, ModuleValueDef>();
+  for (const decl of mod.ast.body) {
+    if (decl.kind !== "ModuleVariableDeclaration") {
+      continue;
+    }
+
+    const name = decl.name.name;
+    if (
+      functions.has(name) ||
+      genericFunctions.has(name) ||
+      structs.has(name) ||
+      genericStructs.has(name) ||
+      enums.has(name) ||
+      classes.has(name) ||
+      genericClasses.has(name) ||
+      interfaces.has(name) ||
+      genericInterfaces.has(name) ||
+      typeAliases.has(name) ||
+      genericTypeAliases.has(name) ||
+      values.has(name)
+    ) {
+      diagnostics.error(
+        `Duplicate declaration '${name}'`,
+        decl.name.span,
+        "E0330",
+      );
+      continue;
+    }
+
+    let annotated: ValueType | null = null;
+    if (decl.typeAnnotation) {
+      annotated = resolveAnnotation(
+        decl.typeAnnotation,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (annotated === null) {
+        continue;
+      }
+    }
+
+    // Infer type from initializer for the symbol table; full checking happens later.
+    const valuesScope = new Map<string, Binding>();
+    for (const [n, v] of values) {
+      valuesScope.set(n, {
+        type: v.type,
+        mutable: v.mutability === "let",
+        defSpan: v.span,
+        defFile: v.modulePath,
+        bindingKind: v.mutability === "const" ? "const" : "let",
+      });
+    }
+    const inferred = checkExpression(
+      decl.initializer,
+      valuesScope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      false,
+      annotated ?? undefined,
+    );
+    if (!inferred) {
+      continue;
+    }
+
+    let bindingType: ValueType = inferred;
+    if (annotated) {
+      if (
+        !initializerMatchesAnnotation(decl.initializer, inferred, annotated)
+      ) {
+        diagnostics.error(
+          typeMismatchMessage(annotated, inferred),
+          decl.initializer.span,
+          "E0303",
+        );
+        continue;
+      }
+      bindingType = annotated;
+    }
+
+    values.set(name, {
+      name,
+      type: bindingType,
+      mutability: decl.mutability,
+      exported: decl.exported,
+      mangledName: mangleSymbol(mod.moduleId, name),
+      modulePath: mod.path,
+      span: decl.name.span,
+      decl,
+    });
+  }
+
   activeClasses = prevClasses;
   activeInterfaces = prevInterfaces;
   activeTypeAliases = prevAliases;
@@ -1573,6 +1840,7 @@ function collectModuleSymbols(
     classes,
     interfaces,
     typeAliases,
+    values,
     genericStructs,
     genericClasses,
     genericInterfaces,
@@ -5893,7 +6161,8 @@ function checkStatement(
     }
     case "UpdateStatement": {
       const binding = scope.get(stmt.name.name);
-      if (!binding) {
+      const modVal = binding ? null : activeValues.get(stmt.name.name);
+      if (!binding && !modVal) {
         diagnostics.error(
           `Undefined variable '${stmt.name.name}'`,
           stmt.name.span,
@@ -5901,7 +6170,9 @@ function checkStatement(
         );
         return false;
       }
-      if (!binding.mutable) {
+      const targetType = binding?.type ?? modVal!.type;
+      const mutable = binding ? binding.mutable : modVal!.mutability === "let";
+      if (!mutable) {
         diagnostics.error(
           `Cannot assign to const variable '${stmt.name.name}'`,
           stmt.name.span,
@@ -5909,9 +6180,9 @@ function checkStatement(
         );
         return false;
       }
-      if (!isNumericType(binding.type)) {
+      if (!isNumericType(targetType)) {
         diagnostics.error(
-          `Operator '${stmt.operator}' requires a numeric variable, got '${typeToString(binding.type)}'`,
+          `Operator '${stmt.operator}' requires a numeric variable, got '${typeToString(targetType)}'`,
           stmt.name.span,
           "E0306",
         );
@@ -6405,7 +6676,8 @@ function checkAssignment(
 ): void {
   if (stmt.target.kind === "Identifier") {
     const binding = scope.get(stmt.target.name);
-    if (!binding) {
+    const modVal = binding ? null : activeValues.get(stmt.target.name);
+    if (!binding && !modVal) {
       diagnostics.error(
         `Undefined variable '${stmt.target.name}'`,
         stmt.target.span,
@@ -6413,7 +6685,9 @@ function checkAssignment(
       );
       return;
     }
-    if (!binding.mutable) {
+    const targetType = binding?.type ?? modVal!.type;
+    const mutable = binding ? binding.mutable : modVal!.mutability === "let";
+    if (!mutable) {
       diagnostics.error(
         `Cannot assign to const variable '${stmt.target.name}'`,
         stmt.target.span,
@@ -6423,9 +6697,9 @@ function checkAssignment(
     }
 
     if (stmt.operator === "+=" || stmt.operator === "-=") {
-      if (!isNumericType(binding.type)) {
+      if (!isNumericType(targetType)) {
         diagnostics.error(
-          `Operator '${stmt.operator}' requires a numeric variable, got '${typeToString(binding.type)}'`,
+          `Operator '${stmt.operator}' requires a numeric variable, got '${typeToString(targetType)}'`,
           stmt.target.span,
           "E0306",
         );
@@ -6444,9 +6718,9 @@ function checkAssignment(
     if (!valueType) {
       return;
     }
-    if (!valueMatchesBinding(stmt.value, valueType, binding.type)) {
+    if (!valueMatchesBinding(stmt.value, valueType, targetType)) {
       diagnostics.error(
-        typeMismatchMessage(binding.type, valueType),
+        typeMismatchMessage(targetType, valueType),
         stmt.value.span,
         "E0303",
       );
@@ -7813,13 +8087,28 @@ function checkExpressionInner(
         }
       }
 
-      // Bare namespace member used as a value (not a call) — only enums are handled above
+      // Bare namespace member used as a value (not a call)
       if (
         expr.object.kind === "Identifier" &&
         activeNamespaces.has(expr.object.name) &&
         !scope.has(expr.object.name)
       ) {
         const ns = activeNamespaces.get(expr.object.name)!;
+        const nsVal = ns.values.get(expr.property.name);
+        if (nsVal) {
+          if (activeSemantic && activeModulePath) {
+            activeSemantic.recordDefinition(activeModulePath, expr.property.span, {
+              file: nsVal.modulePath,
+              span: nsVal.span,
+            });
+            activeSemantic.recordType(
+              activeModulePath,
+              expr.span,
+              typeToString(nsVal.type),
+            );
+          }
+          return nsVal.type;
+        }
         const classDef = ns.classes.get(expr.property.name);
         if (classDef) {
           diagnostics.error(
@@ -8275,6 +8564,21 @@ function checkExpressionInner(
           });
         }
         return binding.type;
+      }
+      const modVal = activeValues.get(expr.name);
+      if (modVal) {
+        if (activeSemantic && activeModulePath) {
+          activeSemantic.recordDefinition(activeModulePath, expr.span, {
+            file: modVal.modulePath,
+            span: modVal.span,
+          });
+          activeSemantic.recordType(
+            activeModulePath,
+            expr.span,
+            typeToString(modVal.type),
+          );
+        }
+        return modVal.type;
       }
       const sig = functions.get(expr.name);
       if (sig) {

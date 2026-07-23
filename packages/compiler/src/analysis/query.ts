@@ -1,4 +1,5 @@
 import type { SourceSpan } from "../diagnostics/diagnostic.js";
+import { completeImportPaths } from "./export-index.js";
 import {
   collectDocumentSymbols,
   type DocumentSymbolInfo,
@@ -118,6 +119,7 @@ export interface ExportIndexEntry {
 
 export interface CompletionsAtOptions {
   readonly exportIndex?: readonly ExportIndexEntry[];
+  readonly workspaceRoots?: readonly string[];
 }
 
 function findModule(model: SemanticModel, file: string) {
@@ -223,6 +225,82 @@ export function definitionAt(
   );
 }
 
+/**
+ * Find all references to the symbol at `offset`, including the definition.
+ */
+export function referencesAt(
+  model: SemanticModel,
+  file: string,
+  offset: number,
+): SemanticLocation[] {
+  const def = definitionAt(model, file, offset);
+  if (!def) {
+    return [];
+  }
+  const defKey = `${def.file}:${def.span.start.offset}`;
+  const results: SemanticLocation[] = [
+    { file: def.file, span: def.span },
+  ];
+  const seen = new Set<string>([defKey]);
+
+  for (const [useKey, loc] of model.definitions) {
+    if (
+      loc.file === def.file &&
+      loc.span.start.offset === def.span.start.offset
+    ) {
+      const [useFile, useOff] = splitSemanticKey(useKey);
+      if (!useFile || useOff === undefined || seen.has(useKey)) {
+        continue;
+      }
+      seen.add(useKey);
+      const useMod = findModule(model, useFile);
+      if (!useMod) {
+        continue;
+      }
+      results.push({
+        file: useFile,
+        span: spanAtOffset(useMod.source, useOff),
+      });
+    }
+  }
+
+  for (const [useKey, loc] of model.memberDefinitions) {
+    if (
+      loc.file === def.file &&
+      loc.span.start.offset === def.span.start.offset
+    ) {
+      const [useFile, useOff] = splitSemanticKey(useKey);
+      if (!useFile || useOff === undefined || seen.has(useKey)) {
+        continue;
+      }
+      seen.add(useKey);
+      const useMod = findModule(model, useFile);
+      if (!useMod) {
+        continue;
+      }
+      results.push({
+        file: useFile,
+        span: spanAtOffset(useMod.source, useOff),
+      });
+    }
+  }
+
+  return results;
+}
+
+function splitSemanticKey(key: string): [string | null, number | undefined] {
+  const idx = key.lastIndexOf(":");
+  if (idx < 0) {
+    return [null, undefined];
+  }
+  const file = key.slice(0, idx);
+  const offset = Number(key.slice(idx + 1));
+  if (!Number.isFinite(offset)) {
+    return [null, undefined];
+  }
+  return [file, offset];
+}
+
 function membersForObject(
   model: SemanticModel,
   file: string,
@@ -295,6 +373,29 @@ export function completionsAt(
   const mod = findModule(model, file);
   const source = sourceText ?? mod?.source ?? "";
   const before = source.slice(0, offset);
+
+  // Import path completion: from "…|" or import "…|"
+  const importPathMatch = before.match(
+    /(?:from|import)\s+"([^"]*)$|(?:from|import)\s+'([^']*)$/,
+  );
+  if (importPathMatch) {
+    const partial = importPathMatch[1] ?? importPathMatch[2] ?? "";
+    const paths = completeImportPaths(
+      file,
+      partial,
+      options?.workspaceRoots ?? [],
+    );
+    return {
+      isMember: false,
+      prefix: partial,
+      items: paths.map((p) => ({
+        name: p,
+        detail: "module path",
+        kind: "module" as const,
+      })),
+    };
+  }
+
   const memberMatch = before.match(/(\w+)\s*\.\s*(\w*)$/);
   if (memberMatch) {
     const objName = memberMatch[1]!;

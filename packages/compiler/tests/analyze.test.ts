@@ -29,7 +29,7 @@ function writeTempProject(files: Record<string, string>): string {
 describe("analyzeFile + semantic queries", () => {
   it("stamps diagnostics with file paths", () => {
     const root = writeTempProject({
-      "main.sn": `import { add } from "lib";
+      "main.sn": `import { add } from "./lib";
 function main(): void {
   let x: i32 = "bad";
   print(add(1, 2));
@@ -111,7 +111,7 @@ function main(): void {
 
   it("attributes import resolution errors to the importing file", () => {
     const root = writeTempProject({
-      "main.sn": `import { missing } from "nope";
+      "main.sn": `import { missing } from "./nope";
 function main(): void {}
 `,
     });
@@ -223,7 +223,7 @@ function main(): void {
 
   it("gives named imports the correct completion kind", () => {
     const root = writeTempProject({
-      "main.sn": `import { add } from "lib";
+      "main.sn": `import { add } from "./lib";
 function main(): void {
   add
 }
@@ -245,7 +245,7 @@ function main(): void {
 
   it("resolves go-to-definition across namespace imports", () => {
     const root = writeTempProject({
-      "main.sn": `import "lib" as lib;
+      "main.sn": `import "./lib" as lib;
 
 function main(): void {
   let result = lib.add(5, 10);
@@ -273,7 +273,7 @@ function main(): void {
 
   it("completes namespace members after a dot", () => {
     const root = writeTempProject({
-      "main.sn": `import "lib" as lib;
+      "main.sn": `import "./lib" as lib;
 
 function main(): void {
   lib.

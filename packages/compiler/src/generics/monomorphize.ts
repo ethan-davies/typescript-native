@@ -485,6 +485,15 @@ function rewriteDeclBody(
       })),
     };
   }
+  if (decl.kind === "ModuleVariableDeclaration") {
+    return {
+      ...decl,
+      typeAnnotation: decl.typeAnnotation
+        ? rewriteType(decl.typeAnnotation, inst.typeRewrites)
+        : null,
+      initializer: rewriteExpression(decl.initializer, inst),
+    };
+  }
   return decl;
 }
 

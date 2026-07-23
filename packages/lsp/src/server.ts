@@ -18,6 +18,7 @@ import {
   documentSymbolsAtFile,
   hoverAtPosition,
   pathToUri,
+  referencesAtPosition,
   uriToPath,
 } from "./protocol.js";
 
@@ -48,6 +49,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         triggerCharacters: [
           ".",
           ":",
+          '"',
+          "/",
           "a",
           "b",
           "c",
@@ -105,6 +108,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         resolveProvider: false,
       },
       documentSymbolProvider: true,
+      referencesProvider: true,
     },
   };
 });
@@ -253,12 +257,30 @@ connection.onCompletion((params) => {
   }
   const result = ensureAnalyzed(filePath);
   const exportIndex = getExportIndex(filePath);
+  // Trigger on quote for import path completion.
+  void params;
   return completionsAtPosition(
     result.semantic,
     filePath,
     doc.getText(),
     params.position,
     exportIndex,
+    workspaceRoots,
+  );
+});
+
+connection.onReferences((params) => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) {
+    return [];
+  }
+  const result = ensureAnalyzed(filePath);
+  return referencesAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    params.position,
   );
 });
 

@@ -42,11 +42,11 @@ export function atan2(y: f64, x: f64): f64 { return sn_math_atan2(y, x); }
 export function log(x: f64): f64 { return sn_math_log(x); }
 export function exp(x: f64): f64 { return sn_math_exp(x); }
 
-export function PI(): f64 { return 3.141592653589793; }
-export function E(): f64 { return 2.718281828459045; }
-export function TAU(): f64 { return 6.283185307179586; }
-export function pi(): f64 { return PI(); }
-export function e(): f64 { return E(); }
+export const PI: f64 = 3.141592653589793;
+export const E: f64 = 2.718281828459045;
+export const TAU: f64 = 6.283185307179586;
+export function pi(): f64 { return PI; }
+export function e(): f64 { return E; }
 
 export function absI32(x: i32): i32 { return sn_math_abs_i32(x); }
 export function absI64(x: i64): i64 { return sn_math_abs_i64(x); }

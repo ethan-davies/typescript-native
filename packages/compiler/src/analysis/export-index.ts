@@ -3,7 +3,14 @@ import { dirname, join, relative, resolve as resolvePath } from "node:path";
 import type { Program } from "../ast/nodes.js";
 import { DiagnosticCollector } from "../diagnostics/diagnostic.js";
 import { Lexer } from "../lexer/lexer.js";
-import { getStdRootPath, moduleIdForStdPath } from "../modules/resolve.js";
+import {
+  getPackageRoots,
+  getStdRootPath,
+  moduleIdForPackagePath,
+  moduleIdForStdPath,
+  resolveImportSpecifier,
+  type PackageRootInfo,
+} from "../modules/resolve.js";
 import { Parser } from "../parser/parser.js";
 import type { CompletionSymbolKind } from "./semantic.js";
 import type { ExportIndexEntry } from "./query.js";
@@ -18,7 +25,16 @@ const SKIP_DIR_NAMES = new Set([
   ".turbo",
 ]);
 
-const STD_PUBLIC_MODULES = ["math", "collections", "random"] as const;
+const STD_PUBLIC_MODULES = [
+  "math",
+  "collections",
+  "random",
+  "io",
+  "fs",
+  "process",
+  "time",
+  "encoding",
+] as const;
 
 export interface BuildExportIndexOptions {
   /** Absolute workspace roots to scan for `.sn` files. */
@@ -49,6 +65,9 @@ function collectExportsFromAst(
   modulePath: string,
   moduleSpecifier: string,
   out: ExportIndexEntry[],
+  seen: Set<string>,
+  readFile?: (absolutePath: string) => string,
+  importerPath?: string,
 ): void {
   for (const decl of ast.body) {
     let name: string | null = null;
@@ -88,6 +107,44 @@ function collectExportsFromAst(
         name = decl.name.name;
         kind = "type";
         break;
+      case "ModuleVariableDeclaration":
+        exported = decl.exported;
+        name = decl.name.name;
+        kind = "variable";
+        break;
+      case "ExportNamedFromDeclaration":
+        for (const spec of decl.specifiers) {
+          out.push({
+            name: spec.exportName.name,
+            exportName: spec.exportName.name,
+            kind: "function",
+            moduleSpecifier,
+            modulePath,
+          });
+        }
+        continue;
+      case "ExportAllFromDeclaration": {
+        // Resolve and index the source module's exports under this specifier.
+        try {
+          const resolved = resolveImportSpecifier(
+            dirname(modulePath),
+            decl.source.value,
+          );
+          if (resolved && !seen.has(resolved.replace(/\\/g, "/"))) {
+            indexFile(
+              resolved,
+              importerPath ?? modulePath,
+              out,
+              seen,
+              readFile,
+              moduleSpecifier,
+            );
+          }
+        } catch {
+          // ignore
+        }
+        continue;
+      }
       default:
         break;
     }
@@ -143,10 +200,51 @@ function relativeSpecifier(importerPath: string, targetPath: string): string {
 }
 
 function specifierFor(importerPath: string, targetPath: string): string {
-  return (
-    stdSpecifierForPath(targetPath) ??
-    relativeSpecifier(importerPath, targetPath)
-  );
+  const std = stdSpecifierForPath(targetPath);
+  if (std) {
+    return std;
+  }
+  const pkg = packageSpecifierForPath(targetPath);
+  if (pkg) {
+    return pkg;
+  }
+  return relativeSpecifier(importerPath, targetPath);
+}
+
+function packageSpecifierForPath(absolutePath: string): string | null {
+  const roots = getPackageRoots();
+  if (!roots) {
+    return null;
+  }
+  const normalized = absolutePath.replace(/\\/g, "/");
+  for (const [name, value] of roots) {
+    const dir =
+      typeof value === "string" ? value : (value as PackageRootInfo).dir;
+    const rootNorm = dir.replace(/\\/g, "/").replace(/\/$/, "");
+    if (!normalized.startsWith(`${rootNorm}/`) && normalized !== rootNorm) {
+      continue;
+    }
+    if (moduleIdForPackagePath(absolutePath) === null) {
+      continue;
+    }
+    let rel = normalized.slice(rootNorm.length + 1);
+    if (rel.toLowerCase().endsWith(".sn")) {
+      rel = rel.slice(0, -".sn".length);
+    }
+    if (rel.endsWith("/index")) {
+      rel = rel.slice(0, -"/index".length);
+    }
+    if (
+      rel === "" ||
+      rel === "index" ||
+      rel === "main" ||
+      rel === "src/main"
+    ) {
+      return name;
+    }
+    return `${name}/${rel}`;
+  }
+  return null;
 }
 
 function walkSnFiles(root: string, out: string[]): void {
@@ -202,6 +300,8 @@ function indexFile(
   out: ExportIndexEntry[],
   seen: Set<string>,
   readFile?: (absolutePath: string) => string,
+  /** Override the module specifier attributed to exports (for re-export barrels). */
+  forceSpecifier?: string,
 ): void {
   const key = absolutePath.replace(/\\/g, "/");
   if (seen.has(key)) {
@@ -223,8 +323,17 @@ function indexFile(
   if (!ast) {
     return;
   }
-  const moduleSpecifier = specifierFor(importerPath, absolutePath);
-  collectExportsFromAst(ast, absolutePath, moduleSpecifier, out);
+  const moduleSpecifier =
+    forceSpecifier ?? specifierFor(importerPath, absolutePath);
+  collectExportsFromAst(
+    ast,
+    absolutePath,
+    moduleSpecifier,
+    out,
+    seen,
+    readFile,
+    importerPath,
+  );
 }
 
 /**
@@ -266,5 +375,132 @@ export function buildExportIndex(
     }
   }
 
+  const packageRoots = getPackageRoots();
+  if (packageRoots) {
+    for (const [, value] of packageRoots) {
+      const dir =
+        typeof value === "string" ? value : (value as PackageRootInfo).dir;
+      const files: string[] = [];
+      walkSnFiles(resolvePath(dir), files);
+      for (const file of files) {
+        indexFile(file, importerPath, out, seen, options.readFile);
+      }
+    }
+  }
+
   return out;
+}
+
+/**
+ * Suggest import module path completions for the partial specifier inside quotes.
+ */
+export function completeImportPaths(
+  importerPath: string,
+  partialSpecifier: string,
+  workspaceRoots: readonly string[] = [],
+): string[] {
+  const suggestions = new Set<string>();
+  const partial = partialSpecifier;
+
+  if (partial.startsWith("./") || partial.startsWith("../") || partial === "." || partial === "..") {
+    const baseDir = dirname(resolvePath(importerPath));
+    // Resolve the directory prefix of the partial path.
+    let dirPart = partial;
+    let namePrefix = "";
+    const lastSlash = partial.lastIndexOf("/");
+    if (lastSlash >= 0) {
+      dirPart = partial.slice(0, lastSlash + 1);
+      namePrefix = partial.slice(lastSlash + 1);
+    } else {
+      dirPart = "./";
+      namePrefix = partial.replace(/^\.\//, "");
+    }
+    const absDir = resolvePath(baseDir, dirPart);
+    if (existsSync(absDir) && statSync(absDir).isDirectory()) {
+      for (const entry of readdirSync(absDir)) {
+        if (SKIP_DIR_NAMES.has(entry)) {
+          continue;
+        }
+        if (namePrefix && !entry.startsWith(namePrefix) && !entry.startsWith(namePrefix.replace(/\.sn$/, ""))) {
+          continue;
+        }
+        const full = join(absDir, entry);
+        let childStat;
+        try {
+          childStat = statSync(full);
+        } catch {
+          continue;
+        }
+        if (childStat.isDirectory()) {
+          suggestions.add(`${dirPart}${entry}/`);
+          if (existsSync(join(full, "index.sn"))) {
+            suggestions.add(`${dirPart}${entry}`);
+          }
+        } else if (entry.toLowerCase().endsWith(".sn")) {
+          const withoutExt = entry.slice(0, -".sn".length);
+          suggestions.add(`${dirPart}${withoutExt}`);
+        }
+      }
+    }
+  } else if (partial === "std" || partial.startsWith("std/")) {
+    const stdRoot = getStdRootPath();
+    if (stdRoot) {
+      for (const name of STD_PUBLIC_MODULES) {
+        const spec = `std/${name}`;
+        if (spec.startsWith(partial) || partial === "std") {
+          suggestions.add(spec);
+        }
+      }
+      if ("std".startsWith(partial) || partial === "") {
+        suggestions.add("std");
+      }
+    }
+  } else {
+    // Package names / subpaths
+    const roots = getPackageRoots();
+    if (roots) {
+      for (const [name, value] of roots) {
+        if (name.startsWith(partial) || partial === "") {
+          suggestions.add(name);
+        }
+        if (partial === name || partial.startsWith(`${name}/`)) {
+          const dir =
+            typeof value === "string" ? value : (value as PackageRootInfo).dir;
+          const rest = partial.slice(name.length + 1);
+          const subDir = rest.includes("/")
+            ? join(dir, rest.slice(0, rest.lastIndexOf("/")))
+            : dir;
+          const namePrefix = rest.includes("/")
+            ? rest.slice(rest.lastIndexOf("/") + 1)
+            : rest;
+          if (existsSync(subDir) && statSync(subDir).isDirectory()) {
+            for (const entry of readdirSync(subDir)) {
+              if (namePrefix && !entry.startsWith(namePrefix)) {
+                continue;
+              }
+              const full = join(subDir, entry);
+              try {
+                const st = statSync(full);
+                const prefix = rest.includes("/")
+                  ? `${name}/${rest.slice(0, rest.lastIndexOf("/") + 1)}`
+                  : `${name}/`;
+                if (st.isDirectory()) {
+                  suggestions.add(`${prefix}${entry}`);
+                } else if (entry.toLowerCase().endsWith(".sn")) {
+                  suggestions.add(`${prefix}${entry.slice(0, -".sn".length)}`);
+                }
+              } catch {
+                // skip
+              }
+            }
+          }
+        }
+      }
+    }
+    // Also suggest relative from workspace when typing a bare name prefix? No —
+    // bare names are packages only.
+    void workspaceRoots;
+  }
+
+  return [...suggestions].sort();
 }

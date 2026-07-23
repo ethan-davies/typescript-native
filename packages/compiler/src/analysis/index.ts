@@ -23,6 +23,7 @@ export {
   hoverAt,
   identifierStartOffset,
   positionToOffset,
+  referencesAt,
 } from "./query.js";
 export type {
   CompletionInfo,
@@ -31,7 +32,7 @@ export type {
   HoverInfo,
 } from "./query.js";
 
-export { buildExportIndex } from "./export-index.js";
+export { buildExportIndex, completeImportPaths } from "./export-index.js";
 export type { BuildExportIndexOptions } from "./export-index.js";
 
 export {

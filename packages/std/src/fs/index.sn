@@ -1,102 +1,22 @@
-extern function sn_fs_read_file(path: string): string | null;
-extern function sn_fs_write_file(path: string, contents: string): bool;
-extern function sn_fs_append_file(path: string, contents: string): bool;
-extern function sn_fs_exists(path: string): bool;
-extern function sn_fs_delete_file(path: string): bool;
-extern function sn_fs_copy_file(src: string, dst: string): bool;
-extern function sn_fs_move_file(src: string, dst: string): bool;
-extern function sn_fs_create_dir(path: string): bool;
-extern function sn_fs_delete_dir(path: string): bool;
-extern function sn_fs_list_dir(path: string): string[] | null;
-extern function sn_path_join(a: string, b: string): string;
-extern function sn_path_basename(path: string): string;
-extern function sn_path_dirname(path: string): string;
-extern function sn_path_extension(path: string): string;
-extern function sn_path_normalize(path: string): string;
-extern function sn_path_absolute(path: string): string;
-
-export function readFile(path: string): string {
-  let contents = sn_fs_read_file(path);
-  if (contents == null) {
-    throw new Error("Failed to read file: " + path);
-  }
-  return contents;
-}
-
-export function writeFile(path: string, contents: string): void {
-  if (!sn_fs_write_file(path, contents)) {
-    throw new Error("Failed to write file: " + path);
-  }
-}
-
-export function appendFile(path: string, contents: string): void {
-  if (!sn_fs_append_file(path, contents)) {
-    throw new Error("Failed to append file: " + path);
-  }
-}
-
-export function exists(path: string): bool {
-  return sn_fs_exists(path);
-}
-
-export function deleteFile(path: string): void {
-  if (!sn_fs_delete_file(path)) {
-    throw new Error("Failed to delete file: " + path);
-  }
-}
-
-export function copyFile(src: string, dst: string): void {
-  if (!sn_fs_copy_file(src, dst)) {
-    throw new Error("Failed to copy file");
-  }
-}
-
-export function moveFile(src: string, dst: string): void {
-  if (!sn_fs_move_file(src, dst)) {
-    throw new Error("Failed to move file");
-  }
-}
-
-export function createDirectory(path: string): void {
-  if (!sn_fs_create_dir(path)) {
-    throw new Error("Failed to create directory: " + path);
-  }
-}
-
-export function deleteDirectory(path: string): void {
-  if (!sn_fs_delete_dir(path)) {
-    throw new Error("Failed to delete directory: " + path);
-  }
-}
-
-export function listDirectory(path: string): string[] {
-  let entries = sn_fs_list_dir(path);
-  if (entries == null) {
-    throw new Error("Failed to list directory: " + path);
-  }
-  return entries;
-}
-
-export function join(a: string, b: string): string {
-  return sn_path_join(a, b);
-}
-
-export function basename(path: string): string {
-  return sn_path_basename(path);
-}
-
-export function dirname(path: string): string {
-  return sn_path_dirname(path);
-}
-
-export function extension(path: string): string {
-  return sn_path_extension(path);
-}
-
-export function normalize(path: string): string {
-  return sn_path_normalize(path);
-}
-
-export function absolute(path: string): string {
-  return sn_path_absolute(path);
-}
+export {
+  readFile,
+  writeFile,
+  appendFile,
+  exists,
+  deleteFile,
+  copyFile,
+  moveFile,
+} from "./file";
+export {
+  createDirectory,
+  deleteDirectory,
+  listDirectory,
+} from "./directory";
+export {
+  join,
+  basename,
+  dirname,
+  extension,
+  normalize,
+  absolute,
+} from "./path";

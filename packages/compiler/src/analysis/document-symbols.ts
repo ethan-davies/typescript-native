@@ -19,7 +19,9 @@ export type DocumentSymbolKind =
   | "method"
   | "field"
   | "constructor"
-  | "variant";
+  | "variant"
+  | "variable"
+  | "constant";
 
 export interface DocumentSymbolInfo {
   readonly name: string;
@@ -167,6 +169,15 @@ export function collectDocumentSymbols(program: Program): DocumentSymbolInfo[] {
         break;
       case "TypeAliasDeclaration":
         out.push(typeAliasSymbol(decl));
+        break;
+      case "ModuleVariableDeclaration":
+        out.push({
+          name: decl.name.name,
+          kind: decl.mutability === "const" ? "constant" : "variable",
+          span: decl.span,
+          selectionSpan: decl.name.span,
+          children: [],
+        });
         break;
       default:
         break;
