@@ -4,7 +4,7 @@
 
 /* TypeInfo registry uses system malloc — never sn_alloc — so it is not GC-managed. */
 
-/* Builtin TypeInfo entries for reserved type_ids 1–5.
+/* Builtin TypeInfo entries for reserved type_ids 1–7.
  * Array/map elem/key/value classifications are filled by per-instantiation
  * metadata later; builtins describe the header shapes only. */
 
@@ -92,6 +92,77 @@ static const SnTypeInfo BUILTIN_ENV = {
     .parent_type_id = 0,
 };
 
+/* SnFuture: state(i32)+pad, value*, error*, waiters*, compose_data*, on_settle* */
+static const SnFieldInfo FUTURE_FIELDS[] = {
+    {.offset = 0, .size = 4, .ref_class = SN_REF_VALUE, .type_id = 0},
+    {.offset = 8, .size = (int32_t)sizeof(void *), .ref_class = SN_REF_PTR, .type_id = 0},
+    {.offset = 8 + (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_PTR,
+     .type_id = 0},
+    {.offset = 8 + 2 * (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_PTR,
+     .type_id = 0},
+    {.offset = 8 + 3 * (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_PTR,
+     .type_id = 0},
+    {.offset = 8 + 4 * (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_VALUE,
+     .type_id = 0},
+};
+
+static const SnTypeInfo BUILTIN_FUTURE = {
+    .type_id = SN_TYPEID_FUTURE,
+    .kind = SN_KIND_STRUCT,
+    .size = (int32_t)(8 + 5 * sizeof(void *)),
+    .field_count = 6,
+    .fields = FUTURE_FIELDS,
+    .elem_type_id = 0,
+    .elem_ref_class = SN_REF_VALUE,
+    .key_type_id = 0,
+    .key_ref_class = SN_REF_VALUE,
+    .value_type_id = 0,
+    .value_ref_class = SN_REF_VALUE,
+    .parent_type_id = 0,
+};
+
+/* SnTask: result*, frame*, resume*, awaiting*, state, cancelled */
+static const SnFieldInfo TASK_FIELDS[] = {
+    {.offset = 0, .size = (int32_t)sizeof(void *), .ref_class = SN_REF_PTR, .type_id = SN_TYPEID_FUTURE},
+    {.offset = (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_PTR,
+     .type_id = 0},
+    {.offset = 2 * (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_VALUE,
+     .type_id = 0},
+    {.offset = 3 * (int32_t)sizeof(void *),
+     .size = (int32_t)sizeof(void *),
+     .ref_class = SN_REF_PTR,
+     .type_id = SN_TYPEID_FUTURE},
+    {.offset = 4 * (int32_t)sizeof(void *), .size = 4, .ref_class = SN_REF_VALUE, .type_id = 0},
+    {.offset = 4 * (int32_t)sizeof(void *) + 4, .size = 4, .ref_class = SN_REF_VALUE, .type_id = 0},
+};
+
+static const SnTypeInfo BUILTIN_TASK = {
+    .type_id = SN_TYPEID_TASK,
+    .kind = SN_KIND_STRUCT,
+    .size = (int32_t)(4 * sizeof(void *) + 8),
+    .field_count = 6,
+    .fields = TASK_FIELDS,
+    .elem_type_id = 0,
+    .elem_ref_class = SN_REF_VALUE,
+    .key_type_id = 0,
+    .key_ref_class = SN_REF_VALUE,
+    .value_type_id = 0,
+    .value_ref_class = SN_REF_VALUE,
+    .parent_type_id = 0,
+};
+
 static const SnTypeInfo *builtins_by_id(int32_t type_id) {
   switch (type_id) {
     case SN_TYPEID_STRING:
@@ -104,6 +175,10 @@ static const SnTypeInfo *builtins_by_id(int32_t type_id) {
       return &BUILTIN_CLOSURE;
     case SN_TYPEID_ENV:
       return &BUILTIN_ENV;
+    case SN_TYPEID_FUTURE:
+      return &BUILTIN_FUTURE;
+    case SN_TYPEID_TASK:
+      return &BUILTIN_TASK;
     default:
       return NULL;
   }

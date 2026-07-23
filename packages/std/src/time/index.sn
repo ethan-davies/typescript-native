@@ -1,5 +1,6 @@
 extern function sn_time_now_ms(): i64;
 extern function sn_time_sleep_ms(ms: i64): void;
+extern function sn_timer_sleep_ms(ms: i64): Future<void>;
 
 export class Duration {
   private millis: i64;
@@ -37,7 +38,13 @@ export class Instant {
   }
 }
 
-export function sleep(ms: i64): void {
+/** Asynchronous sleep — must be awaited inside an async function. */
+export async function sleep(ms: i64): void {
+  await sn_timer_sleep_ms(ms);
+}
+
+/** Blocking sleep (prefer async `sleep` in async programs). */
+export function sleepSync(ms: i64): void {
   sn_time_sleep_ms(ms);
 }
 

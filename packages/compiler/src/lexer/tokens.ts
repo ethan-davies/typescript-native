@@ -61,6 +61,8 @@ export enum TokenKind {
   Typeof = "typeof",
   Null = "null",
   Is = "is",
+  Async = "async",
+  Await = "await",
 
   LParen = "(",
   RParen = ")",
@@ -157,4 +159,6 @@ export const KEYWORDS: ReadonlyMap<string, TokenKind> = new Map([
   ["typeof", TokenKind.Typeof],
   ["null", TokenKind.Null],
   ["is", TokenKind.Is],
+  ["async", TokenKind.Async],
+  ["await", TokenKind.Await],
 ]);

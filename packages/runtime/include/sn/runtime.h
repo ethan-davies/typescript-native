@@ -74,7 +74,15 @@ typedef enum SnRefClass {
 #define SN_TYPEID_MAP 3
 #define SN_TYPEID_CLOSURE 4
 #define SN_TYPEID_ENV 5
+#define SN_TYPEID_FUTURE 6
+#define SN_TYPEID_TASK 7
 #define SN_TYPEID_CLASS_BASE 256
+
+/* Future lifecycle states. */
+#define SN_FUTURE_PENDING 0
+#define SN_FUTURE_COMPLETED 1
+#define SN_FUTURE_FAILED 2
+#define SN_FUTURE_CANCELLED 3
 
 typedef struct SnFieldInfo {
   int32_t offset;    /* bytes from object start */
@@ -293,6 +301,57 @@ int32_t sn_utf8_byte_len(const char *s);
 bool sn_utf8_is_valid(const char *s);
 
 bool sn_random_bool(void);
+
+/* --- Async runtime (single-threaded cooperative tasks) --- */
+
+void sn_async_init(void);
+void sn_async_shutdown(void);
+
+void *sn_future_new(void);
+void sn_future_complete(void *fut, void *value);
+void sn_future_complete_void(void *fut);
+void sn_future_fail(void *fut, void *error);
+void sn_future_cancel(void *fut);
+bool sn_future_is_ready(void *fut);
+bool sn_future_is_cancelled(void *fut);
+int32_t sn_future_state(void *fut);
+void *sn_future_value(void *fut);
+void *sn_future_error(void *fut);
+/* Compose: all/race over a Future*[] array. Returns a new Future. */
+void *sn_future_all(void *futures_array);
+void *sn_future_race(void *futures_array);
+
+typedef void (*SnTaskResumeFn)(void *frame);
+
+/* Spawn a task. Returns the result future (same as result_fut if non-null). */
+void *sn_task_spawn(SnTaskResumeFn resume, void *frame, void *result_fut);
+void *sn_task_current(void);
+void sn_task_await(void *task, void *fut);
+void sn_task_cancel(void *task);
+bool sn_task_is_cancelled(void *task);
+/* In a resume function: if fut is pending, registers await and returns true (caller must ret).
+ * If ready, returns false and caller continues (throwing on failure is caller's job). */
+bool sn_task_await_suspend(void *fut);
+/* Drive the event loop until fut is settled. Safe to call from a running task
+ * (nested). On failure the caller should sn_throw(sn_future_error(fut)). */
+void sn_future_await_run(void *fut);
+
+/* Drive the event loop until root_future is settled (and drain runnable work). */
+void sn_event_loop_run(void *root_future);
+/* Non-blocking: run runnable tasks and poll ready I/O once. */
+void sn_event_loop_poll(void);
+
+/* Async sleep: returns Future<void> that completes after ms. */
+void *sn_timer_sleep_ms(int64_t ms);
+void sn_timer_cancel(void *fut);
+
+/* Non-blocking TCP. Handles are i64-encoded pointers in Future values. */
+void *sn_tcp_listen(const char *host, int32_t port); /* Future<i64> */
+void *sn_tcp_accept(int64_t listener);                 /* Future<i64> */
+void *sn_tcp_connect(const char *host, int32_t port); /* Future<i64> */
+void *sn_tcp_read(int64_t conn, int32_t max_bytes);    /* Future<string> */
+void *sn_tcp_write(int64_t conn, const char *data);    /* Future<void> */
+void sn_tcp_close_i64(int64_t handle);
 
 #ifdef __cplusplus
 }

@@ -55,12 +55,15 @@ const KEYWORDS: readonly ScopeBindingInfo[] = [
   "catch",
   "finally",
   "throw",
+  "async",
+  "await",
 ].map((name) => ({ name, detail: "keyword", kind: "keyword" as const }));
 
 const BUILTIN_VALUES: readonly ScopeBindingInfo[] = [
   { name: "print", detail: "(...args) => void", kind: "function" },
   { name: "createMap", detail: "() => Map", kind: "function" },
   { name: "Error", detail: "class Error", kind: "class" },
+  { name: "Future", detail: "type Future<T>", kind: "type" },
 ];
 
 const BUILTIN_TYPES: readonly ScopeBindingInfo[] = [
@@ -73,6 +76,7 @@ const BUILTIN_TYPES: readonly ScopeBindingInfo[] = [
   "char",
   "void",
   "null",
+  "Future",
 ].map((name) => ({ name, detail: "type", kind: "type" as const }));
 
 /** Sort order for completion kinds (lower = higher in the list). */

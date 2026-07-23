@@ -328,6 +328,32 @@ static void mark_object(void *ptr) {
     mark_map(obj);
     return;
   }
+  if (type_id == SN_TYPEID_FUTURE) {
+    /* Walk waiter linked list (each waiter is a small GC allocation). */
+    typedef struct SnWaiterMark {
+      void *task;
+      struct SnWaiterMark *next;
+    } SnWaiterMark;
+    typedef struct SnFutureMark {
+      int32_t state;
+      void *value;
+      void *error;
+      SnWaiterMark *waiters;
+      void *compose_data;
+      void *on_settle;
+    } SnFutureMark;
+    SnFutureMark *fut = (SnFutureMark *)ptr;
+    mark_object(fut->value);
+    mark_object(fut->error);
+    mark_object(fut->compose_data);
+    SnWaiterMark *w = fut->waiters;
+    while (w != NULL) {
+      mark_object(w);
+      mark_object(w->task);
+      w = w->next;
+    }
+    return;
+  }
 
   const SnTypeInfo *info = sn_typeinfo_get(type_id);
   if (info == NULL) {

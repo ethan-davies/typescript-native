@@ -163,11 +163,11 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(if|elseif|else|while|for|switch|case|default|break|continue|return|throw|try|catch|finally)\\b",
+          "match": "\\b(if|elseif|else|while|for|switch|case|default|break|continue|return|throw|try|catch|finally|await)\\b",
           "name": "keyword.control.sn"
         },
         {
-          "match": "\\b(let|const)\\b",
+          "match": "\\b(let|const|async)\\b",
           "name": "storage.type.sn"
         },
         {

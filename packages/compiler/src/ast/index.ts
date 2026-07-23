@@ -51,6 +51,7 @@ export type {
   KeyofType,
   LambdaBody,
   LambdaExpression,
+  AwaitExpression,
   LambdaParameter,
   LiteralType,
   MappedType,

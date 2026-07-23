@@ -217,6 +217,8 @@ export interface FunctionDeclaration extends AstNodeBase {
   readonly exported: boolean;
   /** True for `extern function ...;` — no body; symbol is a C ABI import. */
   readonly isExtern: boolean;
+  /** True for `async function ...`. */
+  readonly isAsync: boolean;
   readonly name: Identifier;
   readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
@@ -287,6 +289,7 @@ export interface ClassMethod extends AstNodeBase {
   readonly visibility: Visibility;
   readonly isStatic: boolean;
   readonly isAbstract: boolean;
+  readonly isAsync: boolean;
   readonly name: Identifier;
   readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
@@ -472,6 +475,7 @@ export interface TryStatement extends AstNodeBase {
 export type Expression =
   | CallExpression
   | LambdaExpression
+  | AwaitExpression
   | BinaryExpression
   | UnaryExpression
   | NonNullExpression
@@ -519,9 +523,15 @@ export type LambdaBody =
 
 export interface LambdaExpression extends AstNodeBase {
   readonly kind: "LambdaExpression";
+  readonly isAsync: boolean;
   readonly params: LambdaParameter[];
   readonly returnType: TypeAnnotation | null;
   readonly body: LambdaBody;
+}
+
+export interface AwaitExpression extends AstNodeBase {
+  readonly kind: "AwaitExpression";
+  readonly argument: Expression;
 }
 
 export interface BinaryExpression extends AstNodeBase {
@@ -678,6 +688,7 @@ export type TypeAnnotation =
 
 export interface FunctionType extends AstNodeBase {
   readonly kind: "FunctionType";
+  readonly isAsync: boolean;
   readonly params: TypeAnnotation[];
   readonly returnType: TypeAnnotation;
 }

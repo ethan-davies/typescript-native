@@ -91,6 +91,7 @@ function printImport(clause: ImportClause, source: string): string {
 function printFunction(decl: {
   exported: boolean;
   isExtern: boolean;
+  isAsync?: boolean;
   name: { name: string };
   typeParams: TypeParameter[];
   params: Parameter[];
@@ -99,10 +100,11 @@ function printFunction(decl: {
 }): string {
   const exp = decl.exported ? "export " : "";
   const ext = decl.isExtern ? "extern " : "";
+  const asyncKw = decl.isAsync ? "async " : "";
   const tps = printTypeParams(decl.typeParams);
   const params = decl.params.map(printParam).join(", ");
   const ret = printType(decl.returnType);
-  const header = `${exp}${ext}function ${decl.name.name}${tps}(${params}): ${ret}`;
+  const header = `${exp}${ext}${asyncKw}function ${decl.name.name}${tps}(${params}): ${ret}`;
   if (decl.isExtern || decl.body === null) {
     return `${header};`;
   }
@@ -550,6 +552,8 @@ function printExpr(expr: Expression): string {
       const operand = printExprWithParen(expr.operand, unaryPrecedence);
       return `${expr.operator}${operand}`;
     }
+    case "AwaitExpression":
+      return `await ${printExprWithParen(expr.argument, unaryPrecedence)}`;
     case "NonNullExpression":
       return `${printExpr(expr.expression)}!`;
     case "NullCoalescingExpression":
@@ -600,6 +604,7 @@ function printExpr(expr: Expression): string {
       return `${printExpr(expr.callee)}${targs}(${args})`;
     }
     case "LambdaExpression": {
+      const asyncKw = expr.isAsync ? "async " : "";
       const params = expr.params
         .map((p) =>
           p.typeAnnotation
@@ -610,7 +615,7 @@ function printExpr(expr: Expression): string {
       const ret = expr.returnType
         ? `: ${printType(expr.returnType)}`
         : "";
-      return `(${params})${ret} => ${printLambdaBody(expr.body)}`;
+      return `${asyncKw}(${params})${ret} => ${printLambdaBody(expr.body)}`;
     }
   }
 }
@@ -673,8 +678,10 @@ function printType(type: TypeAnnotation): string {
     }
     case "IndexedAccessType":
       return `${printType(type.objectType)}[${printType(type.indexType)}]`;
-    case "FunctionType":
-      return `(${type.params.map(printType).join(", ")}) => ${printType(type.returnType)}`;
+    case "FunctionType": {
+      const asyncKw = type.isAsync ? "async " : "";
+      return `${asyncKw}(${type.params.map(printType).join(", ")}) => ${printType(type.returnType)}`;
+    }
   }
 }
 

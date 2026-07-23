@@ -95,6 +95,16 @@ function rewriteType(
       if (ann.typeArgs.length === 0) {
         return ann;
       }
+      // Builtin parametric types are not monomorphized; keep rewritten args.
+      if (ann.namespace === null && ann.name === "Future") {
+        return {
+          kind: "NamedType",
+          namespace: null,
+          name: "Future",
+          typeArgs: ann.typeArgs.map((a) => rewriteType(a, typeRewrites)),
+          span: ann.span,
+        };
+      }
       return {
         kind: "NamedType",
         namespace: ann.namespace,
@@ -167,6 +177,7 @@ function rewriteType(
     case "FunctionType":
       return {
         kind: "FunctionType",
+        isAsync: ann.isAsync,
         params: ann.params.map((p) => rewriteType(p, typeRewrites)),
         returnType: rewriteType(ann.returnType, typeRewrites),
         span: ann.span,
@@ -221,6 +232,11 @@ function rewriteExpression(expr: Expression, inst: TypecheckInstantiations): Exp
                 kind: "block",
                 statements: expr.body.statements.map((s) => rewriteStatement(s, inst)),
               },
+      };
+    case "AwaitExpression":
+      return {
+        ...expr,
+        argument: rewriteExpression(expr.argument, inst),
       };
     case "NewExpression": {
       const rewrite = inst.newRewrites.get(expr.span.start.offset);

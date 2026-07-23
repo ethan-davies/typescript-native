@@ -1,0 +1,30 @@
+extern function sn_timer_sleep_ms(ms: i64): Future<void>;
+extern function sn_future_all(futures: Future<null>[]): Future<null>;
+extern function sn_future_race(futures: Future<null>[]): Future<null>;
+
+/** Suspend the current async task for `ms` milliseconds. */
+export async function sleep(ms: i64): void {
+  await sn_timer_sleep_ms(ms);
+}
+
+/**
+ * Keep a future as a concurrent task handle. Async calls already start work;
+ * this is an identity helper: `const t = spawn(doWork())`.
+ */
+export function spawn<T>(fut: Future<T>): Future<T> {
+  return fut;
+}
+
+/**
+ * Wait until every future in `futures` settles. Element type is erased to
+ * `Future<null>` at the ABI boundary; prefer awaiting typed handles when you
+ * need each result.
+ */
+export function all(futures: Future<null>[]): Future<null> {
+  return sn_future_all(futures);
+}
+
+/** Resolve with the first future in `futures` that settles. */
+export function race(futures: Future<null>[]): Future<null> {
+  return sn_future_race(futures);
+}

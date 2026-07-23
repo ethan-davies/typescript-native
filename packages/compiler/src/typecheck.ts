@@ -73,6 +73,7 @@ import {
   isLiteralType,
   isMapType,
   isFunctionType,
+  isFutureType,
   isObjectType,
   isUnionType,
   keyofType,
@@ -85,6 +86,7 @@ import {
   typeofTagForType,
   type ExtendedValueType,
   type FunctionValueType,
+  type FutureValueType,
   type IntersectionValueType,
   type LiteralValueType,
   type MapValueType,
@@ -154,10 +156,12 @@ export type ValueType =
   | ObjectValueType
   | LiteralValueType
   | MapValueType
-  | FunctionValueType;
+  | FunctionValueType
+  | FutureValueType;
 
 export type {
   FunctionValueType,
+  FutureValueType,
   IntersectionValueType,
   LiteralValueType,
   MapValueType,
@@ -206,6 +210,7 @@ export interface ClassMethodDef {
   readonly mangledName: string;
   readonly params: ValueType[];
   readonly returnType: ReturnType;
+  readonly isAsync: boolean;
   readonly visibility: Visibility;
   readonly isStatic: boolean;
   readonly isAbstract: boolean;
@@ -286,6 +291,7 @@ interface FunctionSig {
   readonly mangledName: string;
   readonly params: ValueType[];
   readonly returnType: ReturnType;
+  readonly isAsync: boolean;
   readonly decl: FunctionDeclaration;
   readonly exported: boolean;
   readonly isExtern: boolean;
@@ -390,6 +396,8 @@ let classesByMangled: Map<string, ClassDef> = new Map();
 /** All interface defs by mangled name. */
 let interfacesByMangled: Map<string, InterfaceDef> = new Map();
 let memberContext: MemberContext | null = null;
+/** True while type-checking the body of an async function or async lambda. */
+let inAsyncFunction = false;
 /** Type parameters in scope while checking a generic template. */
 let activeTypeParams: Map<string, TypeParamValueType> = new Map();
 /** Nesting depth while typechecking lambda bodies (for `this` rejection). */
@@ -811,6 +819,7 @@ function indexMembersByType(
         name: m.name,
         detail: typeToString({
           kind: "function",
+          isAsync: false,
           params: m.params,
           returnType: m.returnType,
         }),
@@ -838,6 +847,7 @@ function indexMembersByType(
         name: m.name,
         detail: typeToString({
           kind: "function",
+          isAsync: false,
           params: m.params,
           returnType: m.returnType,
         }),
@@ -861,6 +871,7 @@ function indexMembersByType(
         name: m.name,
         detail: typeToString({
           kind: "function",
+          isAsync: false,
           params: m.params,
           returnType: m.returnType,
         }),
@@ -916,6 +927,7 @@ function indexMembersByType(
       name: sig.name,
       detail: typeToString({
         kind: "function",
+        isAsync: false,
         params: sig.params.slice(1),
         returnType: sig.returnType,
       }),
@@ -1293,6 +1305,7 @@ function namespaceMemberCompletions(
       kind: "function",
       detail: typeToString({
         kind: "function",
+        isAsync: sig.isAsync,
         params: sig.params,
         returnType: sig.returnType,
       }),
@@ -1418,6 +1431,7 @@ function indexModuleSymbols(
           const sig = imported.functions.get(binding.exportName)!;
           detail = typeToString({
             kind: "function",
+            isAsync: false,
             params: sig.params,
             returnType: sig.returnType,
           });
@@ -1464,6 +1478,7 @@ function indexModuleSymbols(
       kind: "function",
       detail: typeToString({
         kind: "function",
+        isAsync: sig.isAsync,
         params: sig.params,
         returnType: sig.returnType,
       }),
@@ -1725,6 +1740,7 @@ function collectModuleSymbols(
           : mangleSymbol(mod.moduleId, fn.name.name),
       params,
       returnType,
+      isAsync: fn.isAsync,
       decl: fn,
       exported: fn.exported,
       isExtern: fn.isExtern,
@@ -2859,6 +2875,7 @@ function collectClasses(
           mangledName: mangledMethod,
           params,
           returnType,
+          isAsync: method.isAsync,
           visibility: method.visibility,
           isStatic: true,
           isAbstract: false,
@@ -2893,6 +2910,7 @@ function collectClasses(
           mangledName: mangledMethod,
           params,
           returnType,
+          isAsync: method.isAsync,
           visibility: method.visibility,
           isStatic: false,
           isAbstract: method.isAbstract,
@@ -2908,6 +2926,7 @@ function collectClasses(
           mangledName: mangledMethod,
           params,
           returnType,
+          isAsync: method.isAsync,
           visibility: method.visibility,
           isStatic: false,
           isAbstract: method.isAbstract,
@@ -3128,6 +3147,35 @@ import { isReferenceCategory } from "./types/category.js";
 
 export function isArrayType(type: ValueType): type is ArrayValueType {
   return typeof type === "object" && type.kind === "array";
+}
+
+export function isFutureValueType(type: ValueType): type is FutureValueType {
+  return isFutureType(type);
+}
+
+/** Wrap an async function's declared return as the call-site Future type. */
+function asyncCallResultType(returnType: ReturnType): FutureValueType {
+  return { kind: "future", inner: returnType };
+}
+
+function resultOfCall(
+  isAsync: boolean,
+  returnType: ReturnType,
+  allowVoidCall: boolean,
+  span: SourceSpan,
+  diagnostics: DiagnosticCollector,
+  voidLabel: string,
+): ValueType | null {
+  if (isAsync) {
+    return asyncCallResultType(returnType);
+  }
+  if (returnType === "void") {
+    if (!allowVoidCall) {
+      diagnostics.error(voidLabel, span, "E0309");
+    }
+    return null;
+  }
+  return returnType;
 }
 
 export function isTupleType(type: ValueType): type is TupleValueType {
@@ -3379,13 +3427,13 @@ export function annotationToValueType(
         ann.returnType.kind === "PrimitiveType" &&
         ann.returnType.name === "void"
       ) {
-        return { kind: "function", params, returnType: "void" };
+        return { kind: "function", isAsync: ann.isAsync, params, returnType: "void" };
       }
       const returnType = annotationToValueType(ann.returnType, namedKinds);
       if (returnType === null) {
         return null;
       }
-      return { kind: "function", params, returnType };
+      return { kind: "function", isAsync: ann.isAsync, params, returnType };
     }
     default:
       return null;
@@ -3620,7 +3668,7 @@ function resolveAnnotation(
         ann.returnType.kind === "PrimitiveType" &&
         ann.returnType.name === "void"
       ) {
-        return { kind: "function", params, returnType: "void" };
+        return { kind: "function", isAsync: ann.isAsync, params, returnType: "void" };
       }
       const returnType = resolveAnnotation(
         ann.returnType,
@@ -3631,7 +3679,7 @@ function resolveAnnotation(
       if (returnType === null) {
         return null;
       }
-      return { kind: "function", params, returnType };
+      return { kind: "function", isAsync: ann.isAsync, params, returnType };
     }
     case "NamedType":
       return resolveNamedType(ann, structs, enums, diagnostics);
@@ -3965,6 +4013,27 @@ function resolveGenericNamedType(
   enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
 ): ValueType | null {
+  // Builtin Future<T>
+  if (ann.namespace === null && ann.name === "Future") {
+    if (ann.typeArgs.length !== 1) {
+      diagnostics.error(
+        `'Future' requires exactly 1 type argument, got ${ann.typeArgs.length}`,
+        ann.span,
+        "E0104",
+      );
+      return null;
+    }
+    const arg = ann.typeArgs[0]!;
+    if (arg.kind === "PrimitiveType" && arg.name === "void") {
+      return { kind: "future", inner: "void" };
+    }
+    const inner = resolveAnnotation(arg, structs, enums, diagnostics);
+    if (inner === null) {
+      return null;
+    }
+    return { kind: "future", inner };
+  }
+
   const resolvedArgs: TypeAnnotation[] = [];
   for (const arg of ann.typeArgs) {
     const vt = resolveAnnotation(arg, structs, enums, diagnostics);
@@ -4415,6 +4484,7 @@ function instantiateGenericClass(
         ),
         params,
         returnType,
+        isAsync: member.isAsync,
         visibility: member.visibility,
         isStatic: member.isStatic,
         isAbstract: member.isAbstract,
@@ -4871,10 +4941,24 @@ function valueTypeToLocalAnnotation(type: ValueType): TypeAnnotation {
           : valueTypeToLocalAnnotation(type.returnType as ValueType);
       return {
         kind: "FunctionType",
+        isAsync: type.isAsync,
         params: type.params.map((p) =>
           valueTypeToLocalAnnotation(p as ValueType),
         ),
         returnType: returnAnn,
+        span,
+      };
+    }
+    case "future": {
+      const innerAnn =
+        type.inner === "void"
+          ? ({ kind: "PrimitiveType", name: "void", span } as const)
+          : valueTypeToLocalAnnotation(type.inner as ValueType);
+      return {
+        kind: "NamedType",
+        namespace: null,
+        name: "Future",
+        typeArgs: [innerAnn],
         span,
       };
     }
@@ -4912,6 +4996,40 @@ function inferTypeArgsPartial(
         return false;
       }
       return unify(ann.element, concrete.element);
+    }
+    if (
+      ann.kind === "NamedType" &&
+      ann.namespace === null &&
+      ann.name === "Future" &&
+      ann.typeArgs.length === 1
+    ) {
+      if (typeof concrete !== "object" || concrete.kind !== "future") {
+        return false;
+      }
+      const arg = ann.typeArgs[0]!;
+      if (arg.kind === "PrimitiveType" && arg.name === "void") {
+        return concrete.inner === "void";
+      }
+      // Future<T> where T is a type param may unify with Future<void>.
+      if (concrete.inner === "void") {
+        if (
+          arg.kind === "NamedType" &&
+          arg.namespace === null &&
+          arg.typeArgs.length === 0 &&
+          typeParams.some((tp) => tp.name.name === arg.name)
+        ) {
+          const existing = solutions.get(arg.name);
+          // `void` is only a type-argument marker here (not a value type).
+          const voidMarker = "void" as unknown as ValueType;
+          if (existing && !typesEqual(existing, voidMarker)) {
+            return false;
+          }
+          solutions.set(arg.name, voidMarker);
+          return true;
+        }
+        return false;
+      }
+      return unify(arg, concrete.inner as ValueType);
     }
     if (ann.kind === "FunctionType") {
       if (typeof concrete !== "object" || concrete.kind !== "function") {
@@ -5055,6 +5173,10 @@ function checkGenericFunctionCall(
   const resolvedArgTypes: ValueType[] = [];
   let hasTypeParamArg = false;
   for (const arg of typeArgs) {
+    // `void` is not a value type, but is a valid type argument (e.g. Future<void>).
+    if (arg.kind === "PrimitiveType" && arg.name === "void") {
+      continue;
+    }
     const vt = resolveAnnotation(arg, structs, enums, diagnostics);
     if (vt === null) {
       return null;
@@ -5146,18 +5268,15 @@ function checkGenericFunctionCall(
   if (returnType === undefined) {
     return null;
   }
-  if (returnType === "void") {
-    if (!allowVoidCall) {
-      diagnostics.error(
-        `Void function '${tpl.decl.name.name}' cannot be used as a value`,
-        expr.span,
-        "E0309",
-      );
-    }
-    return null;
-  }
   void resolvedArgTypes;
-  return returnType;
+  return resultOfCall(
+    tpl.decl.isAsync,
+    returnType,
+    allowVoidCall,
+    expr.span,
+    diagnostics,
+    `Void function '${tpl.decl.name.name}' cannot be used as a value`,
+  );
 }
 
 function checkFunction(
@@ -5182,6 +5301,21 @@ function checkFunction(
     return;
   }
 
+  if (
+    fn.isAsync &&
+    typeof returnType === "object" &&
+    returnType.kind === "future"
+  ) {
+    diagnostics.error(
+      `Async function '${fn.name.name}' cannot return a value of type '${typeToString(returnType)}'`,
+      fn.returnType.span,
+      "E0503",
+    );
+  }
+
+  const prevAsync = inAsyncFunction;
+  inAsyncFunction = fn.isAsync;
+
   const isExtension = fn.params[0]?.isReceiver === true;
   const prevMemberContext = memberContext;
   if (isExtension) {
@@ -5192,6 +5326,7 @@ function checkFunction(
       diagnostics,
     );
     if (receiverType === null) {
+      inAsyncFunction = prevAsync;
       return;
     }
     memberContext = {
@@ -5310,6 +5445,7 @@ function checkFunction(
   }
 
   memberContext = prevMemberContext;
+  inAsyncFunction = prevAsync;
 }
 
 function checkStructMethods(
@@ -6233,6 +6369,18 @@ function checkStatement(
         returnType,
       );
       if (!valueType) {
+        return true;
+      }
+      if (
+        inAsyncFunction &&
+        typeof valueType === "object" &&
+        valueType.kind === "future"
+      ) {
+        diagnostics.error(
+          `Async function cannot return a value of type '${typeToString(valueType)}'`,
+          stmt.value.span,
+          "E0503",
+        );
         return true;
       }
       if (!valueMatchesBinding(stmt.value, valueType, returnType)) {
@@ -7173,18 +7321,14 @@ function checkNamespaceCall(
     );
   }
 
-  if (sig.returnType === "void") {
-    if (!allowVoidCall) {
-      diagnostics.error(
-        `Void function '${nsName}.${sig.name}' cannot be used as a value`,
-        expr.span,
-        "E0309",
-      );
-    }
-    return null;
-  }
-
-  return sig.returnType;
+  return resultOfCall(
+    sig.isAsync,
+    sig.returnType,
+    allowVoidCall,
+    expr.span,
+    diagnostics,
+    `Void function '${nsName}.${sig.name}' cannot be used as a value`,
+  );
 }
 
 type CalleeLabelKind = "function" | "method" | "constructor";
@@ -7494,6 +7638,7 @@ function recordStructMemberCompletions(
       name: m.name,
       detail: typeToString({
         kind: "function",
+        isAsync: false,
         params: m.params,
         returnType: m.returnType,
       }),
@@ -7520,6 +7665,7 @@ function recordClassMemberCompletions(
       name: m.name,
       detail: typeToString({
         kind: "function",
+        isAsync: false,
         params: m.params,
         returnType: m.returnType,
       }),
@@ -8590,6 +8736,7 @@ function checkExpressionInner(
         }
         return {
           kind: "function",
+          isAsync: sig.isAsync,
           params: sig.params,
           returnType: sig.returnType,
         };
@@ -8601,6 +8748,46 @@ function checkExpressionInner(
         "E0304",
       );
       return null;
+    }
+    case "AwaitExpression": {
+      if (!inAsyncFunction) {
+        diagnostics.error(
+          "`await` expressions can only be used inside async functions",
+          expr.span,
+          "E0501",
+        );
+        return null;
+      }
+      const argType = checkExpression(
+        expr.argument,
+        scope,
+        functions,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (!argType) {
+        return null;
+      }
+      if (!isFutureType(argType)) {
+        diagnostics.error(
+          `Cannot await a value of type '${typeToString(argType)}'`,
+          expr.argument.span,
+          "E0502",
+        );
+        return null;
+      }
+      if (argType.inner === "void") {
+        if (!allowVoidCall) {
+          diagnostics.error(
+            "Cannot use 'await' of Future<void> as a value",
+            expr.span,
+            "E0309",
+          );
+        }
+        return null;
+      }
+      return argType.inner as ValueType;
     }
     case "NonNullExpression": {
       const operandType = checkExpression(
@@ -9189,6 +9376,7 @@ function checkExpressionInner(
             expr.callee.span,
             typeToString({
               kind: "function",
+              isAsync: sig.isAsync,
               params: sig.params,
               returnType: sig.returnType,
             }),
@@ -9212,18 +9400,14 @@ function checkExpressionInner(
           return null;
         }
 
-        if (sig.returnType === "void") {
-          if (!allowVoidCall) {
-            diagnostics.error(
-              `Void function '${sig.name}' cannot be used as a value`,
-              expr.span,
-              "E0309",
-            );
-          }
-          return null;
-        }
-
-        return sig.returnType;
+        return resultOfCall(
+          sig.isAsync,
+          sig.returnType,
+          allowVoidCall,
+          expr.span,
+          diagnostics,
+          `Void function '${sig.name}' cannot be used as a value`,
+        );
       }
 
       // Indirect call through an arbitrary callable expression.
@@ -9306,7 +9490,7 @@ function checkFunctionValueCall(
       return null;
     }
   }
-  if (fnType.returnType === "void") {
+  if (fnType.returnType === "void" && !fnType.isAsync) {
     if (!allowVoidCall) {
       diagnostics.error(
         "Void function cannot be used as a value",
@@ -9316,7 +9500,14 @@ function checkFunctionValueCall(
     }
     return null;
   }
-  return fnType.returnType as ValueType;
+  return resultOfCall(
+    fnType.isAsync,
+    fnType.returnType as ReturnType,
+    allowVoidCall,
+    expr.span,
+    diagnostics,
+    "Void function cannot be used as a value",
+  );
 }
 
 function checkLambdaExpression(
@@ -9330,6 +9521,17 @@ function checkLambdaExpression(
 ): ValueType | null {
   const expectedFn =
     expectedType && isFunctionType(expectedType) ? expectedType : null;
+
+  if (expectedFn && expr.isAsync !== expectedFn.isAsync) {
+    diagnostics.error(
+      expr.isAsync
+        ? "Expected a synchronous function type, got an async lambda"
+        : "Expected an async function type, got a synchronous lambda",
+      expr.span,
+      "E0504",
+    );
+    return null;
+  }
 
   if (expectedFn && expr.params.length !== expectedFn.params.length) {
     diagnostics.error(
@@ -9423,6 +9625,8 @@ function checkLambdaExpression(
   }
 
   lambdaDepth += 1;
+  const prevAsync = inAsyncFunction;
+  inAsyncFunction = expr.isAsync;
   let bodyReturn: ReturnType | null = null;
 
   if (expr.body.kind === "expression") {
@@ -9440,6 +9644,7 @@ function checkLambdaExpression(
     );
     if (!bodyType) {
       lambdaDepth -= 1;
+      inAsyncFunction = prevAsync;
       return null;
     }
     bodyReturn = bodyType;
@@ -9504,6 +9709,7 @@ function checkLambdaExpression(
   }
 
   lambdaDepth -= 1;
+  inAsyncFunction = prevAsync;
 
   if (bodyReturn === null) {
     return null;
@@ -9514,6 +9720,7 @@ function checkLambdaExpression(
 
   return {
     kind: "function",
+    isAsync: expr.isAsync,
     params: paramTypes,
     returnType: bodyReturn,
   };
@@ -9747,6 +9954,7 @@ function checkMethodCall(
         enums,
         diagnostics,
         allowVoidCall,
+        method.isAsync,
       );
     }
   }
@@ -10049,6 +10257,7 @@ function checkExtensionMethodCall(
         enums,
         diagnostics,
         allowVoidCall,
+        sig.isAsync,
       );
     }
 
@@ -10194,6 +10403,7 @@ function checkGenericExtensionCall(
           if (bodyType) {
             t = {
               kind: "function",
+              isAsync: false,
               params: expectedParams,
               returnType: bodyType,
             };
@@ -10242,6 +10452,9 @@ function checkGenericExtensionCall(
   const resolvedArgTypes: ValueType[] = [];
   let hasTypeParamArg = false;
   for (const arg of typeArgs) {
+    if (arg.kind === "PrimitiveType" && arg.name === "void") {
+      continue;
+    }
     const vt = resolveAnnotation(arg, structs, enums, diagnostics);
     if (vt === null) {
       return null;
@@ -10517,17 +10730,14 @@ function checkGenericMethodCall(
   if (returnType === undefined) {
     return null;
   }
-  if (returnType === "void") {
-    if (!allowVoidCall) {
-      diagnostics.error(
-        `Void method '${method.name.name}' cannot be used as a value`,
-        expr.span,
-        "E0309",
-      );
-    }
-    return null;
-  }
-  return returnType;
+  return resultOfCall(
+    method.isAsync,
+    returnType,
+    allowVoidCall,
+    expr.span,
+    diagnostics,
+    `Void method '${method.name.name}' cannot be used as a value`,
+  );
 }
 
 function checkMethodArgs(
@@ -10542,6 +10752,7 @@ function checkMethodArgs(
   enums: Map<string, EnumDef>,
   diagnostics: DiagnosticCollector,
   allowVoidCall: boolean,
+  isAsync = false,
 ): ValueType | null {
   if (paramDecls && paramDecls.length === params.length) {
     if (
@@ -10596,7 +10807,7 @@ function checkMethodArgs(
       }
     }
   }
-  if (returnType === "void") {
+  if (returnType === "void" && !isAsync) {
     if (!allowVoidCall) {
       diagnostics.error(
         `Void method '${name}' cannot be used as a value`,
@@ -10606,7 +10817,14 @@ function checkMethodArgs(
     }
     return null;
   }
-  return returnType;
+  return resultOfCall(
+    isAsync,
+    returnType,
+    allowVoidCall,
+    expr.span,
+    diagnostics,
+    `Void method '${name}' cannot be used as a value`,
+  );
 }
 
 function supportsEquality(type: ValueType): boolean {

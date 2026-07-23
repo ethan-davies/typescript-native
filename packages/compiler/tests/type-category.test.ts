@@ -29,7 +29,7 @@ describe("type category classification", () => {
       expect(typeKind({ kind: "array", element: "i32" })).toBe("array");
       expect(typeKind({ kind: "tuple", elements: ["i32", "bool"] })).toBe("tuple");
       expect(typeKind({ kind: "map", valueType: "i32" })).toBe("map");
-      expect(typeKind({ kind: "function", params: ["i32"], returnType: "void" })).toBe("function");
+      expect(typeKind({ kind: "function", isAsync: false, params: ["i32"], returnType: "void" })).toBe("function");
       expect(typeKind({ kind: "interface", name: "Printable" })).toBe("interface");
       expect(
         typeKind({
@@ -81,7 +81,7 @@ describe("type category classification", () => {
       expect(typeCategory({ kind: "class", name: "Person" })).toBe("reference");
       expect(typeCategory({ kind: "array", element: "i32" })).toBe("reference");
       expect(typeCategory({ kind: "map", valueType: "i32" })).toBe("reference");
-      expect(typeCategory({ kind: "function", params: [], returnType: "i32" })).toBe("reference");
+      expect(typeCategory({ kind: "function", isAsync: false, params: [], returnType: "i32" })).toBe("reference");
       expect(isReferenceCategory("string")).toBe(true);
     });
 

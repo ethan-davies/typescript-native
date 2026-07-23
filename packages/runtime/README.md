@@ -11,8 +11,21 @@ C runtime library linked into every `sn run` binary.
 | Map | `{ i64 len, i64 cap, char **keys, void **vals }` — 32 bytes |
 | String | NUL-terminated `char *` (immutable; concat allocates a new buffer) |
 | Closure | Handle `%__Callable { code*, env* }`; environment is a separate heap blob |
+| Future | Heap `SnFuture` (`SN_TYPEID_FUTURE` = 6): state, value/error, waiters, compose hook |
+| Task | Heap `SnTask` (`SN_TYPEID_TASK` = 7): frame, entry, result future, awaiting future |
 
-`type_id` on class instances indexes runtime `TypeInfo` (class IDs start at `SN_TYPEID_CLASS_BASE` = 256). Builtin IDs 1–5 cover string/array/map/closure/env. Arrays, maps, and strings do **not** embed `type_id` in their current ABI; the GC side table records type identity via `sn_gc_set_type` / `sn_gc_set_array_meta` / `sn_gc_set_map_meta`. Aggregate / box layouts use registered `SN_KIND_STRUCT` TypeInfo entries (≥ 256).
+`type_id` on class instances indexes runtime `TypeInfo` (class IDs start at `SN_TYPEID_CLASS_BASE` = 256). Builtin IDs 1–7 cover string/array/map/closure/env/future/task. Arrays, maps, and strings do **not** embed `type_id` in their current ABI; the GC side table records type identity via `sn_gc_set_type` / `sn_gc_set_array_meta` / `sn_gc_set_map_meta`. Aggregate / box layouts use registered `SN_KIND_STRUCT` TypeInfo entries (≥ 256).
+
+## Async runtime
+
+Single-threaded cooperative concurrency:
+
+- **Scheduler / event loop** — `sn_task_spawn`, runnable queue, `sn_event_loop_run` / `sn_future_await_run`
+- **Timers** — `sn_timer_sleep_ms` → `Future<void>`
+- **TCP** — non-blocking listen/accept/connect/read/write registered with the platform reactor (epoll/kqueue/poll)
+- **Compose** — `sn_future_all` / `sn_future_race` over `Future*[]`
+
+See `src/async.c`, `reactor.c`, `timer.c`, `net.c`, and `tests/async_smoke.c`.
 
 ## Heap & GC
 

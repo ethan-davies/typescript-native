@@ -1,0 +1,15 @@
+import { sleep } from "std/time";
+import { spawn } from "std/async";
+
+async function worker(name: string, ms: i64): void {
+  await sleep(ms);
+  print(name);
+}
+
+async function main(): void {
+  const a = spawn(worker("A", 30));
+  const b = spawn(worker("B", 10));
+  await a;
+  await b;
+  print("done");
+}

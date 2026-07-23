@@ -9,8 +9,13 @@ export type MonoValueType =
   | { readonly kind: "typeParam"; readonly name: string }
   | {
       readonly kind: "function";
+      readonly isAsync: boolean;
       readonly params: readonly MonoValueType[];
       readonly returnType: MonoValueType | "void";
+    }
+  | {
+      readonly kind: "future";
+      readonly inner: MonoValueType | "void";
     };
 
 const EMPTY_SPAN = {
@@ -49,11 +54,25 @@ export function valueTypeToAnnotation(type: MonoValueType): TypeAnnotation {
   if (type.kind === "function") {
     return {
       kind: "FunctionType",
+      isAsync: type.isAsync ?? false,
       params: type.params.map(valueTypeToAnnotation),
       returnType:
         type.returnType === "void"
           ? { kind: "PrimitiveType", name: "void", span: EMPTY_SPAN }
           : valueTypeToAnnotation(type.returnType),
+      span: EMPTY_SPAN,
+    };
+  }
+  if (type.kind === "future") {
+    return {
+      kind: "NamedType",
+      namespace: null,
+      name: "Future",
+      typeArgs: [
+        type.inner === "void"
+          ? { kind: "PrimitiveType", name: "void", span: EMPTY_SPAN }
+          : valueTypeToAnnotation(type.inner),
+      ],
       span: EMPTY_SPAN,
     };
   }

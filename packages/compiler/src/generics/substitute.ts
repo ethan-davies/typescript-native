@@ -155,6 +155,7 @@ export function substituteAnnotation(ann: TypeAnnotation, subst: TypeSubst): Typ
     case "FunctionType": {
       const result: FunctionType = {
         kind: "FunctionType",
+        isAsync: ann.isAsync,
         params: ann.params.map((p) => substituteAnnotation(p, subst)),
         returnType: substituteAnnotation(ann.returnType, subst),
         span: ann.span,
@@ -216,6 +217,11 @@ export function substituteExpression(expr: Expression, subst: TypeSubst): Expres
                 kind: "block",
                 statements: expr.body.statements.map((s) => substStatement(s, subst)),
               },
+      };
+    case "AwaitExpression":
+      return {
+        ...expr,
+        argument: substituteExpression(expr.argument, subst),
       };
     case "NewExpression":
       return {
@@ -426,6 +432,7 @@ export function specializeFunctionDecl(
     kind: "FunctionDeclaration",
     exported: decl.exported,
     isExtern: decl.isExtern,
+    isAsync: decl.isAsync,
     name: { kind: "Identifier", name: instanceLocalName, span: decl.name.span },
     typeParams: [],
     params: substParams(decl.params, subst),

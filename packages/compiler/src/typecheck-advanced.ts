@@ -53,8 +53,15 @@ export interface MapValueType {
 
 export interface FunctionValueType {
   readonly kind: "function";
+  readonly isAsync: boolean;
   readonly params: readonly ExtendedValueType[];
   readonly returnType: ExtendedValueType | "void";
+}
+
+/** Asynchronous result type produced by calling an async function. */
+export interface FutureValueType {
+  readonly kind: "future";
+  readonly inner: ExtendedValueType | "void";
 }
 
 export type ExtendedValueType =
@@ -64,7 +71,8 @@ export type ExtendedValueType =
   | ObjectValueType
   | LiteralValueType
   | MapValueType
-  | FunctionValueType;
+  | FunctionValueType
+  | FutureValueType;
 
 export interface TypeAliasDef {
   readonly name: string;
@@ -95,6 +103,10 @@ export function isMapType(type: ExtendedValueType): type is MapValueType {
 
 export function isFunctionType(type: ExtendedValueType): type is FunctionValueType {
   return typeof type === "object" && type.kind === "function";
+}
+
+export function isFutureType(type: ExtendedValueType): type is FutureValueType {
+  return typeof type === "object" && type.kind === "future";
 }
 
 export function isTupleType(
@@ -208,7 +220,13 @@ export function advancedTypeToString(type: ExtendedValueType): string {
       const params = type.params.map(advancedTypeToString).join(", ");
       const ret =
         type.returnType === "void" ? "void" : advancedTypeToString(type.returnType);
-      return `(${params}) => ${ret}`;
+      const prefix = type.isAsync ? "async " : "";
+      return `${prefix}(${params}) => ${ret}`;
+    }
+    case "future": {
+      const inner =
+        type.inner === "void" ? "void" : advancedTypeToString(type.inner);
+      return `Future<${inner}>`;
     }
     case "typeParam":
       return type.constraintName
@@ -272,12 +290,21 @@ export function advancedTypesEqual(a: ExtendedValueType, b: ExtendedValueType): 
     case "function":
       return (
         b.kind === "function" &&
+        a.isAsync === b.isAsync &&
         a.params.length === b.params.length &&
         a.params.every((p, i) => advancedTypesEqual(p, b.params[i]!)) &&
         ((a.returnType === "void" && b.returnType === "void") ||
           (a.returnType !== "void" &&
             b.returnType !== "void" &&
             advancedTypesEqual(a.returnType, b.returnType)))
+      );
+    case "future":
+      return (
+        b.kind === "future" &&
+        ((a.inner === "void" && b.inner === "void") ||
+          (a.inner !== "void" &&
+            b.inner !== "void" &&
+            advancedTypesEqual(a.inner, b.inner)))
       );
     case "typeParam":
       return b.kind === "typeParam" && a.name === b.name;
@@ -487,6 +514,9 @@ export function advancedIsAssignable(
   }
 
   if (isFunctionType(from) && isFunctionType(to)) {
+    if (from.isAsync !== to.isAsync) {
+      return false;
+    }
     if (from.params.length !== to.params.length) {
       return false;
     }
@@ -498,6 +528,13 @@ export function advancedIsAssignable(
       return from.returnType === to.returnType;
     }
     return advancedTypesEqual(from.returnType, to.returnType);
+  }
+
+  if (isFutureType(from) && isFutureType(to)) {
+    if (from.inner === "void" || to.inner === "void") {
+      return from.inner === to.inner;
+    }
+    return advancedIsAssignable(from.inner, to.inner, baseAssign);
   }
 
   return baseAssign(from, to);

@@ -801,7 +801,7 @@ Identification today: class instances via `ObjectHeader.type_id` and the GC side
 | Concern | Decision |
 | --- | --- |
 | Value types | Primitives, enums, structs |
-| Reference types | Classes, arrays, strings, maps, closures |
+| Reference types | Classes, arrays, strings, maps, closures, `Future<T>` |
 | Interfaces | Compile-time abstractions; runtime dispatch only when necessary |
 | Storage | Compiler chooses stack/register vs heap |
 | Memory management | Automatic tracing GC (mark-and-sweep + shadow stack) |
@@ -810,3 +810,20 @@ Identification today: class instances via `ObjectHeader.type_id` and the GC side
 | References | Implicit for reference types |
 | Pointers | Optional future low-level feature |
 | Manual `free` | Not part of normal SN programming |
+
+---
+
+## 18. Async, futures, and GC
+
+Async/await is **single-threaded and cooperative**: one OS thread, no mutexes or parallel workers. An `async` call returns a heap `Future<T>` (`SN_TYPEID_FUTURE`). Completing or failing a future stores a value/error pointer and wakes waiters; `await` drives the event loop until that future settles.
+
+### What stays alive across `await`
+
+| Object | How the GC sees it |
+| --- | --- |
+| `Future` | Builtin TypeInfo — scans `value`, `error`, waiter list, compose data |
+| `Task` | Builtin TypeInfo — scans frame, result future, awaiting future |
+| Task frame | Allocated with `sn_alloc`; live locals that are references are rooted while the body runs (shadow stack), and the future keeps the frame reachable via the task while the task is scheduled |
+| Timer / TCP requests | Hold a pointer to their completion `Future`; reactor/timer queues keep requests alive until they settle |
+
+Failed futures surface via `sn_throw` when awaited. There is no separate async cancellation GC path beyond settling the future (`cancelled` / failed) and letting unreachable objects drop on the next collection.

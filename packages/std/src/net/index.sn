@@ -1,0 +1,32 @@
+/* Opaque connection/listener handles are runtime pointers stored as i64. */
+
+extern function sn_tcp_listen(host: string, port: i32): Future<i64>;
+extern function sn_tcp_accept(listener: i64): Future<i64>;
+extern function sn_tcp_connect(host: string, port: i32): Future<i64>;
+extern function sn_tcp_read(conn: i64, maxBytes: i32): Future<string>;
+extern function sn_tcp_write(conn: i64, data: string): Future<void>;
+extern function sn_tcp_close_i64(handle: i64): void;
+
+export async function listen(host: string, port: i32): i64 {
+  return await sn_tcp_listen(host, port);
+}
+
+export async function accept(listener: i64): i64 {
+  return await sn_tcp_accept(listener);
+}
+
+export async function connect(host: string, port: i32): i64 {
+  return await sn_tcp_connect(host, port);
+}
+
+export async function read(conn: i64, maxBytes: i32): string {
+  return await sn_tcp_read(conn, maxBytes);
+}
+
+export async function write(conn: i64, data: string): void {
+  await sn_tcp_write(conn, data);
+}
+
+export function close(handle: i64): void {
+  sn_tcp_close_i64(handle);
+}

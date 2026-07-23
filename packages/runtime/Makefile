@@ -11,6 +11,7 @@ SOURCES := $(wildcard $(SRC_DIR)/*.c)
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 LIBRARY := $(DIST_DIR)/libsn_runtime.a
 SMOKE_BIN := $(DIST_DIR)/runtime_smoke
+ASYNC_SMOKE_BIN := $(DIST_DIR)/async_smoke
 
 .PHONY: all clean test
 
@@ -28,8 +29,12 @@ $(LIBRARY): $(OBJECTS)
 $(SMOKE_BIN): $(TEST_DIR)/runtime_smoke.c $(LIBRARY)
 	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -o $@
 
-test: $(SMOKE_BIN)
+$(ASYNC_SMOKE_BIN): $(TEST_DIR)/async_smoke.c $(LIBRARY)
+	$(CC) $(CFLAGS) $< $(LIBRARY) -lm -o $@
+
+test: $(SMOKE_BIN) $(ASYNC_SMOKE_BIN)
 	./$(SMOKE_BIN)
+	./$(ASYNC_SMOKE_BIN)
 
 clean:
 	rm -rf $(DIST_DIR)

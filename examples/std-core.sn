@@ -2,7 +2,7 @@ import { PI, clamp, asin } from "std/math";
 import { randomInt, randomBool, seed } from "std/random";
 import { base64Encode, hexEncode } from "std/encoding";
 import { Map, Deque } from "std/collections";
-import { Instant, sleep } from "std/time";
+import { Instant, sleepSync } from "std/time";
 import { args, cwd } from "std/process";
 import { writeFile, readFile, exists, join, basename } from "std/fs";
 
@@ -31,7 +31,7 @@ function main(): void {
   console.log(d.popBack());
 
   let start = Instant.now();
-  sleep(1);
+  sleepSync(1);
   console.log(start.elapsed().toMillis());
 
   console.log(join("/tmp", "x"));

@@ -28,6 +28,7 @@ import type {
   ForInStatement,
   ForStatement,
   FunctionDeclaration,
+  FunctionType,
   Identifier,
   IfStatement,
   ImportClause,
@@ -44,7 +45,7 @@ import type {
   InterfaceMethodSignature,
   IntersectionType,
   IsExpression,
-  FunctionType,
+  AwaitExpression,
   KeyofType,
   LambdaExpression,
   LambdaParameter,
@@ -181,10 +182,19 @@ export class Parser {
 
       const isExtern = this.match(TokenKind.Extern);
       const isAbstract = this.match(TokenKind.Abstract);
+      const isAsync = this.match(TokenKind.Async);
 
       if (isExtern && isAbstract) {
         this.diagnostics.error(
           "'extern' cannot be combined with 'abstract'",
+          this.peek().span,
+          "E0103",
+        );
+      }
+
+      if (isExtern && isAsync) {
+        this.diagnostics.error(
+          "'extern' cannot be combined with 'async'",
           this.peek().span,
           "E0103",
         );
@@ -204,11 +214,13 @@ export class Parser {
       }
 
       if (this.check(TokenKind.Struct)) {
-        if (isAbstract || isExtern) {
+        if (isAbstract || isExtern || isAsync) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
-              : "'abstract' can only be used with classes",
+              : isAsync
+                ? "'async' can only be used with functions"
+                : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -220,11 +232,13 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Enum)) {
-        if (isAbstract || isExtern) {
+        if (isAbstract || isExtern || isAsync) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
-              : "'abstract' can only be used with classes",
+              : isAsync
+                ? "'async' can only be used with functions"
+                : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -236,11 +250,13 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Interface)) {
-        if (isAbstract || isExtern) {
+        if (isAbstract || isExtern || isAsync) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
-              : "'abstract' can only be used with classes",
+              : isAsync
+                ? "'async' can only be used with functions"
+                : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -252,11 +268,13 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Type)) {
-        if (isAbstract || isExtern) {
+        if (isAbstract || isExtern || isAsync) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
-              : "'abstract' can only be used with classes",
+              : isAsync
+                ? "'async' can only be used with functions"
+                : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -268,9 +286,11 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Class)) {
-        if (isExtern) {
+        if (isExtern || isAsync) {
           this.diagnostics.error(
-            "'extern' can only be used with functions",
+            isAsync
+              ? "'async' can only be used with functions"
+              : "'extern' can only be used with functions",
             this.peek().span,
             "E0103",
           );
@@ -289,18 +309,20 @@ export class Parser {
             "E0103",
           );
         }
-        const fn = this.parseFunctionDeclaration(exported, isExtern);
+        const fn = this.parseFunctionDeclaration(exported, isExtern, isAsync);
         if (fn) {
           body.push(fn);
         } else {
           break;
         }
       } else if (this.check(TokenKind.Const) || this.check(TokenKind.Let)) {
-        if (isAbstract || isExtern) {
+        if (isAbstract || isExtern || isAsync) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
-              : "'abstract' can only be used with classes",
+              : isAsync
+                ? "'async' can only be used with functions"
+                : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -312,7 +334,7 @@ export class Parser {
           break;
         }
       } else {
-        if (exported || isAbstract || isExtern) {
+        if (exported || isAbstract || isExtern || isAsync) {
           this.diagnostics.error(
             `Expected 'function', 'struct', 'enum', 'class', 'interface', 'type', 'const', or 'let' after modifiers, found '${this.peek().lexeme}'`,
             this.peek().span,
@@ -1181,11 +1203,12 @@ export class Parser {
     const isAbstract = this.match(TokenKind.Abstract);
     const isStatic = this.match(TokenKind.Static);
     const isReadonly = this.match(TokenKind.Readonly);
+    const isAsync = this.match(TokenKind.Async);
 
     if (this.check(TokenKind.Constructor)) {
-      if (isAbstract || isStatic || isReadonly) {
+      if (isAbstract || isStatic || isReadonly || isAsync) {
         this.diagnostics.error(
-          "Constructor cannot be abstract, static, or readonly",
+          "Constructor cannot be abstract, static, readonly, or async",
           this.peek().span,
           "E0103",
         );
@@ -1193,7 +1216,7 @@ export class Parser {
       return this.parseConstructor(visibility, start);
     }
 
-    // Method: name( or abstract name(
+    // Method: name( or abstract name( or async name(
     // Field: name:
     if (!this.check(TokenKind.Identifier)) {
       this.diagnostics.error(
@@ -1205,11 +1228,14 @@ export class Parser {
     }
 
     if (this.checkNext(TokenKind.LParen) || this.checkNext(TokenKind.Less)) {
-      return this.parseClassMethod(visibility, isStatic, isAbstract, isReadonly, start);
+      return this.parseClassMethod(visibility, isStatic, isAbstract, isReadonly, isAsync, start);
     }
 
     if (isAbstract) {
       this.diagnostics.error("Fields cannot be abstract", this.peek().span, "E0103");
+    }
+    if (isAsync) {
+      this.diagnostics.error("Fields cannot be async", this.peek().span, "E0103");
     }
     return this.parseClassField(visibility, isStatic, isReadonly, start);
   }
@@ -1254,6 +1280,7 @@ export class Parser {
     isStatic: boolean,
     isAbstract: boolean,
     isReadonly: boolean,
+    isAsync: boolean,
     start: { line: number; column: number; offset: number },
   ): ClassMethod | null {
     if (isReadonly) {
@@ -1306,6 +1333,7 @@ export class Parser {
         visibility,
         isStatic,
         isAbstract: true,
+        isAsync,
         name,
         typeParams,
         params,
@@ -1325,6 +1353,7 @@ export class Parser {
       visibility,
       isStatic,
       isAbstract: false,
+      isAsync,
       name,
       typeParams,
       params,
@@ -1540,6 +1569,7 @@ export class Parser {
   private parseFunctionDeclaration(
     exported: boolean,
     isExtern: boolean,
+    isAsync: boolean,
   ): FunctionDeclaration | null {
     const start = this.peek().span.start;
 
@@ -1627,6 +1657,7 @@ export class Parser {
         kind: "FunctionDeclaration",
         exported,
         isExtern: true,
+        isAsync,
         name,
         typeParams,
         params,
@@ -1646,6 +1677,7 @@ export class Parser {
       kind: "FunctionDeclaration",
       exported,
       isExtern: false,
+      isAsync,
       name,
       typeParams,
       params,
@@ -2714,6 +2746,7 @@ export class Parser {
 
     // Method call: Ident . Ident ( ... ) or Ident [ ... ] . Ident ( ... )
     // Function call: Ident ( or Ident <TypeArgs>(
+    // Await: await <expr>
     if (
       this.check(TokenKind.Identifier) &&
       (this.checkNext(TokenKind.LParen) || this.looksLikeGenericCall())
@@ -2731,13 +2764,16 @@ export class Parser {
       };
     }
 
-    // Parse a primary with postfix; must end as a CallExpression
-    const expression = this.parsePrimary();
+    // Parse a full expression (supports await / unary); must end as a CallExpression or AwaitExpression
+    const expression = this.parseExpression();
     if (!expression) {
       return null;
     }
 
-    if (expression.kind !== "CallExpression") {
+    if (
+      expression.kind !== "CallExpression" &&
+      expression.kind !== "AwaitExpression"
+    ) {
       this.diagnostics.error(
         "Expected a call statement",
         expression.span,
@@ -2976,6 +3012,20 @@ export class Parser {
       return typeofExpr;
     }
 
+    if (this.check(TokenKind.Await)) {
+      const opToken = this.advance();
+      const argument = this.parseUnary();
+      if (!argument) {
+        return null;
+      }
+      const awaitExpr: AwaitExpression = {
+        kind: "AwaitExpression",
+        argument,
+        span: { start: opToken.span.start, end: argument.span.end },
+      };
+      return awaitExpr;
+    }
+
     if (this.check(TokenKind.Minus) || this.check(TokenKind.Bang)) {
       const opToken = this.advance();
       const operand = this.parseUnary();
@@ -2997,7 +3047,9 @@ export class Parser {
   private parsePrimary(): Expression | null {
     let expr: Expression | null = null;
 
-    if (this.check(TokenKind.LParen) && this.looksLikeLambda()) {
+    if (this.check(TokenKind.Async)) {
+      expr = this.parseLambdaExpression();
+    } else if (this.check(TokenKind.LParen) && this.looksLikeLambda()) {
       expr = this.parseLambdaExpression();
     } else if (this.check(TokenKind.LParen)) {
       this.advance();
@@ -3832,6 +3884,9 @@ export class Parser {
   }
 
   private parsePrimaryType(): TypeAnnotation | null {
+    if (this.check(TokenKind.Async)) {
+      return this.parseFunctionType();
+    }
     if (this.check(TokenKind.LParen) && this.looksLikeFunctionType()) {
       return this.parseFunctionType();
     }
@@ -4316,6 +4371,7 @@ export class Parser {
 
   private parseLambdaExpression(): LambdaExpression | null {
     const start = this.peek().span.start;
+    const isAsync = this.match(TokenKind.Async);
     if (!this.expect(TokenKind.LParen, "Expected '(' to start lambda")) {
       return null;
     }
@@ -4364,6 +4420,7 @@ export class Parser {
       }
       return {
         kind: "LambdaExpression",
+        isAsync,
         params,
         returnType,
         body: { kind: "block", statements: block.statements },
@@ -4377,6 +4434,7 @@ export class Parser {
     }
     return {
       kind: "LambdaExpression",
+      isAsync,
       params,
       returnType,
       body: { kind: "expression", expression },
@@ -4415,6 +4473,7 @@ export class Parser {
 
   private parseFunctionType(): FunctionType | null {
     const start = this.peek().span.start;
+    const isAsync = this.match(TokenKind.Async);
     if (!this.expect(TokenKind.LParen, "Expected '(' to start function type")) {
       return null;
     }
@@ -4451,6 +4510,7 @@ export class Parser {
     }
     return {
       kind: "FunctionType",
+      isAsync,
       params,
       returnType,
       span: { start, end: returnType.span.end },

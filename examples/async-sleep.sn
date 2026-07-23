@@ -1,0 +1,7 @@
+import { sleep } from "std/time";
+
+async function main(): void {
+  print("before sleep");
+  await sleep(10);
+  print("after sleep");
+}

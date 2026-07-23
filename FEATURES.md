@@ -2,8 +2,9 @@
 
 Currently supported features:
 
-- A single top-level `function main(): void` with no parameters (return type required)
-- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, `null`, arrays `T[]`, tuples `[T, U]`, `struct`, `enum`, `class`, and `interface` types
+- A single top-level `function main(): void` or `async function main(): void` with no parameters (return type required)
+- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, `null`, arrays `T[]`, tuples `[T, U]`, `struct`, `enum`, `class`, `interface`, and `Future<T>` types
+- Async/await: `async function`, `await` expressions (async functions only), cooperative single-threaded tasks, timers, and TCP via the event loop
 - Generics: type parameters on structs, classes, interfaces, functions, and methods; constraints (`T extends I`); nested type arguments; call-site inference; compile-time monomorphization (no runtime generics)
 - Type aliases (`type Name = ...`), including generic aliases, unions (`|`), intersections (`&`), literal types, `keyof` / `typeof` type operators, conditional and mapped types
 - Control-flow narrowing via `typeof` checks, `== null` / `!= null`, and `is` type checks on union / nullable values; early `return` / `break` / `continue` refine types in subsequent code
@@ -25,7 +26,9 @@ Currently supported features:
   - `std/io` — `readLine`, stream write helpers (`console.*` builtins need no import)
   - `std/fs` — file/directory/path helpers
   - `std/process` — `args`, `getEnv`, `setEnv`, `cwd`, `exit`
-  - `std/time` — `Instant`, `Duration`, `sleep`, `now`
+  - `std/time` — `Instant`, `Duration`, async `sleep`, `sleepSync`, `now`
+  - `std/async` — `sleep`, `spawn`, `all`, `race`
+  - `std/net` — async TCP `listen` / `accept` / `connect` / `read` / `write` / `close`
   - `std/encoding` — UTF-8 helpers, base64, hex
 - Modules / imports:
   - Relative imports require `./` or `../` (e.g. `import { User } from "./models"`)

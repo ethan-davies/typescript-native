@@ -151,6 +151,7 @@ interface FunctionSig {
   readonly params: ValueType[];
   readonly returnType: ValueType | "void";
   readonly isExtern: boolean;
+  readonly isAsync: boolean;
 }
 
 interface ModuleValueInfo {
@@ -363,6 +364,9 @@ export class LlvmCodegen {
   private needsStrcmp = false;
   private needsSnException = false;
   private needsIsInstance = false;
+  private needsAsync = false;
+  /** When emitting an async task body, IR value of the result Future*. */
+  private asyncResultFut: string | null = null;
   /** Deferred return through a finally block. */
   private pendingReturn: {
     readonly llvm: string;
@@ -732,6 +736,7 @@ export class LlvmCodegen {
             params,
             returnType,
             isExtern: true,
+            isAsync: false,
           };
           localFns.set(decl.name.name, sig);
           this.functions.set(decl.name.name, sig);
@@ -774,14 +779,19 @@ export class LlvmCodegen {
         }
         const mangledName =
           fn.name.name === "main"
-            ? "main"
+            ? fn.isAsync
+              ? "main__async"
+              : "main"
             : mangleSymbol(mod.moduleId, fn.name.name);
         const sig: FunctionSig = {
           name: fn.name.name,
           mangledName,
           params,
-          returnType,
+          returnType: fn.isAsync
+            ? ({ kind: "future", inner: returnType } as ValueType)
+            : returnType,
           isExtern: false,
+          isAsync: fn.isAsync,
         };
         localFns.set(fn.name.name, sig);
         this.functions.set(mangledName, sig);
@@ -1176,6 +1186,27 @@ export class LlvmCodegen {
     for (const info of this.classes.values()) {
       if (info.localName === name || info.name === name) {
         return info;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Resolve a function by local name, C/extern name, or specialized local name across modules
+   * (`spawn__void` after monomorphize rewrite of an imported generic).
+   */
+  private lookupFunction(name: string): FunctionSig | undefined {
+    const local = this.localFunctions.get(name);
+    if (local) {
+      return local;
+    }
+    const byKey = this.functions.get(name);
+    if (byKey) {
+      return byKey;
+    }
+    for (const sig of this.functions.values()) {
+      if (sig.name === name || sig.mangledName === name) {
+        return sig;
       }
     }
     return undefined;
@@ -1931,7 +1962,7 @@ export class LlvmCodegen {
           ann.returnType.kind === "PrimitiveType" &&
           ann.returnType.name === "void"
         ) {
-          return { kind: "function", params, returnType: "void" };
+          return { kind: "function", isAsync: ann.isAsync, params, returnType: "void" };
         }
         const returnType = this.resolveAnnotationInModule(
           ann.returnType,
@@ -1944,9 +1975,31 @@ export class LlvmCodegen {
         if (returnType === null) {
           return null;
         }
-        return { kind: "function", params, returnType };
+        return { kind: "function", isAsync: ann.isAsync, params, returnType };
       }
       case "NamedType": {
+        // Builtin Future<T> (kept as a value type through codegen; ABI is ptr).
+        if (ann.namespace === null && ann.name === "Future") {
+          if (ann.typeArgs.length !== 1) {
+            return null;
+          }
+          const arg = ann.typeArgs[0]!;
+          if (arg.kind === "PrimitiveType" && arg.name === "void") {
+            return { kind: "future", inner: "void" };
+          }
+          const inner = this.resolveAnnotationInModule(
+            arg,
+            localStructs,
+            localEnums,
+            localClasses,
+            localInterfaces,
+            namespaces,
+          );
+          if (inner === null) {
+            return null;
+          }
+          return { kind: "future", inner };
+        }
         if (ann.typeArgs.length > 0) {
           const generic = this.genericTypeAliases.get(ann.name);
           if (generic && generic.typeParams.length === ann.typeArgs.length) {
@@ -2297,6 +2350,8 @@ export class LlvmCodegen {
         return SN_TYPEID_MAP;
       case "function":
         return SN_TYPEID_CLOSURE;
+      case "future":
+        return 6; /* SN_TYPEID_FUTURE */
       case "class": {
         const info = this.classes.get(type.name);
         return info?.typeId ?? 0;
@@ -3299,7 +3354,55 @@ export class LlvmCodegen {
     if (this.needsAbort) {
       declares.push("declare void @abort() noreturn nounwind");
     }
-    return declares;
+    if (this.needsAsync) {
+      declares.push("declare void @sn_async_init() nounwind");
+      declares.push("declare void @sn_async_shutdown() nounwind");
+      declares.push("declare ptr @sn_future_new() nounwind");
+      declares.push(
+        "declare void @sn_future_complete(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push("declare void @sn_future_complete_void(ptr noundef) nounwind");
+      declares.push(
+        "declare void @sn_future_fail(ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push("declare ptr @sn_future_value(ptr noundef) nounwind");
+      declares.push("declare ptr @sn_future_error(ptr noundef) nounwind");
+      declares.push("declare void @sn_future_await_run(ptr noundef) nounwind");
+      declares.push(
+        "declare ptr @sn_task_spawn(ptr noundef, ptr noundef, ptr noundef) nounwind",
+      );
+      declares.push("declare void @sn_event_loop_run(ptr noundef) nounwind");
+      declares.push("declare ptr @sn_timer_sleep_ms(i64 noundef) nounwind");
+      declares.push("declare ptr @sn_future_all(ptr noundef) nounwind");
+      declares.push("declare ptr @sn_future_race(ptr noundef) nounwind");
+      declares.push(
+        "declare ptr @sn_tcp_listen(ptr noundef, i32 noundef) nounwind",
+      );
+      declares.push("declare ptr @sn_tcp_accept(i64 noundef) nounwind");
+      declares.push(
+        "declare ptr @sn_tcp_connect(ptr noundef, i32 noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_tcp_read(i64 noundef, i32 noundef) nounwind",
+      );
+      declares.push(
+        "declare ptr @sn_tcp_write(i64 noundef, ptr noundef) nounwind",
+      );
+      declares.push("declare void @sn_tcp_close_i64(i64 noundef) nounwind");
+    }
+    // Extern SN decls and runtime helpers can overlap (e.g. sn_timer_sleep_ms).
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const line of declares) {
+      const m = /^declare \S+ @([^\s(]+)/.exec(line);
+      const key = m?.[1] ?? line;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      unique.push(line);
+    }
+    return unique;
   }
 
   private snCmpKindForType(elementType: ValueType): number {
@@ -3575,6 +3678,10 @@ export class LlvmCodegen {
     if (fn.isExtern || !fn.body) {
       return;
     }
+    if (fn.isAsync) {
+      this.emitAsyncFunction(fn);
+      return;
+    }
     this.locals = new Map();
     this.tempCounter = 0;
     this.labelCounter = 0;
@@ -3583,6 +3690,7 @@ export class LlvmCodegen {
     this.boxedNames = this.collectBoxedNamesInStmts(fn.body);
     const sig = this.localFunctions.get(fn.name.name);
     this.currentReturnType = sig?.returnType ?? "void";
+    this.asyncResultFut = null;
     const lines: string[] = [];
 
     const isMain = fn.name.name === "main";
@@ -3655,12 +3763,201 @@ export class LlvmCodegen {
   }
 
   /**
+   * Async function lowering (await_run model):
+   * - Start stub allocates a Future, packs params into a frame, spawns a task, returns Future*.
+   * - Task body runs the user statements; `await` calls sn_future_await_run; `return` completes the Future.
+   * - `async function main` also emits `i32 @main` that drives sn_event_loop_run.
+   */
+  private emitAsyncFunction(fn: FunctionDeclaration): void {
+    if (!fn.body) {
+      return;
+    }
+    this.needsAsync = true;
+    this.needsGc = true;
+    this.needsSnAlloc = true;
+
+    const sig = this.localFunctions.get(fn.name.name);
+    if (!sig) {
+      throw new Error(`Codegen: missing signature for async '${fn.name.name}'`);
+    }
+    const startName = sig.mangledName;
+    const bodyName = `${startName}__body`;
+    const declaredRet: ValueType | "void" =
+      typeof sig.returnType === "object" && sig.returnType.kind === "future"
+        ? sig.returnType.inner === "void"
+          ? "void"
+          : (sig.returnType.inner as ValueType)
+        : sig.returnType;
+
+    // --- task body ---
+    this.locals = new Map();
+    this.tempCounter = 0;
+    this.labelCounter = 0;
+    this.controlStack.length = 0;
+    const bodyGc = this.beginGcFunctionScope();
+    this.boxedNames = this.collectBoxedNamesInStmts(fn.body);
+    this.currentReturnType = declaredRet;
+    const bodyLines: string[] = [];
+    bodyLines.push(`define void @${bodyName}(ptr %frame) {`);
+    bodyLines.push("entry:");
+
+    // Frame layout: { ptr result_fut, params... }
+    const futSlot = this.nextTemp();
+    bodyLines.push(`  ${futSlot} = getelementptr ptr, ptr %frame, i64 0`);
+    const futLoaded = this.nextTemp();
+    bodyLines.push(`  ${futLoaded} = load ptr, ptr ${futSlot}`);
+    this.asyncResultFut = futLoaded;
+    this.rootHeapPtr(futLoaded, bodyLines);
+
+    this.thisPtr = null;
+    this.thisType = null;
+    let paramIndex = 0;
+    for (let i = 0; i < fn.params.length; i += 1) {
+      const param = fn.params[i]!;
+      if (param.isReceiver) {
+        const type = this.resolveAnnotation(param.typeAnnotation);
+        if (!type) {
+          throw new Error("Codegen: invalid extension receiver type");
+        }
+        const slot = this.nextTemp();
+        bodyLines.push(
+          `  ${slot} = getelementptr ptr, ptr %frame, i64 ${i + 1}`,
+        );
+        const loaded = this.nextTemp();
+        const llvmTy = toLlvmType(type);
+        if (llvmTy === "ptr" || llvmTy === "%__Callable") {
+          bodyLines.push(`  ${loaded} = load ${llvmTy}, ptr ${slot}`);
+        } else {
+          bodyLines.push(`  ${loaded} = load ${llvmTy}, ptr ${slot}`);
+        }
+        this.thisType = type;
+        this.thisPtr = loaded;
+        continue;
+      }
+      const type = this.resolveAnnotation(param.typeAnnotation);
+      if (!type) {
+        throw new Error("Codegen: invalid parameter type");
+      }
+      const slot = this.nextTemp();
+      bodyLines.push(
+        `  ${slot} = getelementptr ptr, ptr %frame, i64 ${i + 1}`,
+      );
+      const llvmTy = toLlvmType(type);
+      const loaded = this.nextTemp();
+      bodyLines.push(`  ${loaded} = load ${llvmTy}, ptr ${slot}`);
+      const ptr = `%v.${param.name.name}`;
+      bodyLines.push(`  ${ptr} = alloca ${llvmTy}`);
+      bodyLines.push(`  store ${llvmTy} ${loaded}, ptr ${ptr}`);
+      this.locals.set(param.name.name, { ptr, type, boxed: false });
+      this.registerRootsForStorage(ptr, type, bodyLines);
+      paramIndex += 1;
+    }
+    void paramIndex;
+
+    let terminated = false;
+    for (const stmt of fn.body) {
+      if (terminated) {
+        break;
+      }
+      terminated = this.emitStatement(stmt, bodyLines);
+    }
+    if (!terminated) {
+      if (declaredRet === "void") {
+        bodyLines.push(
+          `  call void @sn_future_complete_void(ptr noundef ${this.asyncResultFut})`,
+        );
+        this.emitFunctionRet(bodyLines, "  ret void");
+      } else {
+        throw new Error(
+          `Codegen: async function '${fn.name.name}' missing return`,
+        );
+      }
+    }
+    bodyLines.push("}");
+    bodyLines.push("");
+    this.functionBodies.push(...bodyLines);
+    this.asyncResultFut = null;
+    this.boxedNames = new Set();
+    this.endGcFunctionScope(bodyGc);
+
+    // --- start stub ---
+    this.locals = new Map();
+    this.tempCounter = 0;
+    this.labelCounter = 0;
+    const startGc = this.beginGcFunctionScope();
+    const startLines: string[] = [];
+    const params = sig.params
+      .map((t, i) => `${toLlvmType(t)} %arg${i}`)
+      .join(", ");
+    startLines.push(`define ptr @${startName}(${params}) {`);
+    startLines.push("entry:");
+    const fut = this.nextTemp();
+    startLines.push(`  ${fut} = call ptr @sn_future_new()`);
+    this.rootHeapPtr(fut, startLines);
+
+    const frameSize = 8 * (1 + fn.params.length); // ptr-sized slots
+    const frame = this.nextTemp();
+    startLines.push(
+      `  ${frame} = call ptr @sn_alloc(i64 noundef ${frameSize})`,
+    );
+    const futStore = this.nextTemp();
+    startLines.push(`  ${futStore} = getelementptr ptr, ptr ${frame}, i64 0`);
+    startLines.push(`  store ptr ${fut}, ptr ${futStore}`);
+    for (let i = 0; i < fn.params.length; i += 1) {
+      const llvmTy = toLlvmType(sig.params[i]!);
+      const slot = this.nextTemp();
+      startLines.push(
+        `  ${slot} = getelementptr ptr, ptr ${frame}, i64 ${i + 1}`,
+      );
+      startLines.push(`  store ${llvmTy} %arg${i}, ptr ${slot}`);
+    }
+    startLines.push(
+      `  call ptr @sn_task_spawn(ptr noundef @${bodyName}, ptr noundef ${frame}, ptr noundef ${fut})`,
+    );
+    this.emitFunctionRet(startLines, `  ret ptr ${fut}`);
+    startLines.push("}");
+    startLines.push("");
+    this.functionBodies.push(...startLines);
+    this.endGcFunctionScope(startGc);
+
+    if (fn.name.name === "main") {
+      this.emitAsyncMainWrapper(startName);
+    }
+  }
+
+  private emitAsyncMainWrapper(asyncStartName: string): void {
+    this.needsAsync = true;
+    const lines: string[] = [];
+    lines.push("define i32 @main(i32 %argc, ptr %argv) {");
+    lines.push("entry:");
+    for (const initFn of this.moduleInitFns) {
+      lines.push(`  call void @${initFn}()`);
+    }
+    lines.push("  call void @sn_init_typeinfo()");
+    lines.push("  call void @sn_runtime_init(i32 %argc, ptr %argv)");
+    lines.push("  call void @sn_async_init()");
+    const fut = this.nextTemp();
+    lines.push(`  ${fut} = call ptr @${asyncStartName}()`);
+    lines.push(`  call void @sn_event_loop_run(ptr noundef ${fut})`);
+    lines.push("  call void @sn_async_shutdown()");
+    lines.push("  ret i32 0");
+    lines.push("}");
+    lines.push("");
+    this.functionBodies.push(...lines);
+  }
+
+  /**
    * Function ABI: value types pass/return as first-class LLVM values (copied);
    * single-ptr references pass/return as `ptr` (shared identity).
    */
   private emitFunctionHeader(fn: FunctionDeclaration): string {
     const sig = this.localFunctions.get(fn.name.name)!;
-    const ret = sig.returnType === "void" ? "void" : toLlvmType(sig.returnType);
+    const ret =
+      sig.isAsync
+        ? "ptr"
+        : sig.returnType === "void"
+          ? "void"
+          : toLlvmType(sig.returnType);
     const params = sig.params
       .map((t, i) => `${toLlvmType(t)} %arg${i}`)
       .join(", ");
@@ -3700,6 +3997,9 @@ export class LlvmCodegen {
       case "ExpressionStatement":
         if (stmt.expression.kind === "CallExpression") {
           this.emitCallStatement(stmt.expression, lines);
+        } else {
+          // e.g. `await fut;` — must still evaluate for side effects / suspension.
+          this.emitExpression(stmt.expression, lines);
         }
         return false;
       case "ReturnStatement":
@@ -4695,6 +4995,36 @@ export class LlvmCodegen {
 
   /** Returns copy value aggregates / scalars; reference returns copy the ptr. */
   private emitReturn(stmt: ReturnStatement, lines: string[]): void {
+    if (this.asyncResultFut) {
+      if (stmt.value === null) {
+        lines.push(
+          `  call void @sn_future_complete_void(ptr noundef ${this.asyncResultFut})`,
+        );
+        this.emitFunctionRet(lines, "  ret void");
+        return;
+      }
+      const expected =
+        this.currentReturnType && this.currentReturnType !== "void"
+          ? this.currentReturnType
+          : undefined;
+      const value = this.emitExpression(stmt.value, lines, expected);
+      if (isReferenceCategory(value.type) || value.type === "string") {
+        lines.push(
+          `  call void @sn_future_complete(ptr noundef ${this.asyncResultFut}, ptr noundef ${value.llvm})`,
+        );
+      } else {
+        // Box scalar into a heap word for Future storage.
+        const box = this.nextTemp();
+        const llvmTy = toLlvmType(value.type);
+        lines.push(`  ${box} = call ptr @sn_alloc(i64 noundef 8)`);
+        lines.push(`  store ${llvmTy} ${value.llvm}, ptr ${box}`);
+        lines.push(
+          `  call void @sn_future_complete(ptr noundef ${this.asyncResultFut}, ptr noundef ${box})`,
+        );
+      }
+      this.emitFunctionRet(lines, "  ret void");
+      return;
+    }
     const tryCtx = this.enclosingTryWithFinally();
     if (stmt.value === null) {
       if (tryCtx) {
@@ -4917,6 +5247,16 @@ export class LlvmCodegen {
         return "null";
       case "IsExpression":
         return "bool";
+      case "AwaitExpression": {
+        const inner = this.inferExpressionType(expr.argument);
+        if (typeof inner === "object" && inner.kind === "future") {
+          if (inner.inner === "void") {
+            return "null"; // placeholder; void await used only as statement
+          }
+          return inner.inner as ValueType;
+        }
+        throw new Error("Codegen: await of non-future");
+      }
       case "ArrayLiteral": {
         if (expected && isTupleType(expected)) {
           return expected;
@@ -5127,6 +5467,7 @@ export class LlvmCodegen {
         if (sig) {
           return {
             kind: "function",
+            isAsync: false,
             params: sig.params,
             returnType: sig.returnType,
           };
@@ -5258,7 +5599,9 @@ export class LlvmCodegen {
           }
           return "i32";
         }
-        const sig = this.localFunctions.get(expr.callee.name);
+        const sig =
+          this.localFunctions.get(expr.callee.name) ??
+          this.lookupFunction(expr.callee.name);
         if (!sig || sig.returnType === "void") {
           if (expr.callee.name === "createMap") {
             return { kind: "map", valueType: "string" };
@@ -5322,7 +5665,7 @@ export class LlvmCodegen {
             this.locals = saved;
           }
         }
-        return { kind: "function", params, returnType };
+        return { kind: "function", isAsync: expr.isAsync, params, returnType };
       }
     }
   }
@@ -5619,6 +5962,8 @@ export class LlvmCodegen {
       }
       case "LambdaExpression":
         return this.emitLambdaExpression(expr, lines, expected);
+      case "AwaitExpression":
+        return this.emitAwaitExpression(expr, lines, expected);
       case "UnaryExpression":
         return this.emitUnary(expr, lines);
       case "BinaryExpression":
@@ -6801,6 +7146,49 @@ export class LlvmCodegen {
     return { llvm: tmp, type: "bool" };
   }
 
+  private emitAwaitExpression(
+    expr: Extract<Expression, { kind: "AwaitExpression" }>,
+    lines: string[],
+    expected?: ValueType,
+  ): EmittedValue {
+    this.needsAsync = true;
+    this.needsGc = true;
+    const futVal = this.emitExpression(expr.argument, lines);
+    lines.push(`  call void @sn_future_await_run(ptr noundef ${futVal.llvm})`);
+    const err = this.nextTemp();
+    lines.push(`  ${err} = call ptr @sn_future_error(ptr noundef ${futVal.llvm})`);
+    const isNull = this.nextTemp();
+    lines.push(`  ${isNull} = icmp eq ptr ${err}, null`);
+    const okLabel = this.nextLabel("await.ok");
+    const throwLabel = this.nextLabel("await.throw");
+    lines.push(`  br i1 ${isNull}, label %${okLabel}, label %${throwLabel}`);
+    lines.push(`${throwLabel}:`);
+    this.needsSnException = true;
+    lines.push(`  call void @sn_throw(ptr noundef ${err})`);
+    lines.push("  unreachable");
+    lines.push(`${okLabel}:`);
+
+    // Determine result type from Future
+    let resultType: ValueType = expected ?? "i32";
+    if (typeof futVal.type === "object" && futVal.type.kind === "future") {
+      if (futVal.type.inner === "void") {
+        return { llvm: "0", type: "i32" };
+      }
+      resultType = futVal.type.inner as ValueType;
+    }
+
+    const raw = this.nextTemp();
+    lines.push(`  ${raw} = call ptr @sn_future_value(ptr noundef ${futVal.llvm})`);
+    if (isReferenceCategory(resultType) || resultType === "string") {
+      this.rootHeapPtr(raw, lines);
+      return { llvm: raw, type: resultType };
+    }
+    const llvmTy = toLlvmType(resultType);
+    const loaded = this.nextTemp();
+    lines.push(`  ${loaded} = load ${llvmTy}, ptr ${raw}`);
+    return { llvm: loaded, type: resultType };
+  }
+
   private emitUnary(expr: UnaryExpression, lines: string[]): EmittedValue {
     const operand = this.emitExpression(expr.operand, lines);
     const tmp = this.nextTemp();
@@ -7108,11 +7496,7 @@ export class LlvmCodegen {
     asStatement: boolean,
   ): EmittedValue {
     if (call.callee.kind === "Identifier") {
-      let sig = this.localFunctions.get(call.callee.name);
-      if (!sig) {
-        // Extern / runtime symbols are keyed by unmangled C name across modules.
-        sig = this.functions.get(call.callee.name);
-      }
+      const sig = this.lookupFunction(call.callee.name);
       if (sig) {
         return this.emitCallWithSig(
           sig,
@@ -7169,9 +7553,12 @@ export class LlvmCodegen {
         visitExpr(e.right);
       } else if (
         e.kind === "UnaryExpression" ||
-        e.kind === "TypeofExpression"
+        e.kind === "TypeofExpression" ||
+        e.kind === "AwaitExpression"
       ) {
-        visitExpr(e.operand);
+        visitExpr(
+          e.kind === "AwaitExpression" ? e.argument : e.operand,
+        );
       } else if (e.kind === "IsExpression") {
         visitExpr(e.value);
       } else if (e.kind === "IndexExpression") {
@@ -7250,6 +7637,7 @@ export class LlvmCodegen {
       "null",
       {
         kind: "function",
+        isAsync: sig.isAsync ?? false,
         params: sig.params,
         returnType: sig.returnType,
       },
@@ -8002,6 +8390,9 @@ function toLlvmType(type: ValueType | "void"): string {
     }
     if (type.kind === "function") {
       return "%__Callable";
+    }
+    if (type.kind === "future") {
+      return "ptr";
     }
     if (type.kind === "intersection") {
       for (const arm of type.arms) {

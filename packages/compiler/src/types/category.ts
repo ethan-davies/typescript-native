@@ -22,6 +22,7 @@ export type TypeKind =
   | "tuple"
   | "map"
   | "function"
+  | "future"
   | "interface"
   | "object"
   | "literal"
@@ -56,6 +57,7 @@ export function typeKind(type: ClassifiableType): TypeKind {
     case "tuple":
     case "map":
     case "function":
+    case "future":
     case "interface":
     case "object":
     case "literal":
@@ -89,6 +91,7 @@ export function typeCategory(type: ClassifiableType): TypeCategory {
     case "array":
     case "map":
     case "function":
+    case "future":
       return "reference";
     case "interface":
     case "typeParam":
