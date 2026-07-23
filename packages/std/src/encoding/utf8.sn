@@ -1,0 +1,10 @@
+extern function sn_utf8_byte_len(s: string): i32;
+extern function sn_utf8_is_valid(s: string): bool;
+
+export function byteLength(s: string): i32 {
+  return sn_utf8_byte_len(s);
+}
+
+export function isValid(s: string): bool {
+  return sn_utf8_is_valid(s);
+}

@@ -1,0 +1,30 @@
+extern function sn_path_join(a: string, b: string): string;
+extern function sn_path_basename(path: string): string;
+extern function sn_path_dirname(path: string): string;
+extern function sn_path_extension(path: string): string;
+extern function sn_path_normalize(path: string): string;
+extern function sn_path_absolute(path: string): string;
+
+export function join(a: string, b: string): string {
+  return sn_path_join(a, b);
+}
+
+export function basename(path: string): string {
+  return sn_path_basename(path);
+}
+
+export function dirname(path: string): string {
+  return sn_path_dirname(path);
+}
+
+export function extension(path: string): string {
+  return sn_path_extension(path);
+}
+
+export function normalize(path: string): string {
+  return sn_path_normalize(path);
+}
+
+export function absolute(path: string): string {
+  return sn_path_absolute(path);
+}

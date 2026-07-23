@@ -1,0 +1,46 @@
+extern function sn_time_now_ms(): i64;
+extern function sn_time_sleep_ms(ms: i64): void;
+
+export class Duration {
+  private millis: i64;
+
+  constructor(millis: i64) {
+    this.millis = millis;
+  }
+
+  toMillis(): i64 {
+    return this.millis;
+  }
+
+  static fromMillis(ms: i64): Duration {
+    return new Duration(ms);
+  }
+}
+
+export class Instant {
+  private millis: i64;
+
+  constructor(millis: i64) {
+    this.millis = millis;
+  }
+
+  static now(): Instant {
+    return new Instant(sn_time_now_ms());
+  }
+
+  elapsed(): Duration {
+    return new Duration(sn_time_now_ms() - this.millis);
+  }
+
+  toMillis(): i64 {
+    return this.millis;
+  }
+}
+
+export function sleep(ms: i64): void {
+  sn_time_sleep_ms(ms);
+}
+
+export function now(): Instant {
+  return Instant.now();
+}

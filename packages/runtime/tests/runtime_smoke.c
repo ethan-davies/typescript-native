@@ -45,6 +45,18 @@ static void test_strings(void) {
   assert(strcmp(trimmed, "hi") == 0);
   sn_free(trimmed);
 
+  char *trim_start = sn_str_trim_start("  hi  ");
+  assert(strcmp(trim_start, "hi  ") == 0);
+  sn_free(trim_start);
+
+  char *trim_end = sn_str_trim_end("  hi  ");
+  assert(strcmp(trim_end, "  hi") == 0);
+  sn_free(trim_end);
+
+  char *replaced_all = sn_str_replace_all("aaa", "a", "b");
+  assert(strcmp(replaced_all, "bbb") == 0);
+  sn_free(replaced_all);
+
   char *upper = sn_str_to_upper("AbC");
   assert(strcmp(upper, "ABC") == 0);
   sn_free(upper);
@@ -100,10 +112,22 @@ static void test_maps(void) {
   sn_map_set(map, "alpha", value_a);
   sn_map_set(map, "beta", value_b);
   assert(strcmp((char *)sn_map_get(map, "alpha"), "first") == 0);
+  assert(sn_map_contains(map, "alpha"));
+  assert(sn_map_size(map) == 2);
 
   char *replacement = sn_str_concat("updated", "");
   sn_map_set(map, "alpha", replacement);
   assert(strcmp((char *)sn_map_get(map, "alpha"), "updated") == 0);
+
+  assert(sn_map_remove(map, "beta"));
+  assert(!sn_map_contains(map, "beta"));
+  assert(sn_map_size(map) == 1);
+
+  void *keys = sn_map_keys(map);
+  assert(sn_array_length(keys) == 1);
+
+  sn_map_clear(map);
+  assert(sn_map_size(map) == 0);
 
   for (int i = 0; i < 10; i += 1) {
     char key[16];
@@ -120,6 +144,8 @@ static void test_math(void) {
   assert(sn_math_floor(3.9) == 3.0);
   assert(sn_math_ceil(3.1) == 4.0);
   assert(sn_math_pow(2.0, 10.0) == 1024.0);
+  assert(sn_math_clamp(5.0, 0.0, 3.0) == 3.0);
+  assert(sn_math_asin(0.0) == 0.0);
   assert(sn_math_abs_i32(-7) == 7);
   assert(sn_math_min_i32(3, 7) == 3);
   assert(sn_math_max_i64(3, 7) == 7);
@@ -139,6 +165,35 @@ static void test_random(void) {
 
   double f = sn_random_float(2.0, 5.0);
   assert(f >= 2.0 && f < 5.0);
+
+  bool flag = sn_random_bool();
+  assert(flag == true || flag == false);
+}
+
+static void test_encoding(void) {
+  char *b64 = sn_base64_encode("hi");
+  assert(strcmp(b64, "aGk=") == 0);
+  char *decoded = sn_base64_decode(b64);
+  assert(decoded != NULL);
+  assert(strcmp(decoded, "hi") == 0);
+
+  char *hex = sn_hex_encode("hi");
+  assert(strcmp(hex, "6869") == 0);
+  char *hex_decoded = sn_hex_decode(hex);
+  assert(hex_decoded != NULL);
+  assert(strcmp(hex_decoded, "hi") == 0);
+  assert(sn_utf8_is_valid("hello"));
+}
+
+static void test_path_and_time(void) {
+  char *joined = sn_path_join("/tmp", "x");
+  assert(strcmp(joined, "/tmp/x") == 0);
+  char *base = sn_path_basename("/tmp/x");
+  assert(strcmp(base, "x") == 0);
+  int64_t now = sn_time_now_ms();
+  assert(now > 0);
+  sn_time_sleep_ms(1);
+  assert(sn_time_now_ms() >= now);
 }
 
 static void test_print_and_format(void) {
@@ -1101,6 +1156,8 @@ int main(void) {
   test_maps();
   test_math();
   test_random();
+  test_encoding();
+  test_path_and_time();
   test_print_and_format();
   test_typeinfo();
   test_is_instance();

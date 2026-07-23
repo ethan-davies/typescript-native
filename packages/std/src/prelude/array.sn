@@ -13,6 +13,22 @@ export function pop<T>(this: T[]): T {
   return sn_array_pop(this);
 }
 
+export function peek<T>(this: T[]): T {
+  return this[this.length - 1];
+}
+
+export function first<T>(this: T[]): T {
+  return this[0];
+}
+
+export function last<T>(this: T[]): T {
+  return this[this.length - 1];
+}
+
+export function isEmpty<T>(this: T[]): bool {
+  return this.length == 0;
+}
+
 export function indexOf<T>(this: T[], value: T): i32 {
   return sn_array_index_of(this, value);
 }
@@ -66,6 +82,17 @@ export function find<T>(this: T[], fn: (T) => bool): T | null {
   return null;
 }
 
+export function findIndex<T>(this: T[], fn: (T) => bool): i32 {
+  let i: i32 = 0;
+  while (i < this.length) {
+    if (fn(this[i])) {
+      return i;
+    }
+    i = i + 1;
+  }
+  return -1;
+}
+
 export function some<T>(this: T[], fn: (T) => bool): bool {
   let i: i32 = 0;
   while (i < this.length) {
@@ -86,6 +113,14 @@ export function every<T>(this: T[], fn: (T) => bool): bool {
     i = i + 1;
   }
   return true;
+}
+
+export function forEach<T>(this: T[], fn: (T) => void): void {
+  let i: i32 = 0;
+  while (i < this.length) {
+    fn(this[i]);
+    i = i + 1;
+  }
 }
 
 export function reverse<T>(this: T[]): T[] {

@@ -1,0 +1,9 @@
+// console.log / console.error / console.warn / console.readLine
+// are compiler builtins (always available, no import required).
+
+extern function sn_read_line(): string;
+
+/** Read a line from stdin (without trailing newline). Returns "" on EOF. */
+export function readLine(): string {
+  return sn_read_line();
+}

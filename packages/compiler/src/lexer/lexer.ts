@@ -7,6 +7,8 @@ export class Lexer {
   private offset = 0;
   private line = 1;
   private column = 1;
+  /** >0 while lexing inside a `${ ... }` expression of a template literal. */
+  private templateExprDepth = 0;
 
   constructor(source: string, diagnostics: DiagnosticCollector) {
     this.source = source;
@@ -54,14 +56,27 @@ export class Lexer {
       return this.charLiteral(start);
     }
 
+    if (ch === "`") {
+      return this.templateLiteral(start, /*continuation*/ false);
+    }
+
     switch (ch) {
       case "(":
         return this.makeToken(TokenKind.LParen, ch, start);
       case ")":
         return this.makeToken(TokenKind.RParen, ch, start);
       case "{":
+        if (this.templateExprDepth > 0) {
+          this.templateExprDepth += 1;
+        }
         return this.makeToken(TokenKind.LBrace, ch, start);
       case "}":
+        if (this.templateExprDepth > 0) {
+          this.templateExprDepth -= 1;
+          if (this.templateExprDepth === 0) {
+            return this.templateLiteral(start, /*continuation*/ true);
+          }
+        }
         return this.makeToken(TokenKind.RBrace, ch, start);
       case "[":
         return this.makeToken(TokenKind.LBracket, ch, start);
@@ -216,6 +231,62 @@ export class Lexer {
     this.advance(); // closing quote
     const lexeme = this.source.slice(start.offset, this.offset);
     return this.makeToken(TokenKind.String, lexeme, start, value);
+  }
+
+  /**
+   * Scan a template literal segment.
+   * - continuation=false: just consumed opening backtick
+   * - continuation=true: just consumed the `}` that closed `${...}`
+   */
+  private templateLiteral(start: SourceLocation, continuation: boolean): Token {
+    let value = "";
+
+    while (!this.isAtEnd()) {
+      if (this.peek() === "`") {
+        this.advance();
+        const lexeme = this.source.slice(start.offset, this.offset);
+        if (continuation) {
+          return this.makeToken(TokenKind.TemplateTail, lexeme, start, value);
+        }
+        return this.makeToken(TokenKind.TemplateNoSub, lexeme, start, value);
+      }
+
+      if (this.peek() === "$" && this.peekNext() === "{") {
+        this.advance(); // $
+        this.advance(); // {
+        this.templateExprDepth = 1;
+        const lexeme = this.source.slice(start.offset, this.offset);
+        if (continuation) {
+          return this.makeToken(TokenKind.TemplateMiddle, lexeme, start, value);
+        }
+        return this.makeToken(TokenKind.TemplateHead, lexeme, start, value);
+      }
+
+      if (this.peek() === "\n") {
+        this.line += 1;
+        this.column = 0;
+      }
+
+      if (this.peek() === "\\") {
+        this.advance();
+        if (this.isAtEnd()) {
+          break;
+        }
+        const escaped = this.advance();
+        value += decodeEscape(escaped);
+        continue;
+      }
+
+      value += this.advance();
+    }
+
+    this.diagnostics.error(
+      "Unterminated template literal",
+      span(start, this.location()),
+      "E0002",
+    );
+    const lexeme = this.source.slice(start.offset, this.offset);
+    return this.makeToken(TokenKind.Invalid, lexeme, start);
   }
 
   private charLiteral(start: SourceLocation): Token {
@@ -386,6 +457,8 @@ function decodeEscape(ch: string): string {
       return '"';
     case "'":
       return "'";
+    case "`":
+      return "`";
     case "0":
       return "\0";
     default:

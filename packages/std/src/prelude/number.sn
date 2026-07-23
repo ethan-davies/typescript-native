@@ -1,0 +1,20 @@
+extern function sn_i32_to_string(value: i32): string;
+extern function sn_i64_to_string(value: i64): string;
+extern function sn_f32_to_string(value: f32): string;
+extern function sn_f64_to_string(value: f64): string;
+
+export function toString(this: i32): string {
+  return sn_i32_to_string(this);
+}
+
+export function toStringI64(this: i64): string {
+  return sn_i64_to_string(this);
+}
+
+export function toStringF32(this: f32): string {
+  return sn_f32_to_string(this);
+}
+
+export function toStringF64(this: f64): string {
+  return sn_f64_to_string(this);
+}

@@ -3,9 +3,12 @@ extern function sn_str_starts_with(s: string, prefix: string): bool;
 extern function sn_str_ends_with(s: string, suffix: string): bool;
 extern function sn_str_substring(s: string, start: i32, end: i32): string;
 extern function sn_str_trim(s: string): string;
+extern function sn_str_trim_start(s: string): string;
+extern function sn_str_trim_end(s: string): string;
 extern function sn_str_to_upper(s: string): string;
 extern function sn_str_to_lower(s: string): string;
 extern function sn_str_replace(s: string, oldValue: string, newValue: string): string;
+extern function sn_str_replace_all(s: string, oldValue: string, newValue: string): string;
 extern function sn_str_split(s: string, sep: string): string[];
 extern function sn_str_index_of(haystack: string, needle: string): i32;
 extern function sn_str_last_index_of(haystack: string, needle: string): i32;
@@ -13,6 +16,7 @@ extern function sn_str_char_at(s: string, index: i32): char;
 extern function sn_str_repeat(s: string, count: i32): string;
 extern function sn_str_pad_start(s: string, targetLen: i32, pad: string): string;
 extern function sn_str_pad_end(s: string, targetLen: i32, pad: string): string;
+extern function sn_str_join(parts: string[], sep: string): string;
 
 export function contains(this: string, needle: string): bool {
   return sn_str_contains(this, needle);
@@ -30,6 +34,34 @@ export function substring(this: string, start: i32, end: i32): string {
   return sn_str_substring(this, start, end);
 }
 
+export function slice(this: string, start: i32, end: i32): string {
+  let len = this.length;
+  let lo = start;
+  let hi = end;
+  if (lo < 0) {
+    lo = len + lo;
+    if (lo < 0) {
+      lo = 0;
+    }
+  }
+  if (hi < 0) {
+    hi = len + hi;
+    if (hi < 0) {
+      hi = 0;
+    }
+  }
+  if (lo > len) {
+    lo = len;
+  }
+  if (hi > len) {
+    hi = len;
+  }
+  if (lo > hi) {
+    lo = hi;
+  }
+  return sn_str_substring(this, lo, hi);
+}
+
 export function split(this: string, sep: string): string[] {
   return sn_str_split(this, sep);
 }
@@ -38,8 +70,20 @@ export function trim(this: string): string {
   return sn_str_trim(this);
 }
 
+export function trimStart(this: string): string {
+  return sn_str_trim_start(this);
+}
+
+export function trimEnd(this: string): string {
+  return sn_str_trim_end(this);
+}
+
 export function replace(this: string, oldValue: string, newValue: string): string {
   return sn_str_replace(this, oldValue, newValue);
+}
+
+export function replaceAll(this: string, oldValue: string, newValue: string): string {
+  return sn_str_replace_all(this, oldValue, newValue);
 }
 
 export function toUpperCase(this: string): string {
@@ -76,4 +120,9 @@ export function padStart(this: string, targetLen: i32, pad: string): string {
 
 export function padEnd(this: string, targetLen: i32, pad: string): string {
   return sn_str_pad_end(this, targetLen, pad);
+}
+
+/** Join `parts` with this string as the separator. */
+export function join(this: string, parts: string[]): string {
+  return sn_str_join(parts, this);
 }

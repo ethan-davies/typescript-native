@@ -1,0 +1,5 @@
+extern function sn_bool_to_string(value: bool): string;
+
+export function toString(this: bool): string {
+  return sn_bool_to_string(this);
+}

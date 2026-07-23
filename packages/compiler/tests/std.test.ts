@@ -89,4 +89,20 @@ describe("std library examples", () => {
     expect(result.ir).toContain("sn_str_index_of");
     expect(result.ir).toContain("sn_str_join");
   });
+
+  it("compiles template literal example", () => {
+    const result = compileFile(join(examplesDir, "template-literals.sn"));
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("sn_str_concat");
+    expect(result.ir).toContain("sn_print_str");
+    expect(result.ir).toContain("sn_eprint_str");
+  });
+
+  it("compiles std-core example", () => {
+    const result = compileFile(join(examplesDir, "std-core.sn"));
+    expect(result.success).toBe(true);
+    expect(result.ir).toContain("sn_fs_write_file");
+    expect(result.ir).toContain("sn_time_now_ms");
+    expect(result.ir).toContain("sn_base64_encode");
+  });
 });

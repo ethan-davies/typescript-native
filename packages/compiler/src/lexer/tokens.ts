@@ -4,6 +4,14 @@ export enum TokenKind {
   Identifier = "Identifier",
   String = "String",
   Char = "Char",
+  /** Full template with no interpolations: `hello` */
+  TemplateNoSub = "TemplateNoSub",
+  /** Template prefix ending at `${`: `hello ${ */
+  TemplateHead = "TemplateHead",
+  /** Template middle between `}` and `${`: }world ${ */
+  TemplateMiddle = "TemplateMiddle",
+  /** Template suffix after final `}`: }!` */
+  TemplateTail = "TemplateTail",
   Integer = "Integer",
   Float = "Float",
 

@@ -1,0 +1,10 @@
+function main(): void {
+  const greeting = "Hello";
+  const name = "Ethan";
+  const age = 16;
+  console.log(`${greeting} ${name}!`);
+  console.log(`My name is ${name} and I am ${age}`);
+  console.log(`2 + 2 = ${2 + 2}`);
+  console.warn("a warning");
+  console.error("an error");
+}

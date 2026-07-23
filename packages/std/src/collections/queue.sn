@@ -1,0 +1,54 @@
+extern function sn_array_push<T>(arr: T[], value: T): void;
+
+export class Queue<T> {
+  private items: T[];
+  private head: i32;
+
+  constructor() {
+    this.items = [];
+    this.head = 0;
+  }
+
+  enqueue(value: T): void {
+    sn_array_push(this.items, value);
+  }
+
+  dequeue(): T {
+    if (this.head >= this.items.length) {
+      throw new Error("Queue is empty");
+    }
+    let value = this.items[this.head];
+    this.head = this.head + 1;
+    if (this.head > 16 && this.head * 2 > this.items.length) {
+      let compacted: T[] = [];
+      let i = this.head;
+      while (i < this.items.length) {
+        sn_array_push(compacted, this.items[i]);
+        i = i + 1;
+      }
+      this.items = compacted;
+      this.head = 0;
+    }
+    return value;
+  }
+
+  peek(): T {
+    if (this.head >= this.items.length) {
+      throw new Error("Queue is empty");
+    }
+    return this.items[this.head];
+  }
+
+  size(): i32 {
+    return this.items.length - this.head;
+  }
+
+  isEmpty(): bool {
+    return this.head >= this.items.length;
+  }
+
+  clear(): void {
+    this.items = [];
+    this.head = 0;
+  }
+}

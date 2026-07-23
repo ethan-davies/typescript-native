@@ -71,6 +71,7 @@ import type {
   SwitchCase,
   SwitchStatement,
   SuperExpression,
+  TemplateLiteral,
   ThisExpression,
   ThrowStatement,
   TopLevelDeclaration,
@@ -2840,6 +2841,11 @@ export class Parser {
         span: token.span,
       };
       expr = literal;
+    } else if (
+      this.check(TokenKind.TemplateNoSub) ||
+      this.check(TokenKind.TemplateHead)
+    ) {
+      expr = this.parseTemplateLiteral();
     } else if (this.check(TokenKind.Integer)) {
       const token = this.advance();
       const literal: IntegerLiteral = {
@@ -2892,6 +2898,63 @@ export class Parser {
     }
 
     return this.parsePostfix(expr);
+  }
+
+  private parseTemplateLiteral(): Expression | null {
+    const start = this.peek().span.start;
+    const quasis: string[] = [];
+    const expressions: Expression[] = [];
+
+    if (this.check(TokenKind.TemplateNoSub)) {
+      const token = this.advance();
+      return {
+        kind: "TemplateLiteral",
+        quasis: [token.value ?? ""],
+        expressions: [],
+        span: token.span,
+      };
+    }
+
+    if (!this.check(TokenKind.TemplateHead)) {
+      this.diagnostics.error("Expected a template literal", this.peek().span, "E0103");
+      return null;
+    }
+
+    const head = this.advance();
+    quasis.push(head.value ?? "");
+
+    for (;;) {
+      const expr = this.parseExpression();
+      if (!expr) {
+        return null;
+      }
+      expressions.push(expr);
+
+      if (this.check(TokenKind.TemplateTail)) {
+        const tail = this.advance();
+        quasis.push(tail.value ?? "");
+        break;
+      }
+      if (this.check(TokenKind.TemplateMiddle)) {
+        const mid = this.advance();
+        quasis.push(mid.value ?? "");
+        continue;
+      }
+
+      this.diagnostics.error(
+        "Expected template continuation after interpolation",
+        this.peek().span,
+        "E0103",
+      );
+      return null;
+    }
+
+    return {
+      kind: "TemplateLiteral",
+      quasis,
+      expressions,
+      span: { start, end: this.previous().span.end },
+    };
   }
 
   private parseNewExpression(): NewExpression | null {

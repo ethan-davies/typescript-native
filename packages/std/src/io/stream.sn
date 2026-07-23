@@ -1,0 +1,12 @@
+extern function sn_print_str(value: string): void;
+extern function sn_eprint_str(value: string): void;
+
+/** Write a string to stdout without a trailing newline. */
+export function write(text: string): void {
+  sn_print_str(text);
+}
+
+/** Write a string to stderr without a trailing newline. */
+export function writeError(text: string): void {
+  sn_eprint_str(text);
+}

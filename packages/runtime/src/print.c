@@ -84,6 +84,63 @@ void sn_print_newline(void) {
   putchar('\n');
 }
 
+void sn_eprint_i32(int32_t value) {
+  fprintf(stderr, "%d", value);
+}
+
+void sn_eprint_i64(int64_t value) {
+  fprintf(stderr, "%lld", (long long)value);
+}
+
+void sn_eprint_f32(float value) {
+  fprintf(stderr, "%g", (double)value);
+}
+
+void sn_eprint_f64(double value) {
+  fprintf(stderr, "%g", value);
+}
+
+void sn_eprint_bool(bool value) {
+  fputs(value ? "true" : "false", stderr);
+}
+
+void sn_eprint_char(char value) {
+  fputc(value, stderr);
+}
+
+void sn_eprint_str(const char *value) {
+  fputs(value, stderr);
+}
+
+void sn_eprint_space(void) {
+  fputc(' ', stderr);
+}
+
+void sn_eprint_newline(void) {
+  fputc('\n', stderr);
+}
+
+char *sn_read_line(void) {
+  SnStringBuilder sb;
+  sb_init(&sb);
+  int ch;
+  while ((ch = fgetc(stdin)) != EOF) {
+    if (ch == '\n') {
+      break;
+    }
+    if (ch == '\r') {
+      int next = fgetc(stdin);
+      if (next != '\n' && next != EOF) {
+        ungetc(next, stdin);
+      }
+      break;
+    }
+    char tmp[2] = {(char)ch, '\0'};
+    sb_append_literal(&sb, tmp);
+  }
+  return sb_finish(&sb);
+}
+
 char *sn_i32_to_string(int32_t value) {
   char *buf = sn_alloc(32);
   sn_gc_set_type(buf, SN_TYPEID_STRING);
@@ -163,5 +220,27 @@ char *sn_array_to_string(void *arr, int64_t elem_size, int32_t elem_fmt) {
   }
 
   sb_append_literal(&sb, "]");
+  return sb_finish(&sb);
+}
+
+char *sn_map_to_string(void *map) {
+  SnMap *header = (SnMap *)map;
+  SnStringBuilder sb;
+  sb_init(&sb);
+  sb_append_literal(&sb, "{");
+  for (int64_t i = 0; i < header->len; i += 1) {
+    if (i > 0) {
+      sb_append_literal(&sb, ", ");
+    }
+    sb_append_literal(&sb, header->keys[i]);
+    sb_append_literal(&sb, ": ");
+    /* Values are opaque pointers; print as string when non-null. */
+    if (header->vals[i] == NULL) {
+      sb_append_literal(&sb, "null");
+    } else {
+      sb_append_literal(&sb, (const char *)header->vals[i]);
+    }
+  }
+  sb_append_literal(&sb, "}");
   return sb_finish(&sb);
 }

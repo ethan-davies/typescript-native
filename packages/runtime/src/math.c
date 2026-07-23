@@ -13,6 +13,19 @@ double sn_math_pow(double base, double exponent) { return pow(base, exponent); }
 double sn_math_sin(double x) { return sin(x); }
 double sn_math_cos(double x) { return cos(x); }
 double sn_math_tan(double x) { return tan(x); }
+double sn_math_asin(double x) { return asin(x); }
+double sn_math_acos(double x) { return acos(x); }
+double sn_math_atan(double x) { return atan(x); }
+double sn_math_atan2(double y, double x) { return atan2(y, x); }
+double sn_math_clamp(double x, double lo, double hi) {
+  if (x < lo) {
+    return lo;
+  }
+  if (x > hi) {
+    return hi;
+  }
+  return x;
+}
 double sn_math_log(double x) { return log(x); }
 double sn_math_exp(double x) { return exp(x); }
 

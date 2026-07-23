@@ -154,9 +154,12 @@ bool sn_str_starts_with(const char *s, const char *prefix);
 bool sn_str_ends_with(const char *s, const char *suffix);
 char *sn_str_substring(const char *s, int32_t start, int32_t end);
 char *sn_str_trim(const char *s);
+char *sn_str_trim_start(const char *s);
+char *sn_str_trim_end(const char *s);
 char *sn_str_to_upper(const char *s);
 char *sn_str_to_lower(const char *s);
 char *sn_str_replace(const char *s, const char *from, const char *to);
+char *sn_str_replace_all(const char *s, const char *from, const char *to);
 /* Returns a GC-managed string[] (array header pointer). */
 char *sn_str_split(const char *s, const char *sep);
 char sn_str_char_at(const char *s, int32_t index);
@@ -179,6 +182,11 @@ double sn_math_pow(double base, double exponent);
 double sn_math_sin(double x);
 double sn_math_cos(double x);
 double sn_math_tan(double x);
+double sn_math_asin(double x);
+double sn_math_acos(double x);
+double sn_math_atan(double x);
+double sn_math_atan2(double y, double x);
+double sn_math_clamp(double x, double lo, double hi);
 double sn_math_log(double x);
 double sn_math_exp(double x);
 int32_t sn_math_abs_i32(int32_t x);
@@ -203,6 +211,14 @@ int32_t sn_array_index_of(void *arr, void *needle, int64_t elem_size, int32_t cm
 void *sn_map_new(void);
 void sn_map_set(void *map, const char *key, void *val);
 void *sn_map_get(void *map, const char *key);
+bool sn_map_remove(void *map, const char *key);
+bool sn_map_contains(void *map, const char *key);
+int32_t sn_map_size(void *map);
+void sn_map_clear(void *map);
+/* Returns string[] of keys. */
+void *sn_map_keys(void *map);
+/* Returns void*[] of values (pointer-sized slots). */
+void *sn_map_values(void *map);
 
 void sn_print_i32(int32_t value);
 void sn_print_i64(int64_t value);
@@ -214,6 +230,19 @@ void sn_print_str(const char *value);
 void sn_print_space(void);
 void sn_print_newline(void);
 
+void sn_eprint_i32(int32_t value);
+void sn_eprint_i64(int64_t value);
+void sn_eprint_f32(float value);
+void sn_eprint_f64(double value);
+void sn_eprint_bool(bool value);
+void sn_eprint_char(char value);
+void sn_eprint_str(const char *value);
+void sn_eprint_space(void);
+void sn_eprint_newline(void);
+
+/* Reads a line from stdin (without trailing newline). Returns "" on EOF. */
+char *sn_read_line(void);
+
 char *sn_i32_to_string(int32_t value);
 char *sn_i64_to_string(int64_t value);
 char *sn_f32_to_string(float value);
@@ -221,6 +250,49 @@ char *sn_f64_to_string(double value);
 char *sn_bool_to_string(bool value);
 char *sn_char_to_string(char value);
 char *sn_array_to_string(void *arr, int64_t elem_size, int32_t elem_fmt);
+char *sn_map_to_string(void *map);
+
+/* Process / environment */
+void sn_runtime_init(int32_t argc, char **argv);
+void *sn_process_args(void); /* string[] */
+char *sn_process_getenv(const char *name);
+bool sn_process_setenv(const char *name, const char *value);
+char *sn_process_cwd(void);
+void sn_process_exit(int32_t code);
+
+/* Time (milliseconds) */
+int64_t sn_time_now_ms(void);
+void sn_time_sleep_ms(int64_t ms);
+
+/* Filesystem */
+char *sn_fs_read_file(const char *path); /* NULL on failure */
+bool sn_fs_write_file(const char *path, const char *contents);
+bool sn_fs_append_file(const char *path, const char *contents);
+bool sn_fs_exists(const char *path);
+bool sn_fs_delete_file(const char *path);
+bool sn_fs_copy_file(const char *src, const char *dst);
+bool sn_fs_move_file(const char *src, const char *dst);
+bool sn_fs_create_dir(const char *path);
+bool sn_fs_delete_dir(const char *path);
+void *sn_fs_list_dir(const char *path); /* string[] or NULL on failure */
+
+/* Path helpers */
+char *sn_path_join(const char *a, const char *b);
+char *sn_path_basename(const char *path);
+char *sn_path_dirname(const char *path);
+char *sn_path_extension(const char *path);
+char *sn_path_normalize(const char *path);
+char *sn_path_absolute(const char *path);
+
+/* Encoding */
+char *sn_base64_encode(const char *data);
+char *sn_base64_decode(const char *data); /* NULL on invalid input */
+char *sn_hex_encode(const char *data);
+char *sn_hex_decode(const char *data); /* NULL on invalid input */
+int32_t sn_utf8_byte_len(const char *s);
+bool sn_utf8_is_valid(const char *s);
+
+bool sn_random_bool(void);
 
 #ifdef __cplusplus
 }

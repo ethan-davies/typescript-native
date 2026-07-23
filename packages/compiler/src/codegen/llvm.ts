@@ -24,6 +24,7 @@ import type {
   StructLiteral,
   StructMethod,
   SwitchStatement,
+  TemplateLiteral,
   ThrowStatement,
   TryStatement,
   TypeAnnotation,
@@ -2985,6 +2986,7 @@ export class LlvmCodegen {
 
   private emitRuntimeDeclares(): string[] {
     const declares: string[] = [];
+    declares.push("declare void @sn_runtime_init(i32 noundef, ptr noundef) nounwind");
     if (this.needsTypeInfo) {
       declares.push("declare void @sn_typeinfo_register(ptr noundef) nounwind");
     }
@@ -3164,6 +3166,16 @@ export class LlvmCodegen {
       declares.push("declare void @sn_print_str(ptr noundef) nounwind");
       declares.push("declare void @sn_print_space() nounwind");
       declares.push("declare void @sn_print_newline() nounwind");
+      declares.push("declare void @sn_eprint_i32(i32 noundef) nounwind");
+      declares.push("declare void @sn_eprint_i64(i64 noundef) nounwind");
+      declares.push("declare void @sn_eprint_f32(float noundef) nounwind");
+      declares.push("declare void @sn_eprint_f64(double noundef) nounwind");
+      declares.push("declare void @sn_eprint_bool(i1 noundef) nounwind");
+      declares.push("declare void @sn_eprint_char(i8 noundef) nounwind");
+      declares.push("declare void @sn_eprint_str(ptr noundef) nounwind");
+      declares.push("declare void @sn_eprint_space() nounwind");
+      declares.push("declare void @sn_eprint_newline() nounwind");
+      declares.push("declare ptr @sn_read_line() nounwind");
     }
     if (this.needsSnFormat) {
       declares.push("declare ptr @sn_i32_to_string(i32 noundef) nounwind");
@@ -3468,7 +3480,7 @@ export class LlvmCodegen {
     const isMain = fn.name.name === "main";
     const isExtension = fn.params[0]?.isReceiver === true;
     const header = isMain
-      ? "define i32 @main() {"
+      ? "define i32 @main(i32 %argc, ptr %argv) {"
       : this.emitFunctionHeader(fn);
 
     lines.push(header);
@@ -3476,6 +3488,7 @@ export class LlvmCodegen {
 
     if (isMain) {
       lines.push("  call void @sn_init_typeinfo()");
+      lines.push("  call void @sn_runtime_init(i32 %argc, ptr %argv)");
     }
 
     this.thisPtr = null;
@@ -4555,6 +4568,10 @@ export class LlvmCodegen {
       return;
     }
     if (call.callee.kind === "MemberExpression") {
+      if (this.isConsoleBuiltin(call)) {
+        this.emitConsoleCall(call, lines);
+        return;
+      }
       if (this.isNamespaceCallee(call)) {
         this.emitNamespaceCall(call, lines, true);
         return;
@@ -4732,6 +4749,8 @@ export class LlvmCodegen {
       case "BooleanLiteral":
         return "bool";
       case "StringLiteral":
+        return "string";
+      case "TemplateLiteral":
         return "string";
       case "CharLiteral":
         return "char";
@@ -4972,6 +4991,13 @@ export class LlvmCodegen {
           throw new Error("Codegen: super call in type inference");
         }
         if (expr.callee.kind === "MemberExpression") {
+          if (
+            expr.callee.object.kind === "Identifier" &&
+            expr.callee.object.name === "console" &&
+            expr.callee.property.name === "readLine"
+          ) {
+            return "string";
+          }
           if (this.isNamespaceCallee(expr)) {
             const ns = this.namespaces.get(
               (expr.callee.object as { kind: "Identifier"; name: string }).name,
@@ -5173,6 +5199,8 @@ export class LlvmCodegen {
         );
         return { llvm: tmp, type: "string" };
       }
+      case "TemplateLiteral":
+        return this.emitTemplateLiteral(expr, lines);
       case "ArrayLiteral":
         return this.emitArrayOrTupleLiteral(expr.elements, lines, expected);
       case "StructLiteral":
@@ -5412,6 +5440,20 @@ export class LlvmCodegen {
           return { llvm: "void", type: "i32" };
         }
         if (expr.callee.kind === "MemberExpression") {
+          if (this.isConsoleBuiltin(expr)) {
+            if (
+              expr.callee.property.name === "readLine"
+            ) {
+              this.needsSnPrint = true;
+              this.needsGc = true;
+              const tmp = this.nextTemp();
+              lines.push(`  ${tmp} = call ptr @sn_read_line()`);
+              this.rootHeapPtr(tmp, lines);
+              return { llvm: tmp, type: "string" };
+            }
+            this.emitConsoleCall(expr, lines);
+            return { llvm: "void", type: "i32" };
+          }
           if (this.isNamespaceCallee(expr)) {
             return this.emitNamespaceCall(expr, lines, false);
           }
@@ -6744,6 +6786,44 @@ export class LlvmCodegen {
     return { llvm: buf, type: "string" };
   }
 
+  private emitTemplateLiteral(
+    expr: TemplateLiteral,
+    lines: string[],
+  ): EmittedValue {
+    this.needsSnString = true;
+    this.needsGc = true;
+
+    const emitQuasi = (text: string): EmittedValue => {
+      const global = this.internString(text);
+      const tmp = this.nextTemp();
+      lines.push(
+        `  ${tmp} = getelementptr inbounds [${global.length} x i8], ptr @${global.name}, i64 0, i64 0`,
+      );
+      return { llvm: tmp, type: "string" };
+    };
+
+    let result = emitQuasi(expr.quasis[0] ?? "");
+    for (let i = 0; i < expr.expressions.length; i += 1) {
+      let part = this.emitExpression(expr.expressions[i]!, lines);
+      part = this.coerceToString(part, lines);
+      const buf = this.nextTemp();
+      lines.push(
+        `  ${buf} = call ptr @sn_str_concat(ptr noundef ${result.llvm}, ptr noundef ${part.llvm})`,
+      );
+      this.rootHeapPtr(buf, lines);
+      result = { llvm: buf, type: "string" };
+
+      const quasi = emitQuasi(expr.quasis[i + 1] ?? "");
+      const buf2 = this.nextTemp();
+      lines.push(
+        `  ${buf2} = call ptr @sn_str_concat(ptr noundef ${result.llvm}, ptr noundef ${quasi.llvm})`,
+      );
+      this.rootHeapPtr(buf2, lines);
+      result = { llvm: buf2, type: "string" };
+    }
+    return result;
+  }
+
   /** Coerce a printable scalar to a heap string via sn_*_to_string. */
   private coerceToString(value: EmittedValue, lines: string[]): EmittedValue {
     if (
@@ -6785,6 +6865,12 @@ export class LlvmCodegen {
     ) {
       lines.push(
         `  ${buf} = call ptr @sn_i32_to_string(i32 noundef ${value.llvm})`,
+      );
+    } else if (isArrayType(value.type)) {
+      const elemLlvm = toLlvmType(value.type.element);
+      const fmtKind = this.snFmtKindForType(value.type.element);
+      lines.push(
+        `  ${buf} = call ptr @sn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${fmtKind})`,
       );
     } else {
       throw new Error(
@@ -7487,7 +7573,64 @@ export class LlvmCodegen {
     lines.push("  call void @sn_print_newline()");
   }
 
-  private emitPrintValue(value: EmittedValue, lines: string[]): void {
+  private isConsoleBuiltin(call: CallExpression): boolean {
+    if (call.callee.kind !== "MemberExpression") {
+      return false;
+    }
+    const obj = call.callee.object;
+    if (obj.kind !== "Identifier" || obj.name !== "console") {
+      return false;
+    }
+    const prop = call.callee.property.name;
+    return (
+      prop === "log" ||
+      prop === "error" ||
+      prop === "warn" ||
+      prop === "readLine"
+    );
+  }
+
+  private emitConsoleCall(call: CallExpression, lines: string[]): void {
+    if (call.callee.kind !== "MemberExpression") {
+      return;
+    }
+    const prop = call.callee.property.name;
+    if (prop === "readLine") {
+      this.needsSnPrint = true;
+      this.needsGc = true;
+      const tmp = this.nextTemp();
+      lines.push(`  ${tmp} = call ptr @sn_read_line()`);
+      this.rootHeapPtr(tmp, lines);
+      // Statement form discards the result; value form handled in emitExpression.
+      return;
+    }
+    const toStderr = prop === "error";
+    this.needsSnPrint = true;
+    const args = asExpressions(call.args);
+    for (let i = 0; i < args.length; i += 1) {
+      const value = this.emitExpression(args[i]!, lines);
+      this.emitPrintValue(value, lines, toStderr);
+      if (i < args.length - 1) {
+        lines.push(
+          toStderr
+            ? "  call void @sn_eprint_space()"
+            : "  call void @sn_print_space()",
+        );
+      }
+    }
+    lines.push(
+      toStderr
+        ? "  call void @sn_eprint_newline()"
+        : "  call void @sn_print_newline()",
+    );
+  }
+
+  private emitPrintValue(
+    value: EmittedValue,
+    lines: string[],
+    toStderr = false,
+  ): void {
+    const p = (name: string) => (toStderr ? `sn_eprint_${name}` : `sn_print_${name}`);
     if (isArrayType(value.type)) {
       this.needsSnFormat = true;
       const elemLlvm = toLlvmType(value.type.element);
@@ -7496,43 +7639,43 @@ export class LlvmCodegen {
       lines.push(
         `  ${arrayStr} = call ptr @sn_array_to_string(ptr noundef ${value.llvm}, i64 noundef ${llvmSizeofExpr(elemLlvm)}, i32 noundef ${fmtKind})`,
       );
-      lines.push(`  call void @sn_print_str(ptr noundef ${arrayStr})`);
+      lines.push(`  call void @${p("str")}(ptr noundef ${arrayStr})`);
       return;
     }
     if (value.type === "bool") {
-      lines.push(`  call void @sn_print_bool(i1 ${value.llvm})`);
+      lines.push(`  call void @${p("bool")}(i1 ${value.llvm})`);
       return;
     }
     if (value.type === "string") {
-      lines.push(`  call void @sn_print_str(ptr noundef ${value.llvm})`);
+      lines.push(`  call void @${p("str")}(ptr noundef ${value.llvm})`);
       return;
     }
     if (value.type === "i32" || isEnumType(value.type)) {
-      lines.push(`  call void @sn_print_i32(i32 ${value.llvm})`);
+      lines.push(`  call void @${p("i32")}(i32 ${value.llvm})`);
       return;
     }
     if (value.type === "i64") {
-      lines.push(`  call void @sn_print_i64(i64 ${value.llvm})`);
+      lines.push(`  call void @${p("i64")}(i64 ${value.llvm})`);
       return;
     }
     if (value.type === "f32") {
-      lines.push(`  call void @sn_print_f32(float ${value.llvm})`);
+      lines.push(`  call void @${p("f32")}(float ${value.llvm})`);
       return;
     }
     if (value.type === "f64") {
-      lines.push(`  call void @sn_print_f64(double ${value.llvm})`);
+      lines.push(`  call void @${p("f64")}(double ${value.llvm})`);
       return;
     }
     if (value.type === "char") {
-      lines.push(`  call void @sn_print_char(i8 ${value.llvm})`);
+      lines.push(`  call void @${p("char")}(i8 ${value.llvm})`);
       return;
     }
     if (isLiteralType(value.type)) {
       if (value.type.literalKind === "string") {
-        lines.push(`  call void @sn_print_str(ptr noundef ${value.llvm})`);
+        lines.push(`  call void @${p("str")}(ptr noundef ${value.llvm})`);
         return;
       }
-      lines.push(`  call void @sn_print_i32(i32 ${value.llvm})`);
+      lines.push(`  call void @${p("i32")}(i32 ${value.llvm})`);
       return;
     }
     throw new Error(

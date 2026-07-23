@@ -54,3 +54,58 @@ void *sn_map_get(void *map, const char *key) {
   }
   return NULL;
 }
+
+bool sn_map_contains(void *map, const char *key) {
+  SnMap *header = as_map(map);
+  for (int64_t i = 0; i < header->len; i += 1) {
+    if (strcmp(header->keys[i], key) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool sn_map_remove(void *map, const char *key) {
+  SnMap *header = as_map(map);
+  for (int64_t i = 0; i < header->len; i += 1) {
+    if (strcmp(header->keys[i], key) == 0) {
+      for (int64_t j = i; j + 1 < header->len; j += 1) {
+        header->keys[j] = header->keys[j + 1];
+        header->vals[j] = header->vals[j + 1];
+      }
+      header->len -= 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+int32_t sn_map_size(void *map) {
+  return (int32_t)as_map(map)->len;
+}
+
+void sn_map_clear(void *map) {
+  as_map(map)->len = 0;
+}
+
+void *sn_map_keys(void *map) {
+  SnMap *header = as_map(map);
+  void *arr = sn_array_new(0, header->len > 0 ? header->len : 1, (int64_t)sizeof(char *));
+  sn_gc_set_array_meta(arr, SN_REF_PTR, SN_TYPEID_STRING, (int64_t)sizeof(char *));
+  for (int64_t i = 0; i < header->len; i += 1) {
+    char *copy = sn_str_concat(header->keys[i], "");
+    sn_array_push(arr, &copy, (int64_t)sizeof(char *));
+  }
+  return arr;
+}
+
+void *sn_map_values(void *map) {
+  SnMap *header = as_map(map);
+  void *arr = sn_array_new(0, header->len > 0 ? header->len : 1, (int64_t)sizeof(void *));
+  sn_gc_set_array_meta(arr, SN_REF_PTR, 0, (int64_t)sizeof(void *));
+  for (int64_t i = 0; i < header->len; i += 1) {
+    void *val = header->vals[i];
+    sn_array_push(arr, &val, (int64_t)sizeof(void *));
+  }
+  return arr;
+}

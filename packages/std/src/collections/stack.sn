@@ -1,0 +1,41 @@
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_array_pop<T>(arr: T[]): T;
+extern function sn_array_index_of<T>(arr: T[], value: T): i32;
+
+export class Stack<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  push(value: T): void {
+    sn_array_push(this.items, value);
+  }
+
+  pop(): T {
+    if (this.items.length == 0) {
+      throw new Error("Stack is empty");
+    }
+    return sn_array_pop(this.items);
+  }
+
+  peek(): T {
+    if (this.items.length == 0) {
+      throw new Error("Stack is empty");
+    }
+    return this.items[this.items.length - 1];
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+}

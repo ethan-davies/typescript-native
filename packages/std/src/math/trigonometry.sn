@@ -1,0 +1,35 @@
+extern function sn_math_sin(x: f64): f64;
+extern function sn_math_cos(x: f64): f64;
+extern function sn_math_tan(x: f64): f64;
+extern function sn_math_asin(x: f64): f64;
+extern function sn_math_acos(x: f64): f64;
+extern function sn_math_atan(x: f64): f64;
+extern function sn_math_atan2(y: f64, x: f64): f64;
+
+export function sin(x: f64): f64 {
+  return sn_math_sin(x);
+}
+
+export function cos(x: f64): f64 {
+  return sn_math_cos(x);
+}
+
+export function tan(x: f64): f64 {
+  return sn_math_tan(x);
+}
+
+export function asin(x: f64): f64 {
+  return sn_math_asin(x);
+}
+
+export function acos(x: f64): f64 {
+  return sn_math_acos(x);
+}
+
+export function atan(x: f64): f64 {
+  return sn_math_atan(x);
+}
+
+export function atan2(y: f64, x: f64): f64 {
+  return sn_math_atan2(y, x);
+}

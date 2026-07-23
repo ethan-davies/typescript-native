@@ -54,3 +54,7 @@ double sn_random_float(double min, double max) {
   }
   return min + sn_random() * (max - min);
 }
+
+bool sn_random_bool(void) {
+  return sn_random() < 0.5;
+}

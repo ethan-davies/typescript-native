@@ -1,0 +1,14 @@
+extern function sn_base64_encode(data: string): string;
+extern function sn_base64_decode(data: string): string | null;
+
+export function base64Encode(data: string): string {
+  return sn_base64_encode(data);
+}
+
+export function base64Decode(data: string): string {
+  let result = sn_base64_decode(data);
+  if (result == null) {
+    throw new Error("Invalid base64 input");
+  }
+  return result;
+}

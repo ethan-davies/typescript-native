@@ -33,6 +33,13 @@ Target pipeline:
 - [x] `README.md`, MIT `LICENSE`
 - [x] Examples under `examples/`
 
+### Core standard library (expanded)
+- [x] Prelude: string/array/number/bool/nullable (+ ambient print/console)
+- [x] `std/math`, `std/random`, `std/collections` (Stack/Queue/Set/List/Map/Deque)
+- [x] `std/io`, `std/fs`, `std/process`, `std/time`, `std/encoding`
+- [x] Template literals `` `${expr}` ``
+- [x] `console.log` / `error` / `warn` / `readLine` builtins
+
 ### Compiler pipeline (working)
 - [x] `compile()` / `compileFile()` API in `@sonite/compiler`
 - [x] Diagnostic collector with source spans and severity

@@ -68,6 +68,7 @@ export type {
   ReturnStatement,
   Statement,
   StringLiteral,
+  TemplateLiteral,
   StructDeclaration,
   StructField,
   StructFieldInit,

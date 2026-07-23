@@ -1,0 +1,31 @@
+extern function sn_process_args(): string[];
+extern function sn_process_getenv(name: string): string | null;
+extern function sn_process_setenv(name: string, value: string): bool;
+extern function sn_process_cwd(): string | null;
+extern function sn_process_exit(code: i32): void;
+
+export function args(): string[] {
+  return sn_process_args();
+}
+
+export function getEnv(name: string): string | null {
+  return sn_process_getenv(name);
+}
+
+export function setEnv(name: string, value: string): void {
+  if (!sn_process_setenv(name, value)) {
+    throw new Error("Failed to set environment variable: " + name);
+  }
+}
+
+export function cwd(): string {
+  let path = sn_process_cwd();
+  if (path == null) {
+    throw new Error("Failed to get current working directory");
+  }
+  return path;
+}
+
+export function exit(code: i32): void {
+  sn_process_exit(code);
+}

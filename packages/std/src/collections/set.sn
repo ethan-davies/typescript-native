@@ -1,0 +1,66 @@
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_array_index_of<T>(arr: T[], value: T): i32;
+
+export class Set<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  add(value: T): bool {
+    if (sn_array_index_of(this.items, value) >= 0) {
+      return false;
+    }
+    sn_array_push(this.items, value);
+    return true;
+  }
+
+  contains(value: T): bool {
+    return sn_array_index_of(this.items, value) >= 0;
+  }
+
+  /** Alias for contains. */
+  has(value: T): bool {
+    return this.contains(value);
+  }
+
+  remove(value: T): bool {
+    let idx = sn_array_index_of(this.items, value);
+    if (idx < 0) {
+      return false;
+    }
+    let next: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      if (i != idx) {
+        sn_array_push(next, this.items[i]);
+      }
+      i = i + 1;
+    }
+    this.items = next;
+    return true;
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+
+  toArray(): T[] {
+    let result: T[] = [];
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      sn_array_push(result, this.items[i]);
+      i = i + 1;
+    }
+    return result;
+  }
+}

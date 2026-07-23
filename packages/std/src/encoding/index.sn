@@ -1,0 +1,38 @@
+extern function sn_utf8_byte_len(s: string): i32;
+extern function sn_utf8_is_valid(s: string): bool;
+extern function sn_base64_encode(data: string): string;
+extern function sn_base64_decode(data: string): string | null;
+extern function sn_hex_encode(data: string): string;
+extern function sn_hex_decode(data: string): string | null;
+
+export function byteLength(s: string): i32 {
+  return sn_utf8_byte_len(s);
+}
+
+export function isValid(s: string): bool {
+  return sn_utf8_is_valid(s);
+}
+
+export function base64Encode(data: string): string {
+  return sn_base64_encode(data);
+}
+
+export function base64Decode(data: string): string {
+  let result = sn_base64_decode(data);
+  if (result == null) {
+    throw new Error("Invalid base64 input");
+  }
+  return result;
+}
+
+export function hexEncode(data: string): string {
+  return sn_hex_encode(data);
+}
+
+export function hexDecode(data: string): string {
+  let result = sn_hex_decode(data);
+  if (result == null) {
+    throw new Error("Invalid hex input");
+  }
+  return result;
+}

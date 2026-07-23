@@ -362,4 +362,24 @@ describe("Lexer", () => {
       ]),
     );
   });
+
+  it("tokenizes template literals with interpolation", () => {
+    const { tokens, diagnostics } = lex("`Hello ${name}!`");
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens.map((t) => t.kind)).toEqual([
+      TokenKind.TemplateHead,
+      TokenKind.Identifier,
+      TokenKind.TemplateTail,
+      TokenKind.Eof,
+    ]);
+    expect(tokens[0]?.value).toBe("Hello ");
+    expect(tokens[2]?.value).toBe("!");
+  });
+
+  it("tokenizes template literals without interpolation", () => {
+    const { tokens, diagnostics } = lex("`plain`");
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens[0]?.kind).toBe(TokenKind.TemplateNoSub);
+    expect(tokens[0]?.value).toBe("plain");
+  });
 });

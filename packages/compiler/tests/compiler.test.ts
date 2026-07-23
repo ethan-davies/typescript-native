@@ -24,7 +24,7 @@ describe("compile pipeline", () => {
       expect(result.success).toBe(true);
       expect(result.ir).toContain("declare void @sn_print_str");
       expect(result.ir).toContain("declare void @sn_print_newline");
-      expect(result.ir).toContain("define i32 @main()");
+      expect(result.ir).toContain("define i32 @main(i32 %argc, ptr %argv)");
       expect(result.ir).toContain("call void @sn_print_str");
       expect(result.ir).toContain("call void @sn_print_newline");
       expect(result.ir).toContain(encodeLlvmString("Hello, world!"));
@@ -175,7 +175,7 @@ describe("compile pipeline", () => {
       `);
       expect(result.success).toBe(true);
       expect(result.ir).toContain("define i32 @add(i32 %arg0, i32 %arg1)");
-      expect(result.ir).toContain("define i32 @main()");
+      expect(result.ir).toContain("define i32 @main(i32 %argc, ptr %argv)");
       expect(result.ir).toContain("call i32 @add(i32 2, i32 3)");
       expect(result.ir).toContain("ret i32");
       expect(result.ir).toContain("mul i32");
@@ -484,7 +484,7 @@ describe("compile pipeline", () => {
         const source = readFileSync(join(examplesDir, name), "utf8");
         const result = compile(source);
         expect(result.success, name).toBe(true);
-        expect(result.ir, name).toContain("define i32 @main()");
+        expect(result.ir, name).toContain("define i32 @main(i32 %argc, ptr %argv)");
       }
     });
 
@@ -1595,7 +1595,7 @@ describe("modules / compileFile", () => {
     expect(result.ir).toContain("define i32 @math__mul(i32 %arg0, i32 %arg1)");
     expect(result.ir).toContain("call i32 @math__add(i32 5, i32 10)");
     expect(result.ir).toContain("call i32 @math__mul(i32 3, i32 4)");
-    expect(result.ir).toContain("define i32 @main()");
+    expect(result.ir).toContain("define i32 @main(i32 %argc, ptr %argv)");
   });
 
   it("compiles aliased nested imports", () => {
@@ -1742,7 +1742,7 @@ describe("type aliases and advanced types", () => {
       }
     `);
     expect(result.success).toBe(true);
-    expect(result.ir).toContain("define i32 @main()");
+    expect(result.ir).toContain("define i32 @main(i32 %argc, ptr %argv)");
   });
 
   it("rejects invalid literal assignments", () => {

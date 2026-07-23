@@ -1,5 +1,5 @@
 CC ?= clang
-CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -Iinclude
+CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -Iinclude -D_POSIX_C_SOURCE=200809L
 AR ?= ar
 
 SRC_DIR := src

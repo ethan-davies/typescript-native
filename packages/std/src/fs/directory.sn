@@ -1,0 +1,23 @@
+extern function sn_fs_create_dir(path: string): bool;
+extern function sn_fs_delete_dir(path: string): bool;
+extern function sn_fs_list_dir(path: string): string[] | null;
+
+export function createDirectory(path: string): void {
+  if (!sn_fs_create_dir(path)) {
+    throw new Error("Failed to create directory: " + path);
+  }
+}
+
+export function deleteDirectory(path: string): void {
+  if (!sn_fs_delete_dir(path)) {
+    throw new Error("Failed to delete directory: " + path);
+  }
+}
+
+export function listDirectory(path: string): string[] {
+  let entries = sn_fs_list_dir(path);
+  if (entries == null) {
+    throw new Error("Failed to list directory: " + path);
+  }
+  return entries;
+}

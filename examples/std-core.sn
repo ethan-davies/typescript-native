@@ -1,0 +1,44 @@
+import { PI, clamp, asin } from "std/math";
+import { randomInt, randomBool, seed } from "std/random";
+import { base64Encode, hexEncode } from "std/encoding";
+import { Map, Deque } from "std/collections";
+import { Instant, sleep } from "std/time";
+import { args, cwd } from "std/process";
+import { writeFile, readFile, exists, join, basename } from "std/fs";
+
+function main(): void {
+  console.log(cwd());
+  console.log(PI());
+  console.log(clamp(5.0, 0.0, 3.0));
+  console.log(asin(0.0));
+
+  seed(1);
+  console.log(randomInt(1, 10));
+  console.log(randomBool());
+
+  console.log(base64Encode("hi"));
+  console.log(hexEncode("hi"));
+
+  let m = new Map();
+  m.set("a", "1");
+  console.log(m.containsKey("a"));
+  console.log(m.size());
+
+  let d = new Deque<i32>();
+  d.pushBack(1);
+  d.pushFront(0);
+  console.log(d.popFront());
+  console.log(d.popBack());
+
+  let start = Instant.now();
+  sleep(1);
+  console.log(start.elapsed().toMillis());
+
+  console.log(join("/tmp", "x"));
+  console.log(basename("/tmp/x"));
+  console.log(args().length);
+
+  writeFile("/tmp/sonite-stdlib-test.txt", "hello");
+  console.log(exists("/tmp/sonite-stdlib-test.txt"));
+  console.log(readFile("/tmp/sonite-stdlib-test.txt"));
+}

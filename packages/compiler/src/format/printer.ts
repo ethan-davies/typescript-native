@@ -500,6 +500,17 @@ function printExpr(expr: Expression): string {
       return expr.name;
     case "StringLiteral":
       return escapeStringLiteral(expr.value);
+    case "TemplateLiteral": {
+      let out = "`";
+      for (let i = 0; i < expr.quasis.length; i += 1) {
+        out += escapeTemplateQuasi(expr.quasis[i] ?? "");
+        if (i < expr.expressions.length) {
+          out += "${" + printExpr(expr.expressions[i]!) + "}";
+        }
+      }
+      out += "`";
+      return out;
+    }
     case "IntegerLiteral":
       return expr.raw;
     case "FloatLiteral":
@@ -751,5 +762,38 @@ function escapeStringLiteral(value: string): string {
         out += ch;
     }
   }
-  return out + "\"";
+  out += "\"";
+  return out;
+}
+
+function escapeTemplateQuasi(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    switch (ch) {
+      case "\\":
+        out += "\\\\";
+        break;
+      case "`":
+        out += "\\`";
+        break;
+      case "$":
+        out += "\\$";
+        break;
+      case "\n":
+        out += "\\n";
+        break;
+      case "\r":
+        out += "\\r";
+        break;
+      case "\t":
+        out += "\\t";
+        break;
+      case "\0":
+        out += "\\0";
+        break;
+      default:
+        out += ch;
+    }
+  }
+  return out;
 }

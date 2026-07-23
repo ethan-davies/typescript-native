@@ -13,19 +13,28 @@ Currently supported features:
 - Interfaces: method contracts with `implements` / `extends`, optional index signatures, compile-time compliance checks, and fat-pointer dynamic dispatch when typed as an interface
 - `let` / `const` variables with optional annotations and inference (`5` → `i32`, `3.14` → `f64`); annotated `let` may omit an initializer (`let x: T | null;`); tuple destructuring (`let [a, b] = pair`)
 - Reassignment for `let` only (`=`, `+=`, `-=`, `++`, `--` on numeric lets)
-- Arrays: literals `[1, 2, 3]`, indexing, element assignment, `.length`, and prelude methods (`.push` / `.pop` / `.includes` / `.indexOf` / `.map` / `.filter` / `.reduce` / `.join` / `.concat` / …)
-- String methods via the auto-loaded prelude (`.contains`, `.startsWith`, `.trim`, `.toUpperCase`, `.indexOf`, `.padStart`, `.join`, …)
+- Arrays: literals `[1, 2, 3]`, indexing, element assignment, `.length`, and prelude methods (`.push` / `.pop` / `.map` / `.filter` / `.forEach` / `.findIndex` / …)
+- String methods via the auto-loaded prelude (`.contains`, `.startsWith`, `.trim`, `.trimStart`, `.slice`, `.replaceAll`, `.join`, …)
+- Template literals with interpolation: `` `Hello ${name}!` `` (lowered to `sn_*_to_string` + `sn_str_concat`)
 - Extension methods: `export function contains(this: string, needle: string): bool` callable as `"hi".contains("h")`
 - `extern function` declarations for calling C runtime symbols from SN
-- Explicit standard-library modules via `import { … } from "std/…"` (`std/math`, `std/random`, `std/collections`; `std/strings` / `std/io` reserved for future specialized APIs)
+- Explicit standard-library modules via `import { … } from "std/…"`:
+  - `std/math` — abs/min/max/clamp/floor/ceil/round/sqrt/pow, trig (sin/cos/tan/asin/acos/atan/atan2), `PI`/`E`/`TAU`
+  - `std/random` — `random` / `randomInt` / `randomFloat` / `randomBool` / `seed` (pseudo-random, not crypto)
+  - `std/collections` — `Stack`, `Queue`, `Set`, `List`, `Map`, `Deque`
+  - `std/io` — `readLine`, stream write helpers (`console.*` builtins need no import)
+  - `std/fs` — file/directory/path helpers
+  - `std/process` — `args`, `getEnv`, `setEnv`, `cwd`, `exit`
+  - `std/time` — `Instant`, `Duration`, `sleep`, `now`
+  - `std/encoding` — UTF-8 helpers, base64, hex
 - Tuples: fixed-length heterogeneous products `[string, i32]`, const/dynamic indexing (dynamic → union), `.length`, element assignment with constant indexes, destructuring with holes
 - Function types `(i32, i32) => i32`: annotate variables, parameters, and return types; use in `type` aliases; assign and pass named functions as first-class values; call through function-typed expressions
 - Default parameter values (`greeting: string = "Hello"`) evaluated at the call site when omitted; required parameters must precede defaults
 - Named call arguments (`createPerson(age: 16, name: "Ethan")`), any order, mixed with leading positionals; can skip middle defaults (`configure(host, secure: true)`). Defaults and named args apply only to direct function/method references — not through function-typed values
 - Arrow lambdas `(a: i32, b: i32) => a + b` and block bodies; contextual typing from an expected function type; closures with capture-by-reference for `let` (heap boxes) and by-value for `const` (no generic lambdas yet)
-- Literals: integers, floats, booleans, strings, chars, `null`
-- `print(...)` of printable values; multiple args are joined with spaces (compiler intrinsic, available through the prelude)
-- String concatenation with `+`
+- Literals: integers, floats, booleans, strings, chars, `null`, template literals
+- `print(...)` and `console.log` / `console.error` / `console.warn` of printable values; `console.readLine()` reads stdin
+- String concatenation with `+` and template interpolation
 - Comparisons (`== != < <= > >=`) and logical ops (`&& || !`)
 - Value-position `typeof` expression (returns type tags such as `"string"`, `"i32"`, `"bool"`, `"null"`, `"object"`)
 - `value is Type` type checks (including `is null` and class types) with narrowing
@@ -33,5 +42,5 @@ Currently supported features:
 - Exceptions: built-in `Error` class (`message`), `throw`, `try` / `catch` / `finally` (every thrown value must be `Error` or a subclass)
 - `//` line comments and `/* */` block comments
 
-`print` is a builtin. It is lowered to `sn_print_*` runtime calls in the generated LLVM IR, and `sn run` links `libsn_runtime.a` when building the native binary.
+`print` and `console.*` are builtins. They lower to `sn_print_*` / `sn_eprint_*` / `sn_read_line` runtime calls in the generated LLVM IR, and `sn run` links `libsn_runtime.a` when building the native binary.
 `createMap()` is a builtin that allocates an empty string-keyed map (for index-signature types).

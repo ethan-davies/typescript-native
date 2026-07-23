@@ -86,6 +86,7 @@ export type AstNode =
   | SuperExpression
   | Identifier
   | StringLiteral
+  | TemplateLiteral
   | IntegerLiteral
   | FloatLiteral
   | BooleanLiteral
@@ -447,6 +448,7 @@ export type Expression =
   | SuperExpression
   | Identifier
   | StringLiteral
+  | TemplateLiteral
   | IntegerLiteral
   | FloatLiteral
   | BooleanLiteral
@@ -582,6 +584,14 @@ export interface StringLiteral extends AstNodeBase {
   readonly value: string;
   /** Original lexeme including quotes. */
   readonly raw: string;
+}
+
+/** Cooked template: alternating string quasis and interpolated expressions. */
+export interface TemplateLiteral extends AstNodeBase {
+  readonly kind: "TemplateLiteral";
+  /** Always one more quasi than expressions. */
+  readonly quasis: string[];
+  readonly expressions: Expression[];
 }
 
 export interface IntegerLiteral extends AstNodeBase {

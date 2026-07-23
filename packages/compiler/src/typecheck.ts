@@ -2921,6 +2921,29 @@ function isStringConcatScalar(type: ValueType): boolean {
   );
 }
 
+function isTemplateConvertible(type: ValueType): boolean {
+  if (type === "string") {
+    return true;
+  }
+  if (isStringConcatScalar(type)) {
+    return true;
+  }
+  if (isLiteralType(type)) {
+    return (
+      type.literalKind === "string" ||
+      type.literalKind === "number" ||
+      type.literalKind === "boolean"
+    );
+  }
+  if (isEnumType(type)) {
+    return true;
+  }
+  if (isArrayType(type)) {
+    return true;
+  }
+  return false;
+}
+
 /** Map / index-signature values must be pointer-sized reference types (runtime void** ABI). */
 function assertMapValueType(
   valueType: ValueType,
@@ -7315,6 +7338,29 @@ function checkExpressionInner(
         }
       }
       return "string";
+    case "TemplateLiteral": {
+      for (const part of expr.expressions) {
+        const partType = checkExpression(
+          part,
+          scope,
+          functions,
+          structs,
+          enums,
+          diagnostics,
+        );
+        if (!partType) {
+          return null;
+        }
+        if (!isTemplateConvertible(partType)) {
+          diagnostics.error(
+            `Cannot interpolate value of type '${typeToString(partType)}' in template literal`,
+            part.span,
+            "E0401",
+          );
+        }
+      }
+      return "string";
+    }
     case "CharLiteral":
       return "char";
     case "NullLiteral":
@@ -8598,6 +8644,76 @@ function checkExpressionInner(
       }
 
       if (expr.callee.kind === "MemberExpression") {
+        if (
+          expr.callee.object.kind === "Identifier" &&
+          expr.callee.object.name === "console"
+        ) {
+          const prop = expr.callee.property.name;
+          if (
+            prop === "log" ||
+            prop === "error" ||
+            prop === "warn" ||
+            prop === "readLine"
+          ) {
+            if (prop === "readLine") {
+              if (expr.args.length !== 0) {
+                diagnostics.error(
+                  "'console.readLine' expects no arguments",
+                  expr.span,
+                  "E0315",
+                );
+                return null;
+              }
+              return "string";
+            }
+            if (!allowVoidCall) {
+              diagnostics.error(
+                `'console.${prop}' cannot be used as a value`,
+                expr.span,
+                "E0309",
+              );
+              return null;
+            }
+            if (expr.args.length === 0) {
+              diagnostics.error(
+                `'console.${prop}' requires at least one argument`,
+                expr.span,
+                "E0308",
+              );
+              return null;
+            }
+            for (const arg of expr.args) {
+              if (arg.kind === "NamedArgument") {
+                diagnostics.error(
+                  `Named arguments are not supported for 'console.${prop}'`,
+                  arg.span,
+                  "E0318",
+                );
+                return null;
+              }
+              const argType = checkExpression(
+                arg,
+                scope,
+                functions,
+                structs,
+                enums,
+                diagnostics,
+              );
+              if (!argType) {
+                return null;
+              }
+              if (!isPrintableType(argType)) {
+                diagnostics.error(
+                  `Cannot print value of type '${typeToString(argType)}'`,
+                  arg.span,
+                  "E0333",
+                );
+                return null;
+              }
+            }
+            return null;
+          }
+        }
         const nsCall = checkNamespaceCall(
           expr,
           scope,

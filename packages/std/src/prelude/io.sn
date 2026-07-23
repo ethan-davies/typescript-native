@@ -1,2 +1,6 @@
-// Polymorphic multi-arg `print` remains a compiler intrinsic (lowered to sn_print_*).
-// It is always available alongside this prelude module — no import required.
+// Ambient builtins (compiler intrinsics — always available, no import):
+//   print(...)
+//   console.log(...) / console.error(...) / console.warn(...)
+//   console.readLine(): string
+//
+// Prefer console.* for new code; print remains for compatibility.

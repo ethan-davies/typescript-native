@@ -108,8 +108,12 @@ export class Set<T> {
     return true;
   }
 
-  has(value: T): bool {
+  contains(value: T): bool {
     return sn_array_index_of(this.items, value) >= 0;
+  }
+
+  has(value: T): bool {
+    return this.contains(value);
   }
 
   remove(value: T): bool {
@@ -161,6 +165,41 @@ export class List<T> {
 
   add(value: T): void {
     sn_array_push(this.items, value);
+  }
+
+  insert(index: i32, value: T): void {
+    if (index < 0 || index > this.items.length) {
+      throw new Error("List index out of bounds");
+    }
+    let next: T[] = [];
+    let i: i32 = 0;
+    while (i < index) {
+      sn_array_push(next, this.items[i]);
+      i = i + 1;
+    }
+    sn_array_push(next, value);
+    while (i < this.items.length) {
+      sn_array_push(next, this.items[i]);
+      i = i + 1;
+    }
+    this.items = next;
+  }
+
+  remove(value: T): bool {
+    let idx = sn_array_index_of(this.items, value);
+    if (idx < 0) {
+      return false;
+    }
+    this.removeAt(idx);
+    return true;
+  }
+
+  contains(value: T): bool {
+    return sn_array_index_of(this.items, value) >= 0;
+  }
+
+  indexOf(value: T): i32 {
+    return sn_array_index_of(this.items, value);
   }
 
   get(index: i32): T {
@@ -224,5 +263,152 @@ export class List<T> {
       i = i + 1;
     }
     return result;
+  }
+}
+
+extern function sn_map_new(): { [key: string]: string | null };
+extern function sn_map_set(map: { [key: string]: string | null }, key: string, val: string): void;
+extern function sn_map_get(map: { [key: string]: string | null }, key: string): string | null;
+extern function sn_map_remove(map: { [key: string]: string | null }, key: string): bool;
+extern function sn_map_contains(map: { [key: string]: string | null }, key: string): bool;
+extern function sn_map_size(map: { [key: string]: string | null }): i32;
+extern function sn_map_clear(map: { [key: string]: string | null }): void;
+extern function sn_map_keys(map: { [key: string]: string | null }): string[];
+
+export class Map {
+  private inner: { [key: string]: string | null };
+
+  constructor() {
+    this.inner = sn_map_new();
+  }
+
+  set(key: string, value: string): void {
+    sn_map_set(this.inner, key, value);
+  }
+
+  get(key: string): string | null {
+    return sn_map_get(this.inner, key);
+  }
+
+  remove(key: string): bool {
+    return sn_map_remove(this.inner, key);
+  }
+
+  containsKey(key: string): bool {
+    return sn_map_contains(this.inner, key);
+  }
+
+  keys(): string[] {
+    return sn_map_keys(this.inner);
+  }
+
+  values(): string[] {
+    let ks = sn_map_keys(this.inner);
+    let result: string[] = [];
+    let i: i32 = 0;
+    while (i < ks.length) {
+      let v = sn_map_get(this.inner, ks[i]);
+      if (v != null) {
+        let value: string = v;
+        sn_array_push(result, value);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
+
+  entries(): string[] {
+    let ks = sn_map_keys(this.inner);
+    let result: string[] = [];
+    let i: i32 = 0;
+    while (i < ks.length) {
+      let k = ks[i];
+      let v = sn_map_get(this.inner, k);
+      if (v != null) {
+        let value: string = v;
+        sn_array_push(result, k + "=" + value);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
+
+  size(): i32 {
+    return sn_map_size(this.inner);
+  }
+
+  clear(): void {
+    sn_map_clear(this.inner);
+  }
+}
+
+export class Deque<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  pushBack(value: T): void {
+    sn_array_push(this.items, value);
+  }
+
+  pushFront(value: T): void {
+    let next: T[] = [];
+    sn_array_push(next, value);
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      sn_array_push(next, this.items[i]);
+      i = i + 1;
+    }
+    this.items = next;
+  }
+
+  popBack(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    return sn_array_pop(this.items);
+  }
+
+  popFront(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    let value = this.items[0];
+    let next: T[] = [];
+    let i: i32 = 1;
+    while (i < this.items.length) {
+      sn_array_push(next, this.items[i]);
+      i = i + 1;
+    }
+    this.items = next;
+    return value;
+  }
+
+  peekFront(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    return this.items[0];
+  }
+
+  peekBack(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    return this.items[this.items.length - 1];
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
   }
 }

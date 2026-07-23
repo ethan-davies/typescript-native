@@ -86,6 +86,27 @@ char *sn_str_trim(const char *s) {
   return buf;
 }
 
+char *sn_str_trim_start(const char *s) {
+  const char *start = s;
+  while (*start != '\0' && is_ascii_space((unsigned char)*start)) {
+    start += 1;
+  }
+  return sn_str_concat(start, "");
+}
+
+char *sn_str_trim_end(const char *s) {
+  const char *end = s + strlen(s);
+  while (end > s && is_ascii_space((unsigned char)end[-1])) {
+    end -= 1;
+  }
+  size_t n = (size_t)(end - s);
+  char *buf = sn_alloc((int64_t)n + 1);
+  memcpy(buf, s, n);
+  buf[n] = '\0';
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
+  return buf;
+}
+
 char *sn_str_to_upper(const char *s) {
   size_t n = strlen(s);
   char *buf = sn_alloc((int64_t)n + 1);
@@ -124,6 +145,49 @@ char *sn_str_replace(const char *s, const char *from, const char *to) {
   memcpy(buf, s, prefix_len);
   memcpy(buf + prefix_len, to, to_len);
   memcpy(buf + prefix_len + to_len, found + from_len, suffix_len + 1);
+  sn_gc_set_type(buf, SN_TYPEID_STRING);
+  return buf;
+}
+
+char *sn_str_replace_all(const char *s, const char *from, const char *to) {
+  if (from[0] == '\0') {
+    return sn_str_concat(s, "");
+  }
+  size_t from_len = strlen(from);
+  size_t to_len = strlen(to);
+  size_t count = 0;
+  const char *cursor = s;
+  while (true) {
+    const char *found = strstr(cursor, from);
+    if (found == NULL) {
+      break;
+    }
+    count += 1;
+    cursor = found + from_len;
+  }
+  if (count == 0) {
+    return sn_str_concat(s, "");
+  }
+  size_t s_len = strlen(s);
+  size_t total = s_len + count * (to_len - from_len);
+  char *buf = sn_alloc((int64_t)total + 1);
+  char *out = buf;
+  cursor = s;
+  while (true) {
+    const char *found = strstr(cursor, from);
+    if (found == NULL) {
+      size_t rest = strlen(cursor);
+      memcpy(out, cursor, rest);
+      out[rest] = '\0';
+      break;
+    }
+    size_t prefix_len = (size_t)(found - cursor);
+    memcpy(out, cursor, prefix_len);
+    out += prefix_len;
+    memcpy(out, to, to_len);
+    out += to_len;
+    cursor = found + from_len;
+  }
   sn_gc_set_type(buf, SN_TYPEID_STRING);
   return buf;
 }

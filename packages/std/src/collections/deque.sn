@@ -1,0 +1,73 @@
+extern function sn_array_push<T>(arr: T[], value: T): void;
+extern function sn_array_pop<T>(arr: T[]): T;
+
+export class Deque<T> {
+  private items: T[];
+
+  constructor() {
+    this.items = [];
+  }
+
+  pushBack(value: T): void {
+    sn_array_push(this.items, value);
+  }
+
+  pushFront(value: T): void {
+    let next: T[] = [];
+    sn_array_push(next, value);
+    let i: i32 = 0;
+    while (i < this.items.length) {
+      sn_array_push(next, this.items[i]);
+      i = i + 1;
+    }
+    this.items = next;
+  }
+
+  popBack(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    return sn_array_pop(this.items);
+  }
+
+  popFront(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    let value = this.items[0];
+    let next: T[] = [];
+    let i: i32 = 1;
+    while (i < this.items.length) {
+      sn_array_push(next, this.items[i]);
+      i = i + 1;
+    }
+    this.items = next;
+    return value;
+  }
+
+  peekFront(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    return this.items[0];
+  }
+
+  peekBack(): T {
+    if (this.items.length == 0) {
+      throw new Error("Deque is empty");
+    }
+    return this.items[this.items.length - 1];
+  }
+
+  size(): i32 {
+    return this.items.length;
+  }
+
+  isEmpty(): bool {
+    return this.items.length == 0;
+  }
+
+  clear(): void {
+    this.items = [];
+  }
+}

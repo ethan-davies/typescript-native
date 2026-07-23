@@ -1,5 +1,15 @@
-// Polymorphic multi-arg `print` is a compiler intrinsic, available everywhere
-// through the prelude — no import and no wrapper required.
-//
-// This module is reserved for future I/O that is not globally ambient, e.g.
-// readLine, stdin / stdout / stderr handles.
+extern function sn_read_line(): string;
+extern function sn_print_str(value: string): void;
+extern function sn_eprint_str(value: string): void;
+
+export function readLine(): string {
+  return sn_read_line();
+}
+
+export function write(text: string): void {
+  sn_print_str(text);
+}
+
+export function writeError(text: string): void {
+  sn_eprint_str(text);
+}

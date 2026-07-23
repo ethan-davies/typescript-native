@@ -1,0 +1,80 @@
+extern function sn_map_new(): { [key: string]: string | null };
+extern function sn_map_set(map: { [key: string]: string | null }, key: string, val: string): void;
+extern function sn_map_get(map: { [key: string]: string | null }, key: string): string | null;
+extern function sn_map_remove(map: { [key: string]: string | null }, key: string): bool;
+extern function sn_map_contains(map: { [key: string]: string | null }, key: string): bool;
+extern function sn_map_size(map: { [key: string]: string | null }): i32;
+extern function sn_map_clear(map: { [key: string]: string | null }): void;
+extern function sn_map_keys(map: { [key: string]: string | null }): string[];
+extern function sn_array_push<T>(arr: T[], value: T): void;
+
+/**
+ * String-keyed map of string values.
+ * Language index-signature maps remain available via createMap().
+ */
+export class Map {
+  private inner: { [key: string]: string | null };
+
+  constructor() {
+    this.inner = sn_map_new();
+  }
+
+  set(key: string, value: string): void {
+    sn_map_set(this.inner, key, value);
+  }
+
+  get(key: string): string | null {
+    return sn_map_get(this.inner, key);
+  }
+
+  remove(key: string): bool {
+    return sn_map_remove(this.inner, key);
+  }
+
+  containsKey(key: string): bool {
+    return sn_map_contains(this.inner, key);
+  }
+
+  keys(): string[] {
+    return sn_map_keys(this.inner);
+  }
+
+  values(): string[] {
+    let ks = sn_map_keys(this.inner);
+    let result: string[] = [];
+    let i: i32 = 0;
+    while (i < ks.length) {
+      let v = sn_map_get(this.inner, ks[i]);
+      if (v != null) {
+        let value: string = v;
+        sn_array_push(result, value);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
+
+  entries(): string[] {
+    let ks = sn_map_keys(this.inner);
+    let result: string[] = [];
+    let i: i32 = 0;
+    while (i < ks.length) {
+      let k = ks[i];
+      let v = sn_map_get(this.inner, k);
+      if (v != null) {
+        let value: string = v;
+        sn_array_push(result, k + "=" + value);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
+
+  size(): i32 {
+    return sn_map_size(this.inner);
+  }
+
+  clear(): void {
+    sn_map_clear(this.inner);
+  }
+}
