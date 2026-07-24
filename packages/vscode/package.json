@@ -1,11 +1,16 @@
 {
   "name": "sonite-vscode",
   "displayName": "Sonite",
-  "description": "Language support for Sonite (.sn) — grammar, editor config, and language server",
-  "version": "0.0.0",
+  "description": "Language support for Sonite (.sn) — syntax highlighting, IntelliSense, and language server",
+  "version": "0.1.0",
   "license": "MIT",
   "author": "Ethan Davies",
   "publisher": "sonite",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#0F172A",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/ethan-davies/sonite.git",
@@ -20,12 +25,15 @@
     "node": ">=20"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Formatters",
+    "Linters"
   ],
   "keywords": [
     "sn",
     "sonite",
     "lsp",
+    "language-server",
     "textmate"
   ],
   "main": "./dist/extension.js",
@@ -69,26 +77,22 @@
       }
     ]
   },
-  "files": [
-    "LICENSE",
-    "dist",
-    "language-configuration.json",
-    "syntaxes",
-    "README.md"
-  ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node --check tests/grammar.test.mjs && node -e \"JSON.parse(require('fs').readFileSync('syntaxes/sn.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); console.log('ok')\"",
-    "clean": "rm -rf dist node_modules/.cache",
+    "build": "node scripts/bundle.mjs && node --check tests/grammar.test.mjs && node -e \"JSON.parse(require('fs').readFileSync('syntaxes/sn.tmLanguage.json','utf8')); JSON.parse(require('fs').readFileSync('language-configuration.json','utf8')); console.log('ok')\"",
+    "clean": "rm -rf dist stdlib node_modules/.cache *.vsix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test tests/grammar.test.mjs"
+    "test": "node --test tests/grammar.test.mjs",
+    "package": "pnpm run build && vsce package --no-dependencies",
+    "vscode:prepublish": "pnpm run build"
   },
   "dependencies": {
-    "@sonite/lsp": "workspace:*",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.12",
     "typescript": "^5.8.3",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.2.0"

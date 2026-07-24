@@ -4,98 +4,98 @@
 
 ### Native compiler toolchain
 
-* [ ] LLVM version pinned
-* [ ] LLVM C API binding production-ready
-* [ ] LLVM object emission through `TargetMachine`
-* [ ] LLD integration
-* [ ] No `clang` subprocess
-* [ ] No `llc` subprocess
-* [ ] No `ld.lld` subprocess
-* [ ] No system LLVM requirement
-* [ ] No system Clang requirement
-* [ ] No system LLD requirement
-* [ ] Native LLVM libraries bundled
-* [ ] Native LLD libraries bundled
-* [ ] Native library loading works without environment configuration
-* [ ] Reproducible native toolchain builds
-* [ ] Platform detection
-* [ ] Correct target triples
-* [ ] Correct object formats
-* [ ] Correct ABI configuration
-* [ ] Correct system library linking
+* [x] LLVM version pinned
+* [x] LLVM C API binding production-ready
+* [x] LLVM object emission through `TargetMachine`
+* [x] LLD integration
+* [x] No `clang` subprocess
+* [x] No `llc` subprocess
+* [x] No `ld.lld` subprocess
+* [x] No system LLVM requirement
+* [x] No system Clang requirement
+* [x] No system LLD requirement
+* [x] Native LLVM libraries bundled
+* [x] Native LLD libraries bundled
+* [x] Native library loading works without environment configuration
+* [x] Reproducible native toolchain builds
+* [x] Platform detection
+* [x] Correct target triples
+* [x] Correct object formats
+* [x] Correct ABI configuration
+* [x] Correct system library linking
 
 ### Supported targets
 
-* [ ] Linux x64
-* [ ] Linux ARM64
-* [ ] macOS x64
-* [ ] macOS ARM64
-* [ ] Windows x64
-* [ ] Windows ARM64 explicitly deferred
+* [x] Linux x64
+* [x] Linux ARM64
+* [x] macOS x64
+* [x] macOS ARM64
+* [x] Windows x64
+* [x] Windows ARM64 explicitly deferred
 
 ### Native packages
 
-* [ ] `@sonite/llvm-linux-x64`
-* [ ] `@sonite/llvm-linux-arm64`
-* [ ] `@sonite/llvm-macos-x64`
-* [ ] `@sonite/llvm-macos-arm64`
-* [ ] `@sonite/llvm-win32-x64`
-* [ ] Automatic platform package selection
-* [ ] Unsupported platform diagnostics
+* [x] `@sonite/llvm-linux-x64`
+* [x] `@sonite/llvm-linux-arm64`
+* [x] `@sonite/llvm-macos-x64`
+* [x] `@sonite/llvm-macos-arm64`
+* [x] `@sonite/llvm-win32-x64`
+* [x] Automatic platform package selection
+* [x] Unsupported platform diagnostics
 
 ### Runtime
 
-* [ ] Linux x64 runtime
-* [ ] Linux ARM64 runtime
-* [ ] macOS x64 runtime
-* [ ] macOS ARM64 runtime
-* [ ] Windows x64 runtime
-* [ ] Cross-platform runtime ABI
-* [ ] Memory management
-* [ ] Garbage collection
-* [ ] Exceptions
-* [ ] Strings
-* [ ] Arrays
-* [ ] Console I/O
-* [ ] Template-string formatting
-* [ ] Async/await
-* [ ] Async I/O
-* [ ] Byte streams
-* [ ] Filesystem
-* [ ] Paths
-* [ ] TCP
-* [ ] UDP
-* [ ] DNS
-* [ ] TLS
-* [ ] HTTP
-* [ ] HTTPS
+* [x] Linux x64 runtime
+* [x] Linux ARM64 runtime
+* [x] macOS x64 runtime
+* [x] macOS ARM64 runtime
+* [x] Windows x64 runtime
+* [x] Cross-platform runtime ABI
+* [x] Memory management
+* [x] Garbage collection
+* [x] Exceptions
+* [x] Strings
+* [x] Arrays
+* [x] Console I/O
+* [x] Template-string formatting
+* [x] Async/await
+* [x] Async I/O
+* [x] Byte streams
+* [x] Filesystem
+* [x] Paths
+* [x] TCP
+* [x] UDP
+* [x] DNS
+* [x] TLS
+* [x] HTTP
+* [x] HTTPS
 
 ### Standard library
 
-* [ ] Cross-platform strings
-* [ ] Cross-platform collections
-* [ ] Cross-platform math
-* [ ] Cross-platform filesystem
-* [ ] Cross-platform paths
-* [ ] Cross-platform networking
-* [ ] Cross-platform TLS
-* [ ] Cross-platform HTTP
-* [ ] Cross-platform HTTPS
-* [ ] Platform detection
-* [ ] Consistent error types
-* [ ] Consistent API semantics
+* [x] Cross-platform strings
+* [x] Cross-platform collections
+* [x] Cross-platform math
+* [x] Cross-platform filesystem
+* [x] Cross-platform paths
+* [x] Cross-platform networking
+* [x] Cross-platform TLS
+* [x] Cross-platform HTTP
+* [x] Cross-platform HTTPS
+* [x] Platform detection
+* [x] Consistent error types
+* [x] Consistent API semantics
 
 ### Cross-platform validation
 
-* [ ] All core language features compile on every target
-* [ ] All runtime functionality works on every target
-* [ ] All stdlib functionality works on every target
-* [ ] Async client/server round-trip on every target
-* [ ] HTTPS round-trip on every target
-* [ ] Clean-machine installation tests
-* [ ] No-system-LLVM tests
-* [ ] Native dependency inspection
-* [ ] Full cross-platform CI
+* [x] All core language features compile on every target
+* [x] All runtime functionality works on every target
+* [x] All stdlib functionality works on every target
+* [x] Async client/server round-trip on every target
+* [x] HTTPS round-trip on every target
+* [x] Clean-machine installation tests
+* [x] No-system-LLVM tests
+* [x] Native dependency inspection
+* [x] Full cross-platform CI
 
 ---
 
@@ -115,46 +115,46 @@ You already have a substantial amount of this implemented, so this phase is abou
 
 ### Complete
 
-* [ ] Go-to-references fully production-ready
-* [ ] Rename symbol
-* [ ] Signature help
-* [ ] Code actions
-* [ ] Auto-import fully production-ready
-* [ ] Semantic tokens
-* [ ] Unused-import diagnostics
-* [ ] Remove unused import action
-* [ ] Organize imports
-* [ ] Add missing import action
-* [ ] Correct import insertion
-* [ ] Correct import removal
-* [ ] Correct import sorting
+* [x] Go-to-references fully production-ready
+* [x] Rename symbol
+* [x] Signature help
+* [x] Code actions
+* [x] Auto-import fully production-ready
+* [x] Semantic tokens
+* [x] Unused-import diagnostics
+* [x] Remove unused import action
+* [x] Organize imports
+* [x] Add missing import action
+* [x] Correct import insertion
+* [x] Correct import removal
+* [x] Correct import sorting
 
 ### Language server robustness
 
-* [ ] Incremental document updates
-* [ ] Correct diagnostics after edits
-* [ ] Correct diagnostics after imports change
-* [ ] Workspace-aware module resolution
-* [ ] Multi-file project analysis
-* [ ] Dependency/package analysis
-* [ ] Large-project performance
-* [ ] Cancellation support
-* [ ] Graceful compiler failures
-* [ ] No LSP crashes on invalid code
+* [x] Incremental document updates
+* [x] Correct diagnostics after edits
+* [x] Correct diagnostics after imports change
+* [x] Workspace-aware module resolution
+* [x] Multi-file project analysis
+* [x] Dependency/package analysis
+* [x] Large-project performance
+* [x] Cancellation support
+* [x] Graceful compiler failures
+* [x] No LSP crashes on invalid code
 
 ### VS Code extension
 
-* [ ] Syntax highlighting
-* [ ] LSP integration
-* [ ] Semantic tokens
-* [ ] Completion UI
-* [ ] Diagnostics UI
-* [ ] Code actions
-* [ ] Formatting integration
-* [ ] Rename integration
-* [ ] Signature help
-* [ ] Auto-import
-* [ ] Marketplace-ready packaging
+* [x] Syntax highlighting
+* [x] LSP integration
+* [x] Semantic tokens
+* [x] Completion UI
+* [x] Diagnostics UI
+* [x] Code actions
+* [x] Formatting integration
+* [x] Rename integration
+* [x] Signature help
+* [x] Auto-import
+* [x] Marketplace-ready packaging
 
 ---
 
@@ -164,44 +164,44 @@ This should be a dedicated milestone because a formatter becomes important once 
 
 ### Formatter
 
-* [ ] Formatter implementation
-* [ ] Parse source
-* [ ] Format AST
-* [ ] Preserve comments
-* [ ] Preserve string contents
-* [ ] Stable output
-* [ ] Idempotent formatting
-* [ ] Configurable indentation
-* [ ] Configurable line width
-* [ ] Import formatting
-* [ ] Import ordering
-* [ ] Multiline formatting
-* [ ] Function formatting
-* [ ] Type formatting
-* [ ] Generic formatting
-* [ ] Struct/class formatting
-* [ ] Interface formatting
-* [ ] Async/await formatting
+* [x] Formatter implementation
+* [x] Parse source
+* [x] Format AST
+* [x] Preserve comments
+* [x] Preserve string contents
+* [x] Stable output
+* [x] Idempotent formatting
+* [x] Configurable indentation
+* [x] Configurable line width
+* [x] Import formatting
+* [x] Import ordering
+* [x] Multiline formatting
+* [x] Function formatting
+* [x] Type formatting
+* [x] Generic formatting
+* [x] Struct/class formatting
+* [x] Interface formatting
+* [x] Async/await formatting
 * [ ] Error recovery on incomplete source
 
 ### CLI
 
-* [ ] `sn fmt`
-* [ ] `sn fmt --check`
-* [ ] Format individual files
-* [ ] Format entire projects
+* [x] `sn fmt`
+* [x] `sn fmt --check`
+* [x] Format individual files
+* [x] Format entire projects
 * [ ] Format only changed files where practical
-* [ ] CI-friendly exit codes
+* [x] CI-friendly exit codes
 
 ### LSP
 
-* [ ] Document formatting
-* [ ] Format on save
+* [x] Document formatting
+* [x] Format on save
 * [ ] Range formatting if practical
 
 ### Code quality
 
-* [ ] Compiler warnings framework
+* [x] Compiler warnings framework
 * [ ] Unused-variable diagnostics
 * [ ] Unreachable-code diagnostics
 * [ ] Other useful static diagnostics
@@ -219,28 +219,28 @@ Before adding major new features, make the language you already have reliable.
 * [ ] Scanner edge cases
 * [ ] Typechecker edge cases
 * [ ] Generic typechecking edge cases
-* [ ] Generic inference correctness
-* [ ] Interface checking
-* [ ] Async typechecking
-* [ ] Exception checking
-* [ ] Module resolution
-* [ ] Circular dependency handling
-* [ ] Import/export correctness
-* [ ] Closure correctness
-* [ ] Lambda correctness
+* [x] Generic inference correctness
+* [x] Interface checking
+* [x] Async typechecking
+* [x] Exception checking
+* [x] Module resolution
+* [x] Circular dependency handling
+* [x] Import/export correctness
+* [x] Closure correctness
+* [x] Lambda correctness
 * [ ] Function overload/dispatch correctness if applicable
 
 ### Code generation
 
-* [ ] Correct LLVM IR generation
-* [ ] Correct ABI lowering
-* [ ] Correct struct layout
-* [ ] Correct array layout
-* [ ] Correct string representation
-* [ ] Correct closure representation
-* [ ] Correct generic monomorphisation/code generation
-* [ ] Correct async state-machine generation
-* [ ] Correct exception handling
+* [x] Correct LLVM IR generation
+* [x] Correct ABI lowering
+* [x] Correct struct layout
+* [x] Correct array layout
+* [x] Correct string representation
+* [x] Correct closure representation
+* [x] Correct generic monomorphisation/code generation
+* [x] Correct async state-machine generation
+* [x] Correct exception handling
 * [ ] Correct debug location generation
 
 ### Runtime correctness
@@ -260,10 +260,10 @@ Before adding major new features, make the language you already have reliable.
 ### Compiler stability
 
 * [ ] Compiler never crashes on normal invalid input
-* [ ] Structured compiler diagnostics
-* [ ] Source spans on all major errors
-* [ ] Error codes
-* [ ] Helpful error messages
+* [x] Structured compiler diagnostics
+* [x] Source spans on all major errors
+* [x] Error codes
+* [x] Helpful error messages
 * [ ] Suggestions where practical
 * [ ] Panic/crash reporting for compiler bugs
 
@@ -275,9 +275,9 @@ This is where `extern` evolves from primarily being an internal runtime mechanis
 
 ### FFI language features
 
-* [ ] Public `extern` declarations
-* [ ] C ABI support
-* [ ] External functions
+* [x] Public `extern` declarations
+* [x] C ABI support
+* [x] External functions
 * [ ] External variables if needed
 * [ ] External structs
 * [ ] Native pointers
@@ -285,7 +285,7 @@ This is where `extern` evolves from primarily being an internal runtime mechanis
 * [ ] Native arrays/buffers
 * [ ] Native callbacks
 * [ ] Function pointers
-* [ ] C-compatible primitive types
+* [x] C-compatible primitive types
 * [ ] C-compatible struct layout
 * [ ] ABI annotations
 * [ ] `unsafe` boundary if required
@@ -353,13 +353,13 @@ This phase is about making the ecosystem production-ready.
 
 ### Dependency management
 
-* [ ] Lockfile implementation
-* [ ] Deterministic dependency resolution
-* [ ] Transitive dependencies
-* [ ] Semantic version constraints
-* [ ] Version conflict resolution
-* [ ] Dependency updates
-* [ ] Dependency removal
+* [x] Lockfile implementation
+* [x] Deterministic dependency resolution
+* [x] Transitive dependencies
+* [x] Semantic version constraints
+* [x] Version conflict resolution
+* [x] Dependency updates
+* [x] Dependency removal
 * [ ] Dependency overrides
 * [ ] Local/path dependencies
 * [ ] Git dependencies if desired
@@ -369,64 +369,64 @@ This phase is about making the ecosystem production-ready.
 
 Ensure the package system has:
 
-* [ ] `sn init`
-* [ ] `sn add`
-* [ ] `sn remove`
-* [ ] `sn install`
-* [ ] `sn update`
-* [ ] `sn publish`
-* [ ] `sn search`
-* [ ] `sn info`
-* [ ] `sn login`
-* [ ] `sn logout`
-* [ ] `sn build`
-* [ ] `sn run`
+* [x] `sn init`
+* [x] `sn add`
+* [x] `sn remove`
+* [x] `sn install`
+* [x] `sn update`
+* [x] `sn publish`
+* [x] `sn search`
+* [x] `sn info`
+* [x] `sn login`
+* [x] `sn logout`
+* [x] `sn build`
+* [x] `sn run`
 
 ### Lockfiles
 
-* [ ] Lockfile format
-* [ ] Dependency versions
-* [ ] Resolved package URLs
-* [ ] Integrity hashes
-* [ ] Transitive dependency information
+* [x] Lockfile format
+* [x] Dependency versions
+* [x] Resolved package URLs
+* [x] Integrity hashes
+* [x] Transitive dependency information
 * [ ] Platform-specific dependency information
-* [ ] Reproducible installs
-* [ ] Lockfile validation
+* [x] Reproducible installs
+* [x] Lockfile validation
 
 ### Registry
 
-* [ ] Package publishing
-* [ ] Package downloading
-* [ ] Package metadata
-* [ ] Version management
+* [x] Package publishing
+* [x] Package downloading
+* [x] Package metadata
+* [x] Version management
 * [ ] Package ownership
-* [ ] Authentication
+* [x] Authentication
 * [ ] Package deletion policy
 * [ ] Deprecation
-* [ ] Package search
+* [x] Package search
 * [ ] Package documentation
 * [ ] Download statistics
 * [ ] Abuse/security controls
 
 ### Package security
 
-* [ ] Tarball integrity verification
-* [ ] Checksums
-* [ ] Registry HTTPS
-* [ ] Authentication tokens
-* [ ] Secure credential storage
+* [x] Tarball integrity verification
+* [x] Checksums
+* [x] Registry HTTPS
+* [x] Authentication tokens
+* [x] Secure credential storage
 * [ ] Dependency provenance where practical
 
 ### Project management
 
-* [ ] Project configuration validation
+* [x] Project configuration validation
 * [ ] Build profiles
-* [ ] Debug build
-* [ ] Release build
+* [x] Debug build
+* [x] Release build
 * [ ] Optimisation levels
-* [ ] Project metadata
-* [ ] Entry point configuration
-* [ ] Build output configuration
+* [x] Project metadata
+* [x] Entry point configuration
+* [x] Build output configuration
 
 ### Workspaces
 
@@ -453,8 +453,8 @@ This is the final major development phase before release.
 * [ ] Function names
 * [ ] Local variable information
 * [ ] Type information where practical
-* [ ] Debug builds
-* [ ] Release builds
+* [x] Debug builds
+* [x] Release builds
 
 ### Runtime diagnostics
 
@@ -554,20 +554,20 @@ I would add this as a final phase **after Phase 7**. This is not a new feature p
 
 Finalise and document:
 
-* [ ] `sn init`
-* [ ] `sn build`
-* [ ] `sn run`
-* [ ] `sn fmt`
-* [ ] `sn fmt --check`
-* [ ] `sn add`
-* [ ] `sn remove`
-* [ ] `sn install`
-* [ ] `sn update`
-* [ ] `sn publish`
-* [ ] `sn search`
-* [ ] `sn info`
-* [ ] `sn login`
-* [ ] `sn logout`
+* [x] `sn init`
+* [x] `sn build`
+* [x] `sn run`
+* [x] `sn fmt`
+* [x] `sn fmt --check`
+* [x] `sn add`
+* [x] `sn remove`
+* [x] `sn install`
+* [x] `sn update`
+* [x] `sn publish`
+* [x] `sn search`
+* [x] `sn info`
+* [x] `sn login`
+* [x] `sn logout`
 
 Remove or clearly mark experimental commands.
 
@@ -577,9 +577,9 @@ Remove or clearly mark experimental commands.
 * [ ] Linux installation tested
 * [ ] macOS installation tested
 * [ ] Windows installation tested
-* [ ] Clean-machine installation
-* [ ] No system LLVM requirement
-* [ ] Native packages automatically selected
+* [x] Clean-machine installation
+* [x] No system LLVM requirement
+* [x] Native packages automatically selected
 * [ ] CLI available after installation
 * [ ] Uninstall process verified
 
@@ -610,14 +610,14 @@ Create:
 
 Create official examples for:
 
-* [ ] Hello World
+* [x] Hello World
 * [ ] CLI application
-* [ ] Filesystem application
-* [ ] Async application
-* [ ] TCP server
-* [ ] HTTP server
-* [ ] HTTPS server
-* [ ] HTTP client
+* [x] Filesystem application
+* [x] Async application
+* [x] TCP server
+* [x] HTTP server
+* [x] HTTPS server
+* [x] HTTP client
 * [ ] Package usage
 * [ ] Package creation
 * [ ] FFI example
@@ -625,19 +625,19 @@ Create official examples for:
 
 ## Testing
 
-* [ ] Full compiler test suite
-* [ ] Full runtime test suite
-* [ ] Full stdlib test suite
+* [x] Full compiler test suite
+* [x] Full runtime test suite
+* [x] Full stdlib test suite
 * [ ] Full LSP test suite
-* [ ] Formatter tests
-* [ ] Package manager tests
+* [x] Formatter tests
+* [x] Package manager tests
 * [ ] Registry tests
 * [ ] FFI tests
 * [ ] Debugger tests
-* [ ] Cross-platform CI
-* [ ] Clean-machine tests
-* [ ] End-to-end tests
-* [ ] Regression test suite
+* [x] Cross-platform CI
+* [x] Clean-machine tests
+* [x] End-to-end tests
+* [x] Regression test suite
 
 ## Performance
 
@@ -653,10 +653,10 @@ Establish baseline metrics before v1.0.
 
 ## Security
 
-* [ ] Registry HTTPS
-* [ ] Package integrity checks
-* [ ] Lockfile integrity
-* [ ] Secure authentication
+* [x] Registry HTTPS
+* [x] Package integrity checks
+* [x] Lockfile integrity
+* [x] Secure authentication
 * [ ] FFI security documentation
 * [ ] Native dependency security review
 * [ ] Dependency vulnerability policy

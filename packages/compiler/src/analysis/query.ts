@@ -273,11 +273,23 @@ export function referencesAt(
   offset: number,
   options: { includeDeclaration?: boolean } = {},
 ): SemanticLocation[] {
-  const includeDeclaration = options.includeDeclaration !== false;
   const def = definitionAt(model, file, offset);
   if (!def) {
     return [];
   }
+  return referencesForDefinition(model, def, options);
+}
+
+/**
+ * Find all references to a known definition location within a semantic model.
+ * Used for workspace-wide reference aggregation across multiple entry analyses.
+ */
+export function referencesForDefinition(
+  model: SemanticModel,
+  def: SemanticLocation,
+  options: { includeDeclaration?: boolean } = {},
+): SemanticLocation[] {
+  const includeDeclaration = options.includeDeclaration !== false;
   const defKey = `${def.file}:${def.span.start.offset}`;
   const results: SemanticLocation[] = [];
   const seen = new Set<string>();
@@ -296,7 +308,6 @@ export function referencesAt(
       if (!useFile || useOff === undefined || seen.has(useKey)) {
         continue;
       }
-      // Skip the declaration site itself when includeDeclaration is false.
       if (
         !includeDeclaration &&
         useFile === def.file &&
@@ -344,6 +355,30 @@ export function referencesAt(
     }
   }
 
+  return results;
+}
+
+/**
+ * Union references to the same definition across multiple semantic models
+ * (e.g. each importer analyzed as an entry point).
+ */
+export function mergeReferences(
+  models: readonly SemanticModel[],
+  def: SemanticLocation,
+  options: { includeDeclaration?: boolean } = {},
+): SemanticLocation[] {
+  const seen = new Set<string>();
+  const results: SemanticLocation[] = [];
+  for (const model of models) {
+    for (const loc of referencesForDefinition(model, def, options)) {
+      const key = `${loc.file}:${loc.span.start.offset}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      results.push(loc);
+    }
+  }
   return results;
 }
 
@@ -516,16 +551,28 @@ export function completionsAt(
         alreadyImported.add(binding.exportName);
       }
     }
+    const autoSeen = new Set<string>();
     for (const entry of options.exportIndex) {
-      if (seen.has(entry.name) || alreadyImported.has(entry.name)) {
+      if (alreadyImported.has(entry.name)) {
         continue;
       }
       if (entry.modulePath === file) {
         continue;
       }
-      add({
+      // Allow multiple modules exporting the same name; dedupe by name+specifier.
+      const autoKey = `${entry.name}\0${entry.moduleSpecifier}`;
+      if (autoSeen.has(autoKey)) {
+        continue;
+      }
+      // Skip when an in-scope non-auto-import binding already owns the name.
+      // (Auto-import items are not added to `seen`, so multiple sources remain.)
+      if (seen.has(entry.name)) {
+        continue;
+      }
+      autoSeen.add(autoKey);
+      items.push({
         name: entry.name,
-        detail: `Auto import from "${entry.moduleSpecifier}"`,
+        detail: `Add import from "${entry.moduleSpecifier}"`,
         kind: entry.kind,
         autoImport: {
           moduleSpecifier: entry.moduleSpecifier,

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import {
   analyzeFile,
   buildExportIndex,
+  buildImportGraph,
   codeActionsAt,
   completionsAt,
   computeNamedImportEdit,
@@ -10,6 +11,8 @@ import {
   documentSymbolsForFile,
   encodeSemanticTokens,
   hoverAt,
+  listWorkspaceSnFiles,
+  mergeReferences,
   offsetToPosition,
   prepareRenameAt,
   referencesAt,
@@ -202,7 +205,7 @@ function autoImportTextEdits(
   semantic: SemanticModel,
   filePath: string,
   item: ScopeBindingInfo,
-): TextEdit[] | undefined {
+): { edits: TextEdit[]; localName: string } | undefined {
   if (!item.autoImport) {
     return undefined;
   }
@@ -218,12 +221,15 @@ function autoImportTextEdits(
   }
   const start = offsetToPosition(source, edit.startOffset);
   const end = offsetToPosition(source, edit.endOffset);
-  return [
-    {
-      range: { start, end },
-      newText: edit.newText,
-    },
-  ];
+  return {
+    localName: edit.localName ?? item.autoImport.exportName,
+    edits: [
+      {
+        range: { start, end },
+        newText: edit.newText,
+      },
+    ],
+  };
 }
 
 export function toCompletionItems(
@@ -256,12 +262,41 @@ export function toCompletionItems(
       module: "6",
     };
     const autoRank = item.autoImport ? "1" : "0";
+    let insertName = item.autoImport?.localName ?? item.name;
+    let label = item.name;
+    let detail = item.detail;
+    let additionalTextEdits: TextEdit[] | undefined;
+
+    if (
+      item.autoImport &&
+      options?.source &&
+      options.semantic &&
+      options.filePath
+    ) {
+      const computed = autoImportTextEdits(
+        options.source,
+        options.semantic,
+        options.filePath,
+        item,
+      );
+      if (computed && computed.edits.length > 0) {
+        additionalTextEdits = computed.edits;
+        insertName = computed.localName;
+        if (computed.localName !== item.autoImport.exportName) {
+          label = `${item.name} as ${computed.localName}`;
+        }
+        detail = `Add import from "${item.autoImport.moduleSpecifier}"`;
+      } else {
+        detail = `Add import from "${item.autoImport.moduleSpecifier}"`;
+      }
+    }
+
     const completion: CompletionItem = {
-      label: item.name,
+      label,
       kind: completionKind(item.kind),
-      detail: item.detail,
-      insertText: item.name,
-      sortText: `${kindRank[item.kind] ?? "9"}${autoRank}_${item.name.length.toString().padStart(3, "0")}_${index.toString().padStart(4, "0")}_${item.name}`,
+      detail,
+      insertText: insertName,
+      sortText: `${kindRank[item.kind] ?? "9"}${autoRank}_${item.name.length.toString().padStart(3, "0")}_${index.toString().padStart(4, "0")}_${item.autoImport?.moduleSpecifier ?? item.name}`,
     };
     if (prefix && position) {
       completion.textEdit = {
@@ -272,24 +307,11 @@ export function toCompletionItems(
           },
           end: position,
         },
-        newText: item.name,
+        newText: insertName,
       };
     }
-    if (
-      item.autoImport &&
-      options?.source &&
-      options.semantic &&
-      options.filePath
-    ) {
-      const edits = autoImportTextEdits(
-        options.source,
-        options.semantic,
-        options.filePath,
-        item,
-      );
-      if (edits && edits.length > 0) {
-        completion.additionalTextEdits = edits;
-      }
+    if (additionalTextEdits) {
+      completion.additionalTextEdits = additionalTextEdits;
     }
     return completion;
   });
@@ -366,6 +388,32 @@ export function referencesAtPosition(
   }));
 }
 
+/**
+ * Collect references across the current model plus extra entry analyses
+ * (typically importers of the definition file).
+ */
+export function workspaceReferencesAtPosition(
+  primary: SemanticModel,
+  extraModels: readonly SemanticModel[],
+  filePath: string,
+  source: string,
+  position: Position,
+  includeDeclaration = true,
+): Location[] {
+  const offset = positionToOffset(source, position);
+  const def = definitionAt(primary, filePath, offset);
+  if (!def) {
+    return [];
+  }
+  const locs = mergeReferences([primary, ...extraModels], def, {
+    includeDeclaration,
+  });
+  return locs.map((loc: SemanticLocation) => ({
+    uri: pathToUri(loc.file),
+    range: spanToRange(loc.span),
+  }));
+}
+
 export function completionsAtPosition(
   semantic: SemanticModel,
   filePath: string,
@@ -430,9 +478,10 @@ export function renameAtPosition(
   source: string,
   position: Position,
   newName: string,
+  extraModels: readonly SemanticModel[] = [],
 ): WorkspaceEdit | ResponseError {
   const offset = positionToOffset(source, position);
-  const result = renameAt(semantic, filePath, offset, newName);
+  const result = renameAt(semantic, filePath, offset, newName, extraModels);
   if (result.error) {
     return new ResponseError(1, result.error);
   }
@@ -584,4 +633,59 @@ export function collectReverseDeps(
     }
   }
   return reverse;
+}
+
+/**
+ * Replace reverse-dep edges contributed by analyzing `entryPath`.
+ */
+export function replaceReverseDepsForResult(
+  reverseDeps: Map<string, Set<string>>,
+  result: AnalyzeResult,
+  entryPath: string,
+): void {
+  for (const [, importers] of reverseDeps) {
+    importers.delete(entryPath);
+  }
+  const fresh = collectReverseDeps(result);
+  for (const [imported, importers] of fresh) {
+    const set = reverseDeps.get(imported) ?? new Set();
+    for (const importer of importers) {
+      set.add(importer);
+    }
+    reverseDeps.set(imported, set);
+  }
+  for (const [imported, importers] of [...reverseDeps.entries()]) {
+    if (importers.size === 0) {
+      reverseDeps.delete(imported);
+    }
+  }
+}
+
+export function buildWorkspaceImportGraph(
+  workspaceRoots: readonly string[],
+  overlay: WorkspaceOverlay,
+  isCancelled?: () => boolean,
+): Map<string, Set<string>> {
+  const options: {
+    workspaceRoots: readonly string[];
+    readFile: (absolutePath: string) => string;
+    isCancelled?: () => boolean;
+  } = {
+    workspaceRoots,
+    readFile: (absolutePath: string) => {
+      const open = overlay.getDocument(absolutePath);
+      if (open !== undefined) {
+        return open;
+      }
+      return readFileSync(absolutePath, "utf8");
+    },
+  };
+  if (isCancelled) {
+    options.isCancelled = isCancelled;
+  }
+  return buildImportGraph(options);
+}
+
+export function listWorkspaceFiles(workspaceRoots: readonly string[]): string[] {
+  return listWorkspaceSnFiles(workspaceRoots);
 }

@@ -2,7 +2,7 @@ import type { SourceSpan } from "../diagnostics/diagnostic.js";
 import {
   definitionAt,
   identifierSpanAt,
-  referencesAt,
+  mergeReferences,
 } from "./query.js";
 import type { SemanticLocation, SemanticModel } from "./semantic.js";
 
@@ -39,12 +39,16 @@ export function prepareRenameAt(
 /**
  * Compute workspace text edits to rename the symbol at `offset` to `newName`.
  * Returns an error when the new name would conflict in scope.
+ *
+ * When `extraModels` is provided, references are collected across all models
+ * (e.g. each importer analyzed as an entry) so cross-file renames find every use.
  */
 export function renameAt(
   model: SemanticModel,
   file: string,
   offset: number,
   newName: string,
+  extraModels: readonly SemanticModel[] = [],
 ): RenameResult {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) {
     return { edits: [], error: `Invalid identifier '${newName}'` };
@@ -65,7 +69,9 @@ export function renameAt(
     return { edits: [], error: conflict };
   }
 
-  const refs = referencesAt(model, file, offset, { includeDeclaration: true });
+  const models =
+    extraModels.length > 0 ? [model, ...extraModels] : [model];
+  const refs = mergeReferences(models, def, { includeDeclaration: true });
   const seen = new Set<string>();
   const edits: RenameTextEdit[] = [];
   for (const loc of refs) {

@@ -5,6 +5,8 @@ export interface ImportTextEdit {
   readonly startOffset: number;
   readonly endOffset: number;
   readonly newText: string;
+  /** Local name bound by this import (may be an alias). Set for add-import edits. */
+  readonly localName?: string;
 }
 
 export interface ComputeNamedImportEditOptions {
@@ -49,7 +51,8 @@ export function computeNamedImportEdit(
       if (already) {
         return null;
       }
-      return mergeIntoNamedImport(source, decl, specifierText);
+      const merged = mergeIntoNamedImport(source, decl, specifierText, localName);
+      return merged;
     }
   }
 
@@ -59,6 +62,7 @@ export function computeNamedImportEdit(
     startOffset: insertOffset,
     endOffset: insertOffset,
     newText: line,
+    localName,
   };
 }
 
@@ -113,6 +117,7 @@ function mergeIntoNamedImport(
   source: string,
   decl: ImportDeclaration,
   specifierText: string,
+  localName: string,
 ): ImportTextEdit | null {
   if (decl.clause.kind !== "NamedImports") {
     return null;
@@ -124,6 +129,7 @@ function mergeIntoNamedImport(
       startOffset: decl.span.start.offset,
       endOffset: decl.span.end.offset,
       newText,
+      localName,
     };
   }
 
@@ -133,6 +139,7 @@ function mergeIntoNamedImport(
     startOffset: insertAt,
     endOffset: insertAt,
     newText: `, ${specifierText}`,
+    localName,
   };
 }
 

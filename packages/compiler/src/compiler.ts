@@ -26,6 +26,10 @@ import { validateModules, validateModulesLoose } from "./validate.js";
 import { emptySemanticModel, type SemanticModel } from "./analysis/semantic.js";
 
 function discoverStdRoot(): string | null {
+  const fromEnv = process.env.SONITE_STD_ROOT;
+  if (fromEnv && existsSync(join(fromEnv, "prelude", "string.sn"))) {
+    return fromEnv;
+  }
   try {
     const require = createRequire(import.meta.url);
     const std = require("@sonite/std") as {
@@ -37,6 +41,9 @@ function discoverStdRoot(): string | null {
     const candidates = [
       join(here, "..", "..", "std", "src"),
       join(here, "..", "..", "..", "std", "src"),
+      // Bundled beside a packaged LSP server: dist/server.js → ../stdlib
+      join(here, "..", "stdlib"),
+      join(here, "stdlib"),
     ];
     for (const root of candidates) {
       if (existsSync(join(root, "prelude", "string.sn"))) {

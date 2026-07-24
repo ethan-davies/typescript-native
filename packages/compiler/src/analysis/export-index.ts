@@ -120,17 +120,25 @@ function collectExportsFromAst(
         name = decl.name.name;
         kind = "variable";
         break;
-      case "ExportNamedFromDeclaration":
+      case "ExportNamedFromDeclaration": {
+        const sourceKinds = resolveReexportKinds(
+          modulePath,
+          decl.source.value,
+          readFile,
+        );
         for (const spec of decl.specifiers) {
+          const imported = spec.importedName.name;
+          const exportedName = spec.exportName.name;
           out.push({
-            name: spec.exportName.name,
-            exportName: spec.exportName.name,
-            kind: "function",
+            name: exportedName,
+            exportName: exportedName,
+            kind: sourceKinds.get(imported) ?? "variable",
             moduleSpecifier,
             modulePath,
           });
         }
         continue;
+      }
       case "ExportAllFromDeclaration": {
         // Resolve and index the source module's exports under this specifier.
         try {
@@ -253,6 +261,81 @@ function packageSpecifierForPath(absolutePath: string): string | null {
     return `${name}/${rel}`;
   }
   return null;
+}
+
+function resolveReexportKinds(
+  fromModulePath: string,
+  sourceSpecifier: string,
+  readFile?: (absolutePath: string) => string,
+): Map<string, CompletionSymbolKind> {
+  const kinds = new Map<string, CompletionSymbolKind>();
+  try {
+    const resolved = resolveImportSpecifier(
+      dirname(fromModulePath),
+      sourceSpecifier,
+    );
+    if (!resolved) {
+      return kinds;
+    }
+    const source = readSource(resolved, readFile);
+    if (source === null) {
+      return kinds;
+    }
+    const ast = parseProgram(source, resolved);
+    if (!ast) {
+      return kinds;
+    }
+    for (const decl of ast.body) {
+      let name: string | null = null;
+      let kind: CompletionSymbolKind | null = null;
+      let exported = false;
+      switch (decl.kind) {
+        case "FunctionDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "function";
+          break;
+        case "StructDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "struct";
+          break;
+        case "ClassDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "class";
+          break;
+        case "InterfaceDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "interface";
+          break;
+        case "EnumDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "enum";
+          break;
+        case "TypeAliasDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "type";
+          break;
+        case "ModuleVariableDeclaration":
+          exported = decl.exported;
+          name = decl.name.name;
+          kind = "variable";
+          break;
+        default:
+          break;
+      }
+      if (exported && name && kind) {
+        kinds.set(name, kind);
+      }
+    }
+  } catch {
+    // ignore resolution failures
+  }
+  return kinds;
 }
 
 function walkSnFiles(root: string, out: string[]): void {

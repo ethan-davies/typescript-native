@@ -1,42 +1,52 @@
 # Sonite — VS Code / Cursor
 
-Language support for **Sonite** (`.sn`).
+Language support for **Sonite** (`.sn` files).
 
 ## Features
 
-- Syntax highlighting (TextMate grammar, `source.sn`)
-- Editor language configuration (comments, brackets, auto-closing pairs)
-- Language server: diagnostics, hover, go-to-definition, completion, document symbols
+- Syntax highlighting (TextMate grammar)
+- Diagnostics while you type
+- Completion with auto-import
+- Hover, go-to-definition, find all references, rename
+- Signature help, code actions, organize imports
+- Semantic highlighting
+- Document formatting
 
-## Use in Cursor / VS Code (required)
+The extension **bundles** the Sonite language server and standard library. You do
+not need the `sn` CLI installed for editor features.
 
-Having this package in the monorepo does **not** load it automatically. Pick one:
+Install the [Sonite CLI](https://github.com/ethan-davies/sonite) separately when
+you want to build and run projects from the terminal (`sn build`, `sn run`, …).
 
-### A) Extension Development Host (recommended while developing)
+## Install
 
-1. From the repo root, build:
+### Marketplace
+
+Search for **Sonite** in the Extensions view, or install the published VSIX from
+the Visual Studio Marketplace (publisher `sonite`).
+
+### From a VSIX
+
+```bash
+code --install-extension sonite-vscode-0.1.0.vsix
+```
+
+### Development (monorepo)
+
+1. Build:
 
 ```bash
 pnpm --filter @sonite/compiler build
-pnpm --filter @sonite/lsp build
 pnpm --filter sonite-vscode build
 ```
 
-2. Run **Launch SN Extension** from the Run and Debug view (F5).
-3. In the new window, open a `.sn` file (e.g. `examples/modules/alias.sn`).
-4. Check the status bar language mode says **Sonite**, then:
-   - Hover a variable
-   - Press **Ctrl+Space** for completions (also triggers while typing)
-   - Open **Output → Sonite** for server logs
-
-### B) Install into your normal Cursor window
-
-Command Palette → **Developer: Install Extension from Location…** → select `packages/vscode`.
-
-Rebuild after LSP/extension changes, then **Developer: Reload Window**.
+2. Run **Launch SN Extension** (F5), or
+   **Developer: Install Extension from Location…** → `packages/vscode`.
 
 ## Troubleshooting
 
-- No squiggles / no hover → extension not active in this window (use A or B above).
-- Output channel shows resolve/start errors → rebuild compiler + lsp, then reload.
-- Completions feel missing → press **Ctrl+Space**; member completions also trigger after `.`.
+- No language features → open Output → **Sonite** and check for server start errors.
+- After rebuilding from source → **Developer: Reload Window**.
+- Completions → press **Ctrl+Space**; member completions also trigger after `.`.
+
+See [PUBLISH.md](./PUBLISH.md) for packaging and Marketplace release steps.

@@ -11,7 +11,16 @@ import {
 
 let client: LanguageClient | undefined;
 
-function resolveServerModule(): string {
+/**
+ * Prefer the bundled server shipped inside the VSIX (`dist/server.js`).
+ * Fall back to `@sonite/lsp` / monorepo paths for Extension Development Host.
+ */
+function resolveServerModule(context: vscode.ExtensionContext): string {
+  const bundled = context.asAbsolutePath(path.join("dist", "server.js"));
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+
   const require = createRequire(__filename);
   try {
     return require.resolve("@sonite/lsp/dist/server.js");
@@ -28,9 +37,17 @@ function resolveServerModule(): string {
       return fallback;
     }
     throw new Error(
-      "Could not find @sonite/lsp server. Build it with: pnpm --filter @sonite/lsp build",
+      "Sonite language server not found. Reinstall the extension, or rebuild with: pnpm --filter sonite-vscode package",
     );
   }
+}
+
+function resolveStdRoot(context: vscode.ExtensionContext): string | undefined {
+  const bundled = context.asAbsolutePath("stdlib");
+  if (fs.existsSync(path.join(bundled, "prelude", "string.sn"))) {
+    return bundled;
+  }
+  return undefined;
 }
 
 export async function activate(
@@ -41,31 +58,42 @@ export async function activate(
 
   let serverModule: string;
   try {
-    serverModule = resolveServerModule();
+    serverModule = resolveServerModule(context);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(message);
-    void vscode.window.showErrorMessage(`Sonite LSP: ${message}`);
+    void vscode.window.showErrorMessage(
+      `Sonite language features unavailable: ${message}`,
+    );
     return;
   }
 
+  const stdRoot = resolveStdRoot(context);
   output.appendLine(`Starting language server: ${serverModule}`);
+  if (stdRoot) {
+    output.appendLine(`Standard library: ${stdRoot}`);
+  }
+
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (stdRoot) {
+    env.SONITE_STD_ROOT = stdRoot;
+  }
 
   const serverOptions: ServerOptions = {
     run: {
       command: process.execPath,
       args: [serverModule, "--stdio"],
       options: {
-        cwd: path.dirname(path.dirname(serverModule)),
-        env: { ...process.env },
+        cwd: path.dirname(serverModule),
+        env,
       },
     },
     debug: {
       command: process.execPath,
       args: ["--nolazy", "--inspect=6009", serverModule, "--stdio"],
       options: {
-        cwd: path.dirname(path.dirname(serverModule)),
-        env: { ...process.env },
+        cwd: path.dirname(serverModule),
+        env,
       },
     },
   };
@@ -96,7 +124,7 @@ export async function activate(
     const message = err instanceof Error ? err.message : String(err);
     output.appendLine(`Failed to start language server: ${message}`);
     void vscode.window.showErrorMessage(
-      `Sonite LSP failed to start: ${message}`,
+      `Sonite language server failed to start: ${message}`,
     );
   }
 }

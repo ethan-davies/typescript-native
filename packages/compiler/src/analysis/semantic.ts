@@ -48,6 +48,11 @@ export interface ScopeBindingInfo {
 export interface AutoImportInfo {
   readonly moduleSpecifier: string;
   readonly exportName: string;
+  /**
+   * Local binding name when it differs from `exportName` (e.g. name clash → alias).
+   * When omitted, clients should use `exportName`.
+   */
+  readonly localName?: string;
 }
 
 export interface ScopeRegion {

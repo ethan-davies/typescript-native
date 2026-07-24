@@ -12,6 +12,7 @@ import {
   documentSymbolsForFile,
   encodeSemanticTokens,
   hoverAt,
+  mergeReferences,
   referencesAt,
   renameAt,
   semanticTokensForFile,
@@ -340,6 +341,41 @@ function main(): void {
     );
     expect(edit).not.toBeNull();
     expect(edit!.newText).toContain("import { helper } from");
+    expect(edit!.localName).toBe("helper");
+  });
+
+  it("offers auto-import from multiple modules with the same export name", () => {
+    const root = writeTempProject({
+      "main.sn": `function main(): void {
+  Shared
+}
+`,
+      "a.sn": `export function Shared(): void {
+  print(1);
+}
+`,
+      "b.sn": `export function Shared(): void {
+  print(2);
+}
+`,
+    });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const source = result.semantic.modules.find((m) => m.path === path)!.source;
+    const exportIndex = buildExportIndex({
+      importerPath: path,
+      workspaceRoots: [root],
+    });
+    const offset = source.indexOf("Shared") + 6;
+    const completions = completionsAt(result.semantic, path, offset, source, {
+      exportIndex,
+    });
+    const auto = completions.items.filter(
+      (i) => i.name === "Shared" && i.autoImport,
+    );
+    expect(auto.length).toBeGreaterThanOrEqual(2);
+    const specs = new Set(auto.map((i) => i.autoImport!.moduleSpecifier));
+    expect(specs.size).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -400,6 +436,71 @@ function main(): void {
     });
     expect(refs.length).toBeGreaterThanOrEqual(2);
     expect(refs.some((r) => r.file.endsWith("a.sn"))).toBe(true);
+  });
+
+  it("finds references from the definition file via importer models", () => {
+    const root = writeTempProject({
+      "lib.sn": `export function greet(): void {
+  print(1);
+}
+`,
+      "main.sn": `import { greet } from "./lib";
+function main(): void {
+  greet();
+}
+`,
+    });
+    const libPath = join(root, "lib.sn");
+    const mainPath = join(root, "main.sn");
+    const libResult = analyzeFile(libPath);
+    const mainResult = analyzeFile(mainPath);
+    const libSource = libResult.semantic.modules.find(
+      (m) => m.path === libPath,
+    )!.source;
+    const decl = libSource.indexOf("greet");
+    const def = definitionAt(libResult.semantic, libPath, decl);
+    expect(def).not.toBeNull();
+    const refs = mergeReferences(
+      [libResult.semantic, mainResult.semantic],
+      def!,
+      { includeDeclaration: true },
+    );
+    expect(refs.some((r) => r.file.endsWith("lib.sn"))).toBe(true);
+    expect(refs.some((r) => r.file.endsWith("main.sn"))).toBe(true);
+    const withoutDecl = mergeReferences(
+      [libResult.semantic, mainResult.semantic],
+      def!,
+      { includeDeclaration: false },
+    );
+    expect(withoutDecl.length).toBe(refs.length - 1);
+  });
+
+  it("renames from the definition file across importers", () => {
+    const root = writeTempProject({
+      "lib.sn": `export function greet(): void {
+  print(1);
+}
+`,
+      "main.sn": `import { greet } from "./lib";
+function main(): void {
+  greet();
+}
+`,
+    });
+    const libPath = join(root, "lib.sn");
+    const mainPath = join(root, "main.sn");
+    const libResult = analyzeFile(libPath);
+    const mainResult = analyzeFile(mainPath);
+    const libSource = libResult.semantic.modules.find(
+      (m) => m.path === libPath,
+    )!.source;
+    const decl = libSource.indexOf("greet");
+    const renamed = renameAt(libResult.semantic, libPath, decl, "sayHello", [
+      mainResult.semantic,
+    ]);
+    expect(renamed.error).toBeUndefined();
+    expect(renamed.edits.some((e) => e.file.endsWith("lib.sn"))).toBe(true);
+    expect(renamed.edits.some((e) => e.file.endsWith("main.sn"))).toBe(true);
   });
 
   it("renames locally and detects conflicts", () => {

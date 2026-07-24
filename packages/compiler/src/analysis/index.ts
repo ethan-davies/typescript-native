@@ -27,8 +27,10 @@ export {
   hoverAt,
   identifierSpanAt,
   identifierStartOffset,
+  mergeReferences,
   positionToOffset,
   referencesAt,
+  referencesForDefinition,
 } from "./query.js";
 export type {
   CompletionInfo,
@@ -39,6 +41,14 @@ export type {
 
 export { buildExportIndex, completeImportPaths } from "./export-index.js";
 export type { BuildExportIndexOptions } from "./export-index.js";
+
+export {
+  buildImportGraph,
+  discoverImportersOf,
+  extractImportSpecifiers,
+  listWorkspaceSnFiles,
+} from "./workspace-index.js";
+export type { WorkspaceIndexOptions } from "./workspace-index.js";
 
 export {
   computeNamedImportEdit,
