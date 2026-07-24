@@ -312,6 +312,8 @@ function isSideEffectFree(expr: Expression): boolean {
       return expr.expressions.every(isSideEffectFree);
     case "UnaryExpression":
       return isSideEffectFree(expr.operand);
+    case "CastExpression":
+      return isSideEffectFree(expr.expression);
     case "NonNullExpression":
       return isSideEffectFree(expr.expression);
     case "BinaryExpression":

@@ -182,6 +182,26 @@ function rewriteType(
         returnType: rewriteType(ann.returnType, typeRewrites),
         span: ann.span,
       };
+    case "PtrType":
+      return {
+        kind: "PtrType",
+        element: rewriteType(ann.element, typeRewrites),
+        span: ann.span,
+      };
+    case "FnPtrType":
+      return {
+        kind: "FnPtrType",
+        params: ann.params.map((p) => rewriteType(p, typeRewrites)),
+        returnType: rewriteType(ann.returnType, typeRewrites),
+        span: ann.span,
+      };
+    case "FixedArrayType":
+      return {
+        kind: "FixedArrayType",
+        element: rewriteType(ann.element, typeRewrites),
+        length: ann.length,
+        span: ann.span,
+      };
     case "MissingType":
       return ann;
   }
@@ -273,6 +293,12 @@ function rewriteExpression(expr: Expression, inst: TypecheckInstantiations): Exp
       };
     case "UnaryExpression":
       return { ...expr, operand: rewriteExpression(expr.operand, inst) };
+    case "CastExpression":
+      return {
+        ...expr,
+        expression: rewriteExpression(expr.expression, inst),
+        typeAnnotation: rewriteType(expr.typeAnnotation, inst.typeRewrites),
+      };
     case "NonNullExpression":
       return { ...expr, expression: rewriteExpression(expr.expression, inst) };
     case "NullCoalescingExpression":
@@ -329,10 +355,15 @@ function rewriteStatement(stmt: Statement, inst: TypecheckInstantiations): State
                   object: rewriteExpression(stmt.target.object, inst),
                   index: rewriteExpression(stmt.target.index, inst),
                 }
-              : {
-                  ...stmt.target,
-                  object: rewriteExpression(stmt.target.object, inst),
-                },
+              : stmt.target.kind === "MemberExpression"
+                ? {
+                    ...stmt.target,
+                    object: rewriteExpression(stmt.target.object, inst),
+                  }
+                : {
+                    ...stmt.target,
+                    operand: rewriteExpression(stmt.target.operand, inst),
+                  },
         value: rewriteExpression(stmt.value, inst),
       };
     case "UpdateStatement":
@@ -409,6 +440,11 @@ function rewriteStatement(stmt: Statement, inst: TypecheckInstantiations): State
         finallyBlock: stmt.finallyBlock
           ? stmt.finallyBlock.map((s) => rewriteStatement(s, inst))
           : null,
+      };
+    case "UnsafeBlock":
+      return {
+        ...stmt,
+        body: stmt.body.map((s) => rewriteStatement(s, inst)),
       };
   }
 }

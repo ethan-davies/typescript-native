@@ -293,27 +293,27 @@ This is where `extern` evolves from primarily being an internal runtime mechanis
 * [x] C ABI support
 * [x] External functions
 * [ ] External variables if needed
-* [ ] External structs
-* [ ] Native pointers
-* [ ] Pointer types
-* [ ] Native arrays/buffers
-* [ ] Native callbacks
-* [ ] Function pointers
+* [x] External structs
+* [x] Native pointers
+* [x] Pointer types
+* [x] Native arrays/buffers
+* [x] Native callbacks
+* [x] Function pointers
 * [x] C-compatible primitive types
-* [ ] C-compatible struct layout
-* [ ] ABI annotations
-* [ ] `unsafe` boundary if required
+* [x] C-compatible struct layout
+* [x] ABI annotations
+* [x] `unsafe` boundary if required
 
 ### Linking
 
-* [ ] Native library declarations
-* [ ] Static libraries
-* [ ] Dynamic libraries
-* [ ] Platform-specific libraries
-* [ ] Library search paths
-* [ ] Linker arguments
+* [x] Native library declarations
+* [x] Static libraries
+* [x] Dynamic libraries
+* [x] Platform-specific libraries
+* [x] Library search paths
+* [x] Linker arguments
 * [ ] Include/header metadata if needed
-* [ ] Package-provided native dependencies
+* [x] Package-provided native dependencies
 
 ### Package integration
 
@@ -328,28 +328,28 @@ libraries = ["sqlite3"]
 
 Support:
 
-* [ ] Native dependency metadata
-* [ ] Platform-specific native dependencies
-* [ ] Native library discovery
-* [ ] Native library bundling
+* [x] Native dependency metadata
+* [x] Platform-specific native dependencies
+* [x] Native library discovery
+* [x] Native library bundling
 * [ ] Native dependency installation
 * [ ] Cross-platform native package handling
 
 ### Safety
 
-* [ ] Clear FFI safety model
-* [ ] Unsafe FFI operations identified
-* [ ] Pointer lifetime rules
-* [ ] Memory ownership rules
-* [ ] Callback lifetime rules
-* [ ] ABI mismatch diagnostics
+* [x] Clear FFI safety model
+* [x] Unsafe FFI operations identified
+* [x] Pointer lifetime rules
+* [x] Memory ownership rules
+* [x] Callback lifetime rules
+* [x] ABI mismatch diagnostics
 
 ### Runtime
 
-* [ ] Internal runtime `extern` ABI documented internally
-* [ ] Runtime symbols separated from public FFI
-* [ ] Runtime symbol naming conventions
-* [ ] No accidental exposure of internal runtime APIs
+* [x] Internal runtime `extern` ABI documented internally
+* [x] Runtime symbols separated from public FFI
+* [x] Runtime symbol naming conventions
+* [x] No accidental exposure of internal runtime APIs
 
 ---
 

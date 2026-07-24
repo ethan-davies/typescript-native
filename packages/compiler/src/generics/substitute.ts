@@ -46,6 +46,29 @@ export function substituteAnnotation(ann: TypeAnnotation, subst: TypeSubst): Typ
       };
       return result;
     }
+    case "FixedArrayType": {
+      return {
+        kind: "FixedArrayType",
+        element: substituteAnnotation(ann.element, subst),
+        length: ann.length,
+        span: ann.span,
+      };
+    }
+    case "PtrType": {
+      return {
+        kind: "PtrType",
+        element: substituteAnnotation(ann.element, subst),
+        span: ann.span,
+      };
+    }
+    case "FnPtrType": {
+      return {
+        kind: "FnPtrType",
+        params: ann.params.map((p) => substituteAnnotation(p, subst)),
+        returnType: substituteAnnotation(ann.returnType, subst),
+        span: ann.span,
+      };
+    }
     case "TupleType": {
       const result: TupleType = {
         kind: "TupleType",
@@ -252,6 +275,12 @@ export function substituteExpression(expr: Expression, subst: TypeSubst): Expres
       };
     case "UnaryExpression":
       return { ...expr, operand: substituteExpression(expr.operand, subst) };
+    case "CastExpression":
+      return {
+        ...expr,
+        expression: substituteExpression(expr.expression, subst),
+        typeAnnotation: substituteAnnotation(expr.typeAnnotation, subst),
+      };
     case "NonNullExpression":
       return { ...expr, expression: substituteExpression(expr.expression, subst) };
     case "NullCoalescingExpression":
@@ -308,10 +337,15 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
                   object: substituteExpression(stmt.target.object, subst),
                   index: substituteExpression(stmt.target.index, subst),
                 }
-              : {
-                  ...stmt.target,
-                  object: substituteExpression(stmt.target.object, subst),
-                },
+              : stmt.target.kind === "MemberExpression"
+                ? {
+                    ...stmt.target,
+                    object: substituteExpression(stmt.target.object, subst),
+                  }
+                : {
+                    ...stmt.target,
+                    operand: substituteExpression(stmt.target.operand, subst),
+                  },
         value: substituteExpression(stmt.value, subst),
       };
     case "UpdateStatement":
@@ -389,6 +423,11 @@ function substStatement(stmt: Statement, subst: TypeSubst): Statement {
           ? stmt.finallyBlock.map((s) => substStatement(s, subst))
           : null,
       };
+    case "UnsafeBlock":
+      return {
+        ...stmt,
+        body: stmt.body.map((s) => substStatement(s, subst)),
+      };
   }
 }
 
@@ -404,6 +443,7 @@ export function specializeStructDecl(
   return {
     kind: "StructDeclaration",
     exported: decl.exported,
+    attributes: decl.attributes,
     name: { kind: "Identifier", name: instanceLocalName, span: decl.name.span },
     typeParams: [],
     fields: decl.fields.map(
@@ -435,6 +475,8 @@ export function specializeFunctionDecl(
     exported: decl.exported,
     isExtern: decl.isExtern,
     isAsync: decl.isAsync,
+    isUnsafe: decl.isUnsafe,
+    attributes: decl.attributes,
     name: { kind: "Identifier", name: instanceLocalName, span: decl.name.span },
     typeParams: [],
     params: substParams(decl.params, subst),

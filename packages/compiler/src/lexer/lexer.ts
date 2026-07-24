@@ -164,7 +164,7 @@ export class Lexer {
           return this.makeToken(TokenKind.PipePipe, "||", start);
         }
         return this.makeToken(TokenKind.Pipe, ch, start);
-      case "?":
+          case "?":
         if (this.peek() === "?") {
           this.advance();
           return this.makeToken(TokenKind.QuestionQuestion, "??", start);
@@ -174,6 +174,8 @@ export class Lexer {
           return this.makeToken(TokenKind.QuestionDot, "?.", start);
         }
         return this.makeToken(TokenKind.Question, ch, start);
+      case "@":
+        return this.makeToken(TokenKind.At, ch, start);
     }
 
     this.diagnostics.error(`Unexpected character '${ch}'`, span(start, this.location()), "E0001");

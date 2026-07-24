@@ -64,6 +64,15 @@ export {
 } from "./diagnostics/index.js";
 
 export {
+  isCAbiCompatible,
+  cAbiIncompatibilityReason,
+  isTrustedFfiModule,
+  isPtrType,
+  isFnPtrType,
+  isFixedArrayType,
+} from "./ffi.js";
+
+export {
   mangleSymbol,
   moduleIdFromPath,
   moduleIdentityForPath,

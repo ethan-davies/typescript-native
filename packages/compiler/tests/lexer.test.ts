@@ -294,10 +294,16 @@ describe("Lexer", () => {
   });
 
   it("reports unexpected characters", () => {
-    const { tokens, diagnostics } = lex("@");
+    const { tokens, diagnostics } = lex("#");
     expect(diagnostics.hasErrors).toBe(true);
     expect(tokens[0]?.kind).toBe(TokenKind.Invalid);
     expect(diagnostics.diagnostics[0]?.code).toBe("E0001");
+  });
+
+  it("tokenizes @ as attribute marker", () => {
+    const { tokens, diagnostics } = lex("@");
+    expect(diagnostics.hasErrors).toBe(false);
+    expect(tokens[0]?.kind).toBe(TokenKind.At);
   });
 
   it("reports unterminated strings", () => {

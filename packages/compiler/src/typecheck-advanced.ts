@@ -15,6 +15,17 @@ export type BaseValueType =
       readonly name: string;
       readonly constraintName: string | null;
       readonly constraintKind: "interface" | "class" | null;
+    }
+  | { readonly kind: "ptr"; readonly element: ExtendedValueType | "void" }
+  | {
+      readonly kind: "fnptr";
+      readonly params: readonly ExtendedValueType[];
+      readonly returnType: ExtendedValueType | "void";
+    }
+  | {
+      readonly kind: "fixedArray";
+      readonly element: ExtendedValueType;
+      readonly length: number;
     };
 
 export interface UnionValueType {
@@ -228,6 +239,19 @@ export function advancedTypeToString(type: ExtendedValueType): string {
         type.inner === "void" ? "void" : advancedTypeToString(type.inner);
       return `Future<${inner}>`;
     }
+    case "ptr": {
+      const el =
+        type.element === "void" ? "void" : advancedTypeToString(type.element);
+      return `Ptr<${el}>`;
+    }
+    case "fnptr": {
+      const params = type.params.map(advancedTypeToString).join(", ");
+      const ret =
+        type.returnType === "void" ? "void" : advancedTypeToString(type.returnType);
+      return `FnPtr<(${params}) => ${ret}>`;
+    }
+    case "fixedArray":
+      return `${advancedTypeToString(type.element)}[${type.length}]`;
     case "typeParam":
       return type.constraintName
         ? `${type.name} extends ${type.constraintName}`
@@ -305,6 +329,30 @@ export function advancedTypesEqual(a: ExtendedValueType, b: ExtendedValueType): 
           (a.inner !== "void" &&
             b.inner !== "void" &&
             advancedTypesEqual(a.inner, b.inner)))
+      );
+    case "ptr":
+      return (
+        b.kind === "ptr" &&
+        ((a.element === "void" && b.element === "void") ||
+          (a.element !== "void" &&
+            b.element !== "void" &&
+            advancedTypesEqual(a.element, b.element)))
+      );
+    case "fnptr":
+      return (
+        b.kind === "fnptr" &&
+        a.params.length === b.params.length &&
+        a.params.every((p, i) => advancedTypesEqual(p, b.params[i]!)) &&
+        ((a.returnType === "void" && b.returnType === "void") ||
+          (a.returnType !== "void" &&
+            b.returnType !== "void" &&
+            advancedTypesEqual(a.returnType, b.returnType)))
+      );
+    case "fixedArray":
+      return (
+        b.kind === "fixedArray" &&
+        a.length === b.length &&
+        advancedTypesEqual(a.element, b.element)
       );
     case "typeParam":
       return b.kind === "typeParam" && a.name === b.name;
@@ -440,6 +488,9 @@ export function advancedIsAssignable(
     if (to === "null") {
       return true;
     }
+    if (typeof to === "object" && to.kind === "ptr") {
+      return true;
+    }
     if (isUnionType(to)) {
       return to.arms.some((arm) => advancedIsAssignable(from, arm, baseAssign));
     }
@@ -535,6 +586,33 @@ export function advancedIsAssignable(
       return from.inner === to.inner;
     }
     return advancedIsAssignable(from.inner, to.inner, baseAssign);
+  }
+
+  if (
+    typeof from === "object" &&
+    typeof to === "object" &&
+    from.kind === "ptr" &&
+    to.kind === "ptr"
+  ) {
+    return advancedTypesEqual(from, to);
+  }
+
+  if (
+    typeof from === "object" &&
+    typeof to === "object" &&
+    from.kind === "fnptr" &&
+    to.kind === "fnptr"
+  ) {
+    return advancedTypesEqual(from, to);
+  }
+
+  if (
+    typeof from === "object" &&
+    typeof to === "object" &&
+    from.kind === "fixedArray" &&
+    to.kind === "fixedArray"
+  ) {
+    return advancedTypesEqual(from, to);
   }
 
   return baseAssign(from, to);

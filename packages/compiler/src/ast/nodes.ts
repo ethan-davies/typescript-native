@@ -1,8 +1,16 @@
 import type { SourceSpan } from "../diagnostics/diagnostic.js";
 
 export type PrimitiveTypeName =
+  | "i8"
+  | "i16"
   | "i32"
   | "i64"
+  | "u8"
+  | "u16"
+  | "u32"
+  | "u64"
+  | "isize"
+  | "usize"
   | "f32"
   | "f64"
   | "bool"
@@ -37,6 +45,7 @@ export type AstNode =
   | ExportSpecifier
   | FunctionDeclaration
   | ModuleVariableDeclaration
+  | Attribute
   | StructDeclaration
   | StructField
   | StructMethod
@@ -73,9 +82,11 @@ export type AstNode =
   | ThrowStatement
   | TryStatement
   | CatchClause
+  | UnsafeBlock
   | CallExpression
   | BinaryExpression
   | UnaryExpression
+  | CastExpression
   | NonNullExpression
   | NullCoalescingExpression
   | TypeofExpression
@@ -195,7 +206,8 @@ export type Statement =
   | BreakStatement
   | ContinueStatement
   | ThrowStatement
-  | TryStatement;
+  | TryStatement
+  | UnsafeBlock;
 
 export interface TypeParameter extends AstNodeBase {
   readonly kind: "TypeParameter";
@@ -226,6 +238,13 @@ export interface NamedArgument extends AstNodeBase {
 
 export type CallArgument = Expression | NamedArgument;
 
+export interface Attribute extends AstNodeBase {
+  readonly kind: "Attribute";
+  readonly name: Identifier;
+  /** String argument, e.g. `"C"` in `@repr("C")`. Null when bare `@name`. */
+  readonly value: string | null;
+}
+
 export interface FunctionDeclaration extends AstNodeBase {
   readonly kind: "FunctionDeclaration";
   readonly exported: boolean;
@@ -233,6 +252,9 @@ export interface FunctionDeclaration extends AstNodeBase {
   readonly isExtern: boolean;
   /** True for `async function ...`. */
   readonly isAsync: boolean;
+  /** True for `unsafe function ...` — entire body is an unsafe context. */
+  readonly isUnsafe: boolean;
+  readonly attributes: readonly Attribute[];
   readonly name: Identifier;
   readonly typeParams: TypeParameter[];
   readonly params: Parameter[];
@@ -280,6 +302,7 @@ export interface StructMethod extends AstNodeBase {
 export interface StructDeclaration extends AstNodeBase {
   readonly kind: "StructDeclaration";
   readonly exported: boolean;
+  readonly attributes: readonly Attribute[];
   readonly name: Identifier;
   readonly typeParams: TypeParameter[];
   readonly fields: StructField[];
@@ -402,7 +425,11 @@ export interface VariableDeclaration extends AstNodeBase {
   readonly initializer: Expression | null;
 }
 
-export type Assignable = Identifier | IndexExpression | MemberExpression;
+export type Assignable =
+  | Identifier
+  | IndexExpression
+  | MemberExpression
+  | UnaryExpression;
 
 export interface AssignmentStatement extends AstNodeBase {
   readonly kind: "AssignmentStatement";
@@ -498,12 +525,19 @@ export interface TryStatement extends AstNodeBase {
   readonly finallyBlock: Statement[] | null;
 }
 
+/** `unsafe { ... }` — statements inside are an unsafe context. */
+export interface UnsafeBlock extends AstNodeBase {
+  readonly kind: "UnsafeBlock";
+  readonly body: Statement[];
+}
+
 export type Expression =
   | CallExpression
   | LambdaExpression
   | AwaitExpression
   | BinaryExpression
   | UnaryExpression
+  | CastExpression
   | NonNullExpression
   | NullCoalescingExpression
   | TypeofExpression
@@ -575,8 +609,16 @@ export interface BinaryExpression extends AstNodeBase {
 
 export interface UnaryExpression extends AstNodeBase {
   readonly kind: "UnaryExpression";
-  readonly operator: "-" | "!";
+  /** `*` is pointer dereference (unsafe). */
+  readonly operator: "-" | "!" | "*";
   readonly operand: Expression;
+}
+
+/** `expr as Type` — used for FFI pointer/integer casts (unsafe when converting pointers). */
+export interface CastExpression extends AstNodeBase {
+  readonly kind: "CastExpression";
+  readonly expression: Expression;
+  readonly typeAnnotation: TypeAnnotation;
 }
 
 export interface NonNullExpression extends AstNodeBase {
@@ -705,6 +747,9 @@ export interface CharLiteral extends AstNodeBase {
 export type TypeAnnotation =
   | PrimitiveType
   | ArrayType
+  | FixedArrayType
+  | PtrType
+  | FnPtrType
   | TupleType
   | NamedType
   | UnionType
@@ -739,6 +784,26 @@ export interface PrimitiveType extends AstNodeBase {
 export interface ArrayType extends AstNodeBase {
   readonly kind: "ArrayType";
   readonly element: TypeAnnotation;
+}
+
+/** Fixed-size C array `T[N]` — only valid in `@repr("C")` struct fields. */
+export interface FixedArrayType extends AstNodeBase {
+  readonly kind: "FixedArrayType";
+  readonly element: TypeAnnotation;
+  readonly length: number;
+}
+
+/** Native pointer `Ptr<T>` or `Ptr<void>`. */
+export interface PtrType extends AstNodeBase {
+  readonly kind: "PtrType";
+  readonly element: TypeAnnotation;
+}
+
+/** Native function pointer `FnPtr<(T, U) => R>`. */
+export interface FnPtrType extends AstNodeBase {
+  readonly kind: "FnPtrType";
+  readonly params: TypeAnnotation[];
+  readonly returnType: TypeAnnotation;
 }
 
 export interface TupleType extends AstNodeBase {

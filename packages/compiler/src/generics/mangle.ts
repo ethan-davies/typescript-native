@@ -48,6 +48,12 @@ export function mangleTypeAnnotation(ann: TypeAnnotation): string {
       return `idxacc__${mangleTypeAnnotation(ann.objectType)}__${mangleTypeAnnotation(ann.indexType)}`;
     case "FunctionType":
       return `fn__${ann.params.map(mangleTypeAnnotation).join("__")}__to__${mangleTypeAnnotation(ann.returnType)}`;
+    case "PtrType":
+      return `ptr__${mangleTypeAnnotation(ann.element)}`;
+    case "FnPtrType":
+      return `fnptr__${ann.params.map(mangleTypeAnnotation).join("__")}__to__${mangleTypeAnnotation(ann.returnType)}`;
+    case "FixedArrayType":
+      return `fixarr__${mangleTypeAnnotation(ann.element)}__${ann.length}`;
     case "MissingType":
       return "missing";
   }

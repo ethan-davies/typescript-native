@@ -2,6 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { parseVersionRequirement } from "./deps/semver.js";
+import {
+  parseNativeConfig,
+  type NativeConfigSection,
+} from "./native-deps.js";
 
 export interface ProjectPackage {
   readonly name: string;
@@ -30,6 +34,11 @@ export interface ProjectDiagnostics {
   readonly unreachableCode: "off" | "warn" | "error";
 }
 
+export interface ProjectNative {
+  readonly base: NativeConfigSection;
+  readonly platforms: ReadonlyMap<string, NativeConfigSection>;
+}
+
 export interface Project {
   readonly root: string;
   readonly manifestPath: string;
@@ -37,6 +46,7 @@ export interface Project {
   readonly build: ProjectBuild;
   readonly format: ProjectFormat;
   readonly diagnostics: ProjectDiagnostics;
+  readonly native: ProjectNative;
   /** Version requirements from `[dependencies]` (exact, `^`, or `~`). */
   readonly dependencies: Readonly<Record<string, string>>;
   /** Absolute path to the entry .sn file. */
@@ -122,6 +132,7 @@ export function loadProjectFromManifest(manifestPath: string): Project {
   const dependencies = parseDependencies(table);
   const format = parseFormatTable(table);
   const diagnostics = parseDiagnosticsTable(table);
+  const native = parseNativeConfig(table);
 
   if (!name.trim()) {
     throw new ProjectError("package.name must not be empty");
@@ -155,6 +166,7 @@ export function loadProjectFromManifest(manifestPath: string): Project {
     build: { outdir },
     format,
     diagnostics,
+    native,
     dependencies,
     entryPath: resolve(root, entry),
     outdirPath: resolve(root, outdir),

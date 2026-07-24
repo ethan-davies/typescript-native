@@ -4,6 +4,7 @@ import type {
   ArrayLiteral,
   Assignable,
   AssignmentStatement,
+  Attribute,
   BinaryExpression,
   BinaryOperator,
   BindingPattern,
@@ -12,6 +13,7 @@ import type {
   CatchClause,
   CallArgument,
   CallExpression,
+  CastExpression,
   CharLiteral,
   ClassDeclaration,
   ClassField,
@@ -24,7 +26,9 @@ import type {
   EnumVariant,
   Expression,
   ExpressionStatement,
+  FixedArrayType,
   FloatLiteral,
+  FnPtrType,
   ForInStatement,
   ForStatement,
   FunctionDeclaration,
@@ -68,6 +72,7 @@ import type {
   Parameter,
   PrimitiveTypeName,
   Program,
+  PtrType,
   ReturnStatement,
   Statement,
   StringLiteral,
@@ -92,6 +97,7 @@ import type {
   TypeParameter,
   UnaryExpression,
   UnionType,
+  UnsafeBlock,
   UpdateStatement,
   VariableDeclaration,
   Visibility,
@@ -101,8 +107,16 @@ import type { DiagnosticCollector } from "../diagnostics/diagnostic.js";
 import { TokenKind, type Token } from "../lexer/tokens.js";
 
 const PRIMITIVE_TYPES = new Set<string>([
+  "i8",
+  "i16",
   "i32",
   "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "isize",
+  "usize",
   "f32",
   "f64",
   "bool",
@@ -169,11 +183,19 @@ export class Parser {
       }
 
       sawNonImport = true;
+      const attributes = this.parseAttributeList();
       const exported = this.match(TokenKind.Export);
 
       // export * from "path";
       // export { a, b as c } from "path";
       if (exported && (this.check(TokenKind.Star) || this.check(TokenKind.LBrace))) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
         const reexport = this.parseReExportDeclaration(
           this.previous().span.start,
         );
@@ -187,6 +209,7 @@ export class Parser {
 
       const isExtern = this.match(TokenKind.Extern);
       const isAbstract = this.match(TokenKind.Abstract);
+      const isUnsafe = this.match(TokenKind.Unsafe);
       const isAsync = this.match(TokenKind.Async);
 
       if (isExtern && isAbstract) {
@@ -200,6 +223,14 @@ export class Parser {
       if (isExtern && isAsync) {
         this.diagnostics.error(
           "'extern' cannot be combined with 'async'",
+          this.peek().span,
+          "E0103",
+        );
+      }
+
+      if (isExtern && isUnsafe) {
+        this.diagnostics.error(
+          "'unsafe' cannot be combined with 'extern'",
           this.peek().span,
           "E0103",
         );
@@ -219,31 +250,42 @@ export class Parser {
       }
 
       if (this.check(TokenKind.Struct)) {
-        if (isAbstract || isExtern || isAsync) {
+        if (isAbstract || isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
               : isAsync
                 ? "'async' can only be used with functions"
-                : "'abstract' can only be used with classes",
+                : isUnsafe
+                  ? "'unsafe' can only be used with functions"
+                  : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
         }
-        const decl = this.parseStructDeclaration(exported);
+        const decl = this.parseStructDeclaration(exported, attributes);
         if (decl) {
           body.push(decl);
         } else {
           break;
         }
       } else if (this.check(TokenKind.Enum)) {
-        if (isAbstract || isExtern || isAsync) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
+        if (isAbstract || isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
               : isAsync
                 ? "'async' can only be used with functions"
-                : "'abstract' can only be used with classes",
+                : isUnsafe
+                  ? "'unsafe' can only be used with functions"
+                  : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -255,13 +297,22 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Interface)) {
-        if (isAbstract || isExtern || isAsync) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
+        if (isAbstract || isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
               : isAsync
                 ? "'async' can only be used with functions"
-                : "'abstract' can only be used with classes",
+                : isUnsafe
+                  ? "'unsafe' can only be used with functions"
+                  : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -273,13 +324,22 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Type)) {
-        if (isAbstract || isExtern || isAsync) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
+        if (isAbstract || isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
               : isAsync
                 ? "'async' can only be used with functions"
-                : "'abstract' can only be used with classes",
+                : isUnsafe
+                  ? "'unsafe' can only be used with functions"
+                  : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -291,11 +351,20 @@ export class Parser {
           break;
         }
       } else if (this.check(TokenKind.Class)) {
-        if (isExtern || isAsync) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
+        if (isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             isAsync
               ? "'async' can only be used with functions"
-              : "'extern' can only be used with functions",
+              : isUnsafe
+                ? "'unsafe' can only be used with functions"
+                : "'extern' can only be used with functions",
             this.peek().span,
             "E0103",
           );
@@ -314,20 +383,35 @@ export class Parser {
             "E0103",
           );
         }
-        const fn = this.parseFunctionDeclaration(exported, isExtern, isAsync);
+        const fn = this.parseFunctionDeclaration(
+          exported,
+          isExtern,
+          isAsync,
+          isUnsafe,
+          attributes,
+        );
         if (fn) {
           body.push(fn);
         } else {
           break;
         }
       } else if (this.check(TokenKind.Const) || this.check(TokenKind.Let)) {
-        if (isAbstract || isExtern || isAsync) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
+        if (isAbstract || isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             isExtern
               ? "'extern' can only be used with functions"
               : isAsync
                 ? "'async' can only be used with functions"
-                : "'abstract' can only be used with classes",
+                : isUnsafe
+                  ? "'unsafe' can only be used with functions"
+                  : "'abstract' can only be used with classes",
             this.peek().span,
             "E0103",
           );
@@ -339,7 +423,14 @@ export class Parser {
           break;
         }
       } else {
-        if (exported || isAbstract || isExtern || isAsync) {
+        if (attributes.length > 0) {
+          this.diagnostics.error(
+            "Attributes can only be used on functions and structs",
+            attributes[0]!.span,
+            "E0103",
+          );
+        }
+        if (exported || isAbstract || isExtern || isAsync || isUnsafe) {
           this.diagnostics.error(
             `Expected 'function', 'struct', 'enum', 'class', 'interface', 'type', 'const', or 'let' after modifiers, found '${this.peek().lexeme}'`,
             this.peek().span,
@@ -680,7 +771,47 @@ export class Parser {
     };
   }
 
-  private parseStructDeclaration(exported: boolean): StructDeclaration | null {
+  private parseAttributeList(): Attribute[] {
+    const attributes: Attribute[] = [];
+    while (this.check(TokenKind.At)) {
+      const atToken = this.advance();
+      const nameToken = this.expect(TokenKind.Identifier, "Expected attribute name after '@'");
+      if (!nameToken) {
+        break;
+      }
+      const name: Identifier = {
+        kind: "Identifier",
+        name: nameToken.lexeme,
+        span: nameToken.span,
+      };
+      let value: string | null = null;
+      let end = nameToken.span.end;
+      if (this.check(TokenKind.LParen)) {
+        this.advance();
+        const valueToken = this.expect(
+          TokenKind.String,
+          "Expected string literal in attribute argument",
+        );
+        if (valueToken) {
+          value = valueToken.value ?? "";
+        }
+        const rparen = this.expect(TokenKind.RParen, "Expected ')' after attribute argument");
+        end = rparen?.span.end ?? valueToken?.span.end ?? end;
+      }
+      attributes.push({
+        kind: "Attribute",
+        name,
+        value,
+        span: { start: atToken.span.start, end },
+      });
+    }
+    return attributes;
+  }
+
+  private parseStructDeclaration(
+    exported: boolean,
+    attributes: Attribute[],
+  ): StructDeclaration | null {
     const start = this.peek().span.start;
 
     if (!this.expect(TokenKind.Struct, "Expected 'struct'")) {
@@ -740,6 +871,7 @@ export class Parser {
     return {
       kind: "StructDeclaration",
       exported,
+      attributes,
       name,
       typeParams,
       fields,
@@ -1593,6 +1725,8 @@ export class Parser {
     exported: boolean,
     isExtern: boolean,
     isAsync: boolean,
+    isUnsafe: boolean,
+    attributes: Attribute[],
   ): FunctionDeclaration | null {
     const start = this.peek().span.start;
 
@@ -1631,6 +1765,8 @@ export class Parser {
         exported,
         isExtern,
         isAsync,
+        isUnsafe,
+        attributes,
         name,
         typeParams,
         params: [],
@@ -1691,6 +1827,8 @@ export class Parser {
         exported,
         isExtern: true,
         isAsync,
+        isUnsafe,
+        attributes,
         name,
         typeParams,
         params,
@@ -1711,6 +1849,8 @@ export class Parser {
           exported,
           isExtern: false,
           isAsync,
+          isUnsafe,
+          attributes,
           name,
           typeParams,
           params,
@@ -1729,6 +1869,8 @@ export class Parser {
         exported,
         isExtern: false,
         isAsync,
+        isUnsafe,
+        attributes,
         name,
         typeParams,
         params,
@@ -1750,6 +1892,8 @@ export class Parser {
       exported,
       isExtern: false,
       isAsync,
+      isUnsafe,
+      attributes,
       name,
       typeParams,
       params,
@@ -1903,6 +2047,36 @@ export class Parser {
 
     if (this.check(TokenKind.Try)) {
       return this.parseTryStatement();
+    }
+
+    if (this.check(TokenKind.Unsafe)) {
+      const start = this.advance().span.start;
+      const body = this.parseBlock();
+      if (!body) {
+        return null;
+      }
+      const unsafeBlock: UnsafeBlock = {
+        kind: "UnsafeBlock",
+        body: body.statements,
+        span: { start, end: body.end },
+      };
+      return unsafeBlock;
+    }
+
+    if (this.check(TokenKind.Star)) {
+      const saved = this.current;
+      const diagCount = this.diagnostics.diagnostics.length;
+      const target = this.parseUnary();
+      if (
+        target &&
+        target.kind === "UnaryExpression" &&
+        target.operator === "*" &&
+        ASSIGNMENT_OPS.has(this.peek().kind)
+      ) {
+        return this.finishAssignment(target.span.start, target, true);
+      }
+      this.current = saved;
+      this.diagnostics.truncate(diagCount);
     }
 
     if (this.check(TokenKind.Identifier)) {
@@ -3072,7 +3246,7 @@ export class Parser {
   }
 
   private parseMultiplicative(): Expression | null {
-    let left = this.parseUnary();
+    let left = this.parseCast();
     if (!left) {
       return null;
     }
@@ -3084,7 +3258,7 @@ export class Parser {
     ) {
       const opToken = this.advance();
       const operator = opToken.lexeme as BinaryOperator;
-      const right = this.parseUnary();
+      const right = this.parseCast();
       if (!right) {
         return null;
       }
@@ -3099,6 +3273,30 @@ export class Parser {
     }
 
     return left;
+  }
+
+  private parseCast(): Expression | null {
+    let expr = this.parseUnary();
+    if (!expr) {
+      return null;
+    }
+
+    while (this.check(TokenKind.As)) {
+      this.advance();
+      const typeAnnotation = this.parseType();
+      if (!typeAnnotation) {
+        return null;
+      }
+      const cast: CastExpression = {
+        kind: "CastExpression",
+        expression: expr,
+        typeAnnotation,
+        span: { start: expr.span.start, end: typeAnnotation.span.end },
+      };
+      expr = cast;
+    }
+
+    return expr;
   }
 
   private parseUnary(): Expression | null {
@@ -3130,7 +3328,11 @@ export class Parser {
       return awaitExpr;
     }
 
-    if (this.check(TokenKind.Minus) || this.check(TokenKind.Bang)) {
+    if (
+      this.check(TokenKind.Minus) ||
+      this.check(TokenKind.Bang) ||
+      this.check(TokenKind.Star)
+    ) {
       const opToken = this.advance();
       const operand = this.parseUnary();
       if (!operand) {
@@ -3138,7 +3340,7 @@ export class Parser {
       }
       const unary: UnaryExpression = {
         kind: "UnaryExpression",
-        operator: opToken.lexeme as "-" | "!",
+        operator: opToken.lexeme as "-" | "!" | "*",
         operand,
         span: { start: opToken.span.start, end: operand.span.end },
       };
@@ -3930,7 +4132,7 @@ export class Parser {
     }
     for (;;) {
       if (this.check(TokenKind.LBracket)) {
-        // Could be `[]` array or `[Type]` indexed access
+        // Could be `[]` array, `T[N]` fixed array, or `[Type]` indexed access
         if (this.checkNext(TokenKind.RBracket)) {
           this.advance(); // [
           const rbracket = this.advance(); // ]
@@ -3940,6 +4142,22 @@ export class Parser {
             span: { start: type.span.start, end: rbracket.span.end },
           };
           continue;
+        }
+        if (this.checkNext(TokenKind.Integer)) {
+          const afterInt = this.tokens[this.current + 2];
+          if (afterInt?.kind === TokenKind.RBracket) {
+            this.advance(); // [
+            const intToken = this.advance(); // Integer
+            const rbracket = this.advance(); // ]
+            const fixed: FixedArrayType = {
+              kind: "FixedArrayType",
+              element: type,
+              length: Number(intToken.lexeme),
+              span: { start: type.span.start, end: rbracket.span.end },
+            };
+            type = fixed;
+            continue;
+          }
         }
         this.advance(); // [
         const indexType = this.parseType();
@@ -4091,6 +4309,47 @@ export class Parser {
     const token = this.expect(TokenKind.Identifier, "Expected a type name");
     if (!token) {
       return null;
+    }
+
+    if (token.lexeme === "Ptr") {
+      if (!this.expect(TokenKind.Less, "Expected '<' after 'Ptr'")) {
+        return null;
+      }
+      const element = this.parseType();
+      if (!element) {
+        return null;
+      }
+      const gt = this.expect(TokenKind.Greater, "Expected '>' after Ptr element type");
+      if (!gt) {
+        return null;
+      }
+      const ptr: PtrType = {
+        kind: "PtrType",
+        element,
+        span: { start: token.span.start, end: gt.span.end },
+      };
+      return ptr;
+    }
+
+    if (token.lexeme === "FnPtr") {
+      if (!this.expect(TokenKind.Less, "Expected '<' after 'FnPtr'")) {
+        return null;
+      }
+      const fnType = this.parseFunctionType();
+      if (!fnType) {
+        return null;
+      }
+      const gt = this.expect(TokenKind.Greater, "Expected '>' after FnPtr function type");
+      if (!gt) {
+        return null;
+      }
+      const fnPtr: FnPtrType = {
+        kind: "FnPtrType",
+        params: fnType.params,
+        returnType: fnType.returnType,
+        span: { start: token.span.start, end: gt.span.end },
+      };
+      return fnPtr;
     }
 
     if (PRIMITIVE_TYPES.has(token.lexeme)) {

@@ -92,12 +92,16 @@ function modulesInDependencyOrder(
   isAssignable,
   isClassType,
   isEnumType,
+  isFnPtrType,
+  isIntegerType,
   isInterfaceType,
+  isPtrType,
   isStructType,
   isTupleType,
   typesEqual,
   typeToString,
   type EnumValueType,
+  type FnPtrValueType,
   type FunctionValueType,
   type StructValueType,
   type TupleValueType,
@@ -256,6 +260,8 @@ interface StructInfo {
   readonly localName: string;
   readonly fields: StructFieldInfo[];
   readonly methods: StructMethodInfo[];
+  /** True when the struct was declared with `@repr("C")`. */
+  readonly reprC: boolean;
 }
 
 interface EnumInfo {
@@ -756,6 +762,7 @@ export class LlvmCodegen {
           localName: info.localName,
           fields,
           methods,
+          reprC: info.reprC,
         };
         localStructs.set(decl.name.name, updated);
         this.structs.set(updated.name, updated);
@@ -832,16 +839,21 @@ export class LlvmCodegen {
                 ? ("void" as const)
                 : "i32";
           }
+          const mangledName = externLinkSymbol(decl);
           const sig: FunctionSig = {
             name: decl.name.name,
-            mangledName: decl.name.name,
+            mangledName,
             params,
             returnType,
             isExtern: true,
             isAsync: false,
           };
           localFns.set(decl.name.name, sig);
-          this.functions.set(decl.name.name, sig);
+          // Key by link name so `declare` lookup via mangledName succeeds.
+          this.functions.set(mangledName, sig);
+          if (mangledName !== decl.name.name) {
+            this.functions.set(decl.name.name, sig);
+          }
           continue;
         }
         if (decl.typeParams.length > 0) {
@@ -1247,6 +1259,7 @@ export class LlvmCodegen {
       localName: decl.name.name,
       fields: [],
       methods: [],
+      reprC: structHasReprC(decl),
     };
     this.structs.set(info.name, info);
     return info;
@@ -2168,6 +2181,72 @@ export class LlvmCodegen {
         }
         return { kind: "function", isAsync: ann.isAsync, params, returnType };
       }
+      case "PtrType": {
+        if (ann.element.kind === "PrimitiveType" && ann.element.name === "void") {
+          return { kind: "ptr", element: "void" };
+        }
+        const element = this.resolveAnnotationInModule(
+          ann.element,
+          localStructs,
+          localEnums,
+          localClasses,
+          localInterfaces,
+          namespaces,
+        );
+        if (element === null) {
+          return null;
+        }
+        return { kind: "ptr", element };
+      }
+      case "FnPtrType": {
+        const params: ValueType[] = [];
+        for (const p of ann.params) {
+          const vt = this.resolveAnnotationInModule(
+            p,
+            localStructs,
+            localEnums,
+            localClasses,
+            localInterfaces,
+            namespaces,
+          );
+          if (vt === null) {
+            return null;
+          }
+          params.push(vt);
+        }
+        if (
+          ann.returnType.kind === "PrimitiveType" &&
+          ann.returnType.name === "void"
+        ) {
+          return { kind: "fnptr", params, returnType: "void" };
+        }
+        const returnType = this.resolveAnnotationInModule(
+          ann.returnType,
+          localStructs,
+          localEnums,
+          localClasses,
+          localInterfaces,
+          namespaces,
+        );
+        if (returnType === null) {
+          return null;
+        }
+        return { kind: "fnptr", params, returnType };
+      }
+      case "FixedArrayType": {
+        const element = this.resolveAnnotationInModule(
+          ann.element,
+          localStructs,
+          localEnums,
+          localClasses,
+          localInterfaces,
+          namespaces,
+        );
+        if (element === null) {
+          return null;
+        }
+        return { kind: "fixedArray", element, length: ann.length };
+      }
       case "NamedType": {
         // Builtin Future<T> (kept as a value type through codegen; ABI is ptr).
         if (ann.namespace === null && ann.name === "Future") {
@@ -2815,10 +2894,31 @@ export class LlvmCodegen {
       }
       if (
         value.type.literalKind === "number" &&
-        (expected === "i32" || expected === "i64")
+        (expected === "i32" ||
+          expected === "i64" ||
+          isIntegerType(expected))
       ) {
         return { llvm: value.llvm, type: expected };
       }
+    }
+
+    // `null` as Ptr / FnPtr
+    if (
+      value.type === "null" &&
+      (isPtrType(expected) || isFnPtrType(expected))
+    ) {
+      return { llvm: "null", type: expected };
+    }
+
+    // Integer widening / narrowing when types differ only by integer width
+    if (
+      typeof value.type === "string" &&
+      typeof expected === "string" &&
+      isIntegerType(value.type) &&
+      isIntegerType(expected) &&
+      value.type !== expected
+    ) {
+      return this.emitIntegerCast(value, expected, lines);
     }
 
     return value;
@@ -3880,6 +3980,8 @@ export class LlvmCodegen {
       exported: false,
       isExtern: false,
       isAsync: true,
+      isUnsafe: false,
+      attributes: [],
       name: { kind: "Identifier", name: method.name, span },
       typeParams: [],
       params,
@@ -4518,6 +4620,16 @@ export class LlvmCodegen {
         return this.emitThrowStatement(stmt, lines);
       case "TryStatement":
         return this.emitTryStatement(stmt, lines);
+      case "UnsafeBlock": {
+        let terminated = false;
+        for (const inner of stmt.body) {
+          if (terminated) {
+            break;
+          }
+          terminated = this.emitStatement(inner, lines);
+        }
+        return terminated;
+      }
     }
   }
 
@@ -5497,6 +5609,42 @@ export class LlvmCodegen {
    * reference → store ptr (alias). Struct copies are shallow (nested refs shared).
    */
   private emitAssignment(stmt: AssignmentStatement, lines: string[]): void {
+    if (
+      stmt.target.kind === "UnaryExpression" &&
+      stmt.target.operator === "*"
+    ) {
+      const ptr = this.emitExpression(stmt.target.operand, lines);
+      if (!isPtrType(ptr.type)) {
+        throw new Error("Codegen: dereference assignment of non-pointer");
+      }
+      if (ptr.type.element === "void") {
+        throw new Error("Codegen: cannot assign through Ptr<void>");
+      }
+      const elemType = ptr.type.element;
+      const elemLlvm = toLlvmType(elemType);
+      if (stmt.operator === "=") {
+        const value = this.emitExpression(stmt.value, lines, elemType);
+        lines.push(`  store ${elemLlvm} ${value.llvm}, ptr ${ptr.llvm}`);
+        return;
+      }
+      const loaded = this.nextTemp();
+      lines.push(`  ${loaded} = load ${elemLlvm}, ptr ${ptr.llvm}`);
+      const rhs = this.emitExpression(stmt.value, lines, elemType);
+      const result = this.nextTemp();
+      const isFloat = elemType === "f32" || elemType === "f64";
+      const opcode =
+        stmt.operator === "+="
+          ? isFloat
+            ? "fadd"
+            : "add"
+          : isFloat
+            ? "fsub"
+            : "sub";
+      lines.push(`  ${result} = ${opcode} ${elemLlvm} ${loaded}, ${rhs.llvm}`);
+      lines.push(`  store ${elemLlvm} ${result}, ptr ${ptr.llvm}`);
+      return;
+    }
+
     if (stmt.target.kind === "Identifier") {
       const local = this.locals.get(stmt.target.name);
       if (local) {
@@ -5583,6 +5731,12 @@ export class LlvmCodegen {
       lines.push(`  ${result} = ${opcode} ${elemLlvm} ${loaded}, ${rhs.llvm}`);
       lines.push(`  store ${elemLlvm} ${result}, ptr ${fieldPtr}`);
       return;
+    }
+
+    if (stmt.target.kind !== "IndexExpression") {
+      throw new Error(
+        `Codegen: unsupported assignment target '${stmt.target.kind}'`,
+      );
     }
 
     // Index assignment
@@ -6239,7 +6393,24 @@ export class LlvmCodegen {
         if (expr.operator === "!") {
           return "bool";
         }
+        if (expr.operator === "*") {
+          const operand = this.inferExpressionType(expr.operand);
+          if (!isPtrType(operand)) {
+            throw new Error("Codegen: dereference of non-pointer");
+          }
+          if (operand.element === "void") {
+            throw new Error("Codegen: cannot dereference Ptr<void>");
+          }
+          return operand.element;
+        }
         return this.inferExpressionType(expr.operand);
+      case "CastExpression": {
+        const target = this.resolveAnnotation(expr.typeAnnotation);
+        if (!target) {
+          throw new Error("Codegen: invalid cast target type");
+        }
+        return target;
+      }
       case "BinaryExpression": {
         if (
           COMPARISON_OPS.has(expr.operator) ||
@@ -6379,6 +6550,19 @@ export class LlvmCodegen {
           );
         }
         if (expr.callee.kind !== "Identifier") {
+          const calleeType = this.inferExpressionType(expr.callee);
+          if (isFnPtrType(calleeType)) {
+            if (calleeType.returnType === "void") {
+              throw new Error("Codegen: void FnPtr call in type inference");
+            }
+            return wrapOptionalCallType(calleeType.returnType as ValueType);
+          }
+          if (
+            isFunctionType(calleeType) &&
+            calleeType.returnType !== "void"
+          ) {
+            return wrapOptionalCallType(calleeType.returnType as ValueType);
+          }
           // Indirect / lambda call — use expected or i32 fallback for inference
           if (expected && isFunctionType(expected)) {
             return expected.returnType === "void"
@@ -6397,16 +6581,31 @@ export class LlvmCodegen {
           const local = this.locals.get(expr.callee.name);
           if (
             local &&
+            isFnPtrType(local.type) &&
+            local.type.returnType !== "void"
+          ) {
+            return wrapOptionalCallType(local.type.returnType as ValueType);
+          }
+          if (
+            local &&
             isFunctionType(local.type) &&
             local.type.returnType !== "void"
           ) {
-            return local.type.returnType as ValueType;
+            return wrapOptionalCallType(local.type.returnType as ValueType);
+          }
+          const modVal = this.localValues.get(expr.callee.name);
+          if (
+            modVal &&
+            isFnPtrType(modVal.type) &&
+            modVal.type.returnType !== "void"
+          ) {
+            return wrapOptionalCallType(modVal.type.returnType as ValueType);
           }
           throw new Error(
             `Codegen: unexpected call in type inference '${expr.callee.name}'`,
           );
         }
-        return sig.returnType;
+        return wrapOptionalCallType(sig.returnType);
       }
       case "LambdaExpression": {
         if (expected && isFunctionType(expected)) {
@@ -6479,8 +6678,14 @@ export class LlvmCodegen {
   ): EmittedValue {
     switch (expr.kind) {
       case "IntegerLiteral": {
-        const type: ValueType = expected === "i64" ? "i64" : "i32";
-        return { llvm: String(expr.value), type };
+        if (
+          expected &&
+          typeof expected === "string" &&
+          isIntegerType(expected)
+        ) {
+          return { llvm: String(expr.value), type: expected };
+        }
+        return { llvm: String(expr.value), type: "i32" };
       }
       case "FloatLiteral": {
         const type: ValueType = expected === "f32" ? "f32" : "f64";
@@ -6489,6 +6694,9 @@ export class LlvmCodegen {
       case "BooleanLiteral":
         return { llvm: expr.value ? "true" : "false", type: "bool" };
       case "NullLiteral":
+        if (expected && (isPtrType(expected) || isFnPtrType(expected))) {
+          return { llvm: "null", type: expected };
+        }
         return { llvm: "null", type: "null" };
       case "CharLiteral": {
         const code = expr.value.codePointAt(0) ?? 0;
@@ -6746,6 +6954,9 @@ export class LlvmCodegen {
         }
         const sig = this.localFunctions.get(expr.name);
         if (sig) {
+          if (expected && isFnPtrType(expected)) {
+            return this.emitFnPtrFromFunction(sig, expected);
+          }
           return this.emitNamedFunctionRef(sig, lines);
         }
         throw new Error(`Codegen: unknown variable '${expr.name}'`);
@@ -6756,6 +6967,8 @@ export class LlvmCodegen {
         return this.emitAwaitExpression(expr, lines, expected);
       case "UnaryExpression":
         return this.emitUnary(expr, lines);
+      case "CastExpression":
+        return this.emitCast(expr, lines);
       case "BinaryExpression":
         return this.emitBinary(expr, lines);
       case "CallExpression":
@@ -8091,6 +8304,20 @@ export class LlvmCodegen {
   }
 
   private emitUnary(expr: UnaryExpression, lines: string[]): EmittedValue {
+    if (expr.operator === "*") {
+      const operand = this.emitExpression(expr.operand, lines);
+      if (!isPtrType(operand.type)) {
+        throw new Error("Codegen: dereference of non-pointer");
+      }
+      if (operand.type.element === "void") {
+        throw new Error("Codegen: cannot dereference Ptr<void>");
+      }
+      const elemType = operand.type.element;
+      const elemLlvm = toLlvmType(elemType);
+      const tmp = this.nextTemp();
+      lines.push(`  ${tmp} = load ${elemLlvm}, ptr ${operand.llvm}`);
+      return { llvm: tmp, type: elemType };
+    }
     const operand = this.emitExpression(expr.operand, lines);
     const tmp = this.nextTemp();
     if (expr.operator === "!") {
@@ -8104,6 +8331,121 @@ export class LlvmCodegen {
       lines.push(`  ${tmp} = sub ${llvmType} 0, ${operand.llvm}`);
     }
     return { llvm: tmp, type: operand.type };
+  }
+
+  private emitCast(
+    expr: Extract<Expression, { kind: "CastExpression" }>,
+    lines: string[],
+  ): EmittedValue {
+    const target = this.resolveAnnotation(expr.typeAnnotation);
+    if (!target) {
+      throw new Error("Codegen: invalid cast target type");
+    }
+    const source = this.emitExpression(expr.expression, lines);
+    if (typesEqual(source.type, target)) {
+      return { llvm: source.llvm, type: target };
+    }
+
+    const srcPtr = isPtrType(source.type) || isFnPtrType(source.type);
+    const dstPtr = isPtrType(target) || isFnPtrType(target);
+
+    // Opaque ptr: pointer↔pointer is a type-level cast only.
+    if (srcPtr && dstPtr) {
+      return { llvm: source.llvm, type: target };
+    }
+
+    if (srcPtr && isIntegerType(target)) {
+      const tmp = this.nextTemp();
+      const destTy = toLlvmType(target);
+      lines.push(`  ${tmp} = ptrtoint ptr ${source.llvm} to ${destTy}`);
+      return { llvm: tmp, type: target };
+    }
+
+    if (isIntegerType(source.type) && dstPtr) {
+      const tmp = this.nextTemp();
+      const srcTy = toLlvmType(source.type);
+      lines.push(`  ${tmp} = inttoptr ${srcTy} ${source.llvm} to ptr`);
+      return { llvm: tmp, type: target };
+    }
+
+    if (isIntegerType(source.type) && isIntegerType(target)) {
+      return this.emitIntegerCast(source, target, lines);
+    }
+
+    throw new Error(
+      `Codegen: unsupported cast from '${typeToString(source.type)}' to '${typeToString(target)}'`,
+    );
+  }
+
+  private emitIntegerCast(
+    value: EmittedValue,
+    expected: ValueType,
+    lines: string[],
+  ): EmittedValue {
+    if (typeof value.type !== "string" || typeof expected !== "string") {
+      throw new Error("Codegen: integer cast requires primitive types");
+    }
+    const srcTy = toLlvmType(value.type);
+    const destTy = toLlvmType(expected);
+    if (srcTy === destTy) {
+      return { llvm: value.llvm, type: expected };
+    }
+    const srcBits = integerBitWidth(value.type);
+    const destBits = integerBitWidth(expected);
+    const tmp = this.nextTemp();
+    if (destBits < srcBits) {
+      lines.push(`  ${tmp} = trunc ${srcTy} ${value.llvm} to ${destTy}`);
+    } else if (isUnsignedInteger(value.type)) {
+      lines.push(`  ${tmp} = zext ${srcTy} ${value.llvm} to ${destTy}`);
+    } else {
+      lines.push(`  ${tmp} = sext ${srcTy} ${value.llvm} to ${destTy}`);
+    }
+    return { llvm: tmp, type: expected };
+  }
+
+  /**
+   * Top-level function used as a C `FnPtr`. Phase 5 passes the function
+   * address directly — callbacks must not throw across the FFI boundary
+   * (no exception-barrier wrapper yet).
+   */
+  private emitFnPtrFromFunction(
+    sig: FunctionSig,
+    expected: FnPtrValueType,
+  ): EmittedValue {
+    if (sig.isExtern) {
+      this.noteExternUse(sig);
+    }
+    return { llvm: `@${sig.mangledName}`, type: expected };
+  }
+
+  private emitFnPtrCall(
+    callee: EmittedValue,
+    fnType: FnPtrValueType,
+    args: Expression[],
+    lines: string[],
+    asStatement: boolean,
+  ): EmittedValue {
+    const emittedArgs: EmittedValue[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      emittedArgs.push(
+        this.emitExpression(args[i]!, lines, fnType.params[i] as ValueType),
+      );
+    }
+    const argList = emittedArgs
+      .map((a) => `${toLlvmType(a.type)} ${a.llvm}`)
+      .join(", ");
+
+    if (fnType.returnType === "void") {
+      lines.push(`  call void ${callee.llvm}(${argList})`);
+      if (!asStatement) {
+        throw new Error("Codegen: void FnPtr call used as value");
+      }
+      return { llvm: "void", type: "i32" };
+    }
+    const retTy = toLlvmType(fnType.returnType as ValueType);
+    const tmp = this.nextTemp();
+    lines.push(`  ${tmp} = call ${retTy} ${callee.llvm}(${argList})`);
+    return { llvm: tmp, type: fnType.returnType as ValueType };
   }
 
   private emitBinary(expr: BinaryExpression, lines: string[]): EmittedValue {
@@ -8397,6 +8739,28 @@ export class LlvmCodegen {
     asStatement: boolean,
   ): EmittedValue {
     if (call.callee.kind === "Identifier") {
+      const local = this.locals.get(call.callee.name);
+      if (local && isFnPtrType(local.type)) {
+        const callee = this.emitExpression(call.callee, lines);
+        return this.emitFnPtrCall(
+          callee,
+          local.type,
+          asExpressions(call.args),
+          lines,
+          asStatement,
+        );
+      }
+      const modVal = this.localValues.get(call.callee.name);
+      if (modVal && isFnPtrType(modVal.type)) {
+        const callee = this.emitExpression(call.callee, lines);
+        return this.emitFnPtrCall(
+          callee,
+          modVal.type,
+          asExpressions(call.args),
+          lines,
+          asStatement,
+        );
+      }
       const sig = this.lookupFunction(call.callee.name);
       if (sig) {
         return this.emitCallWithSig(
@@ -8408,6 +8772,15 @@ export class LlvmCodegen {
       }
     }
     const callee = this.emitExpression(call.callee, lines);
+    if (isFnPtrType(callee.type)) {
+      return this.emitFnPtrCall(
+        callee,
+        callee.type,
+        asExpressions(call.args),
+        lines,
+        asStatement,
+      );
+    }
     if (!isFunctionType(callee.type)) {
       throw new Error("Codegen: calling non-function value");
     }
@@ -8455,10 +8828,15 @@ export class LlvmCodegen {
       } else if (
         e.kind === "UnaryExpression" ||
         e.kind === "TypeofExpression" ||
-        e.kind === "AwaitExpression"
+        e.kind === "AwaitExpression" ||
+        e.kind === "CastExpression"
       ) {
         visitExpr(
-          e.kind === "AwaitExpression" ? e.argument : e.operand,
+          e.kind === "AwaitExpression"
+            ? e.argument
+            : e.kind === "CastExpression"
+              ? e.expression
+              : e.operand,
         );
       } else if (e.kind === "IsExpression") {
         visitExpr(e.value);
@@ -8517,6 +8895,9 @@ export class LlvmCodegen {
             }
             for (const st of switchCase.body) visitStmt(st);
           }
+          break;
+        case "UnsafeBlock":
+          for (const st of s.body) visitStmt(st);
           break;
         default:
           break;
@@ -9322,6 +9703,12 @@ function toLlvmType(type: ValueType | "void"): string {
     if (type.kind === "future") {
       return "ptr";
     }
+    if (type.kind === "ptr" || type.kind === "fnptr") {
+      return "ptr";
+    }
+    if (type.kind === "fixedArray") {
+      return `[${type.length} x ${toLlvmType(type.element)}]`;
+    }
     if (type.kind === "intersection") {
       for (const arm of type.arms) {
         if (
@@ -9337,9 +9724,19 @@ function toLlvmType(type: ValueType | "void"): string {
     return "ptr";
   }
   switch (type) {
+    case "i8":
+    case "u8":
+      return "i8";
+    case "i16":
+    case "u16":
+      return "i16";
     case "i32":
+    case "u32":
       return "i32";
     case "i64":
+    case "u64":
+    case "isize":
+    case "usize":
       return "i64";
     case "f32":
       return "float";
@@ -9379,7 +9776,8 @@ function zeroInitializer(type: ValueType): string {
     if (
       type.kind === "struct" ||
       type.kind === "interface" ||
-      type.kind === "object"
+      type.kind === "object" ||
+      type.kind === "fixedArray"
     ) {
       return "zeroinitializer";
     }
@@ -9392,11 +9790,22 @@ function zeroInitializer(type: ValueType): string {
     if (type.kind === "function") {
       return "zeroinitializer";
     }
+    if (type.kind === "ptr" || type.kind === "fnptr") {
+      return "null";
+    }
     return "null";
   }
   switch (type) {
+    case "i8":
+    case "i16":
     case "i32":
     case "i64":
+    case "u8":
+    case "u16":
+    case "u32":
+    case "u64":
+    case "isize":
+    case "usize":
     case "char":
       return "0";
     case "f32":
@@ -9420,9 +9829,16 @@ function typedOne(type: ValueType): string {
     throw new Error(`Codegen: cannot increment ${type.kind} type`);
   }
   switch (type) {
+    case "i8":
+    case "i16":
     case "i32":
-      return "1";
     case "i64":
+    case "u8":
+    case "u16":
+    case "u32":
+    case "u64":
+    case "isize":
+    case "usize":
       return "1";
     case "f32":
       return "1.000000e+00";
@@ -9502,4 +9918,52 @@ export function encodeLlvmString(value: string): string {
     }
   }
   return out;
+}
+
+/** Link name for an extern function (`@symbol("...")` or the Sonite name). */
+function externLinkSymbol(decl: FunctionDeclaration): string {
+  for (const attr of decl.attributes) {
+    if (attr.name.name === "symbol" && attr.value) {
+      return attr.value;
+    }
+  }
+  return decl.name.name;
+}
+
+function structHasReprC(decl: StructDeclaration): boolean {
+  return decl.attributes.some(
+    (attr) => attr.name.name === "repr" && attr.value === "C",
+  );
+}
+
+function integerBitWidth(type: string): number {
+  switch (type) {
+    case "i8":
+    case "u8":
+    case "char":
+      return 8;
+    case "i16":
+    case "u16":
+      return 16;
+    case "i32":
+    case "u32":
+      return 32;
+    case "i64":
+    case "u64":
+    case "isize":
+    case "usize":
+      return 64;
+    default:
+      throw new Error(`Codegen: not an integer type '${type}'`);
+  }
+}
+
+function isUnsignedInteger(type: string): boolean {
+  return (
+    type === "u8" ||
+    type === "u16" ||
+    type === "u32" ||
+    type === "u64" ||
+    type === "usize"
+  );
 }

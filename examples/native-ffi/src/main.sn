@@ -1,0 +1,28 @@
+@repr("C")
+struct NativePoint {
+    x: i32;
+    y: i32;
+}
+
+@symbol("sn_example_add")
+extern function exampleAdd(a: i32, b: i32): i32;
+
+@symbol("sn_example_point_sum")
+extern function examplePointSum(p: Ptr<NativePoint>): i32;
+
+@symbol("sn_example_call")
+extern function exampleCall(cb: FnPtr<(i32) => void>, value: i32): void;
+
+function onNativeEvent(value: i32): void {
+    print(value);
+}
+
+unsafe function main(): void {
+    let sum: i32 = exampleAdd(20, 22);
+    print(sum);
+
+    let none: Ptr<NativePoint> = null;
+    print(examplePointSum(none));
+
+    exampleCall(onNativeEvent, sum);
+}

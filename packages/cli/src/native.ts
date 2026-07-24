@@ -89,6 +89,8 @@ export interface LinkOptions {
   readonly release?: boolean;
   readonly optLevel?: OptLevel;
   readonly triple?: string;
+  /** Project-level native libraries from `[native]`. */
+  readonly nativeLink?: import("./native-deps.js").NativeLinkSpec;
 }
 
 function formatNativeError(error: unknown): string {
@@ -149,6 +151,33 @@ export async function linkNative(options: LinkOptions): Promise<number> {
     for (const lib of bundledOpenSsl) {
       linker.addLibrary(lib);
     }
+
+    const nativeLink = options.nativeLink;
+    if (nativeLink) {
+      for (const path of nativeLink.libraryPaths) {
+        linker.addLibraryPath(path);
+      }
+      for (const file of nativeLink.libraryFiles) {
+        linker.addLibrary(file);
+      }
+      for (const name of nativeLink.systemLibraries) {
+        linker.addSystemLibrary(name);
+      }
+      for (const arg of nativeLink.linkArgs) {
+        linker.addArg(arg);
+      }
+      // rpath for dirs containing dynamic libs (Unix)
+      if (process.platform !== "win32") {
+        for (const file of nativeLink.libraryFiles) {
+          if (/\.(so|dylib)$/i.test(file)) {
+            const dir = dirname(file);
+            linker.addArg("-rpath");
+            linker.addArg(dir);
+          }
+        }
+      }
+    }
+
     if (bundledOpenSsl.length > 0) {
       for (const name of linker.getToolchain().systemLibraries) {
         if (name === "ssl" || name === "crypto") {

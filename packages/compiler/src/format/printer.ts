@@ -246,7 +246,12 @@ class Printer {
     decl: {
       exported: boolean;
       isExtern: boolean;
+      isUnsafe?: boolean;
       isAsync?: boolean;
+      attributes?: readonly {
+        name: { name: string };
+        value: string | null;
+      }[];
       name: { name: string };
       typeParams: TypeParameter[];
       params: Parameter[];
@@ -257,8 +262,10 @@ class Printer {
     },
     indent: number,
   ): string {
+    const attrs = this.printAttributes(decl.attributes, indent);
     const exp = decl.exported ? "export " : "";
     const ext = decl.isExtern ? "extern " : "";
+    const unsafeKw = decl.isUnsafe ? "unsafe " : "";
     const asyncKw = decl.isAsync ? "async " : "";
     const tps = this.printTypeParams(decl.typeParams, decl.incomplete);
     const params = this.printParamList(decl.params, indent, decl.incomplete);
@@ -266,8 +273,8 @@ class Printer {
     const ret = missingRet ? null : this.printType(decl.returnType);
     const header =
       ret === null
-        ? `${exp}${ext}${asyncKw}function ${decl.name.name}${tps}${params}`
-        : `${exp}${ext}${asyncKw}function ${decl.name.name}${tps}${params}: ${ret}`;
+        ? `${attrs}${exp}${ext}${unsafeKw}${asyncKw}function ${decl.name.name}${tps}${params}`
+        : `${attrs}${exp}${ext}${unsafeKw}${asyncKw}function ${decl.name.name}${tps}${params}: ${ret}`;
     if (decl.isExtern) {
       return `${header};`;
     }
@@ -276,6 +283,29 @@ class Printer {
       return header;
     }
     return `${header} ${this.printBlock(decl.body, indent, decl.incomplete)}`;
+  }
+
+  private printAttributes(
+    attributes:
+      | readonly { name: { name: string }; value: string | null }[]
+      | undefined,
+    indent: number,
+  ): string {
+    if (!attributes || attributes.length === 0) {
+      return "";
+    }
+    const pad = this.pad(indent);
+    return (
+      attributes
+        .map((attr, i) => {
+          const text =
+            attr.value === null
+              ? `@${attr.name.name}`
+              : `@${attr.name.name}(${escapeStringLiteral(attr.value)})`;
+          return i === 0 ? text : `${pad}${text}`;
+        })
+        .join("\n") + `\n${pad}`
+    );
   }
 
   private printParamList(
@@ -327,6 +357,10 @@ class Printer {
   private printStruct(
     decl: {
       exported: boolean;
+      attributes?: readonly {
+        name: { name: string };
+        value: string | null;
+      }[];
       name: { name: string };
       typeParams: TypeParameter[];
       fields: readonly {
@@ -343,11 +377,12 @@ class Printer {
     },
     indent: number,
   ): string {
+    const attrs = this.printAttributes(decl.attributes, indent);
     const exp = decl.exported ? "export " : "";
     const tps = this.printTypeParams(decl.typeParams);
     const pad = this.pad(indent);
     const inner = this.pad(indent + 1);
-    const lines: string[] = [`${exp}struct ${decl.name.name}${tps} {`];
+    const lines: string[] = [`${attrs}${exp}struct ${decl.name.name}${tps} {`];
     for (const field of decl.fields) {
       lines.push(
         `${inner}${field.name.name}: ${this.printType(field.typeAnnotation)};`,
@@ -642,6 +677,9 @@ class Printer {
         body = out;
         break;
       }
+      case "UnsafeBlock":
+        body = `${pad}unsafe ${this.printBlock(stmt.body, indent)}`;
+        break;
     }
     const withLead =
       leading.length > 0 ? `${leading.join("\n")}\n${body}` : body;
@@ -762,6 +800,7 @@ class Printer {
     switch (target.kind) {
       case "Identifier":
         return target.name;
+      case "UnaryExpression":
       case "IndexExpression":
       case "MemberExpression":
         return this.printExpr(target, 0);
@@ -811,6 +850,8 @@ class Printer {
         );
         return `${expr.operator}${operand}`;
       }
+      case "CastExpression":
+        return `${this.printExprWithParen(expr.expression, castPrecedence, indent)} as ${this.printType(expr.typeAnnotation)}`;
       case "AwaitExpression":
         return `await ${this.printExprWithParen(expr.argument, unaryPrecedence, indent)}`;
       case "NonNullExpression":
@@ -1040,6 +1081,12 @@ class Printer {
         return type.name;
       case "ArrayType":
         return `${this.printType(type.element)}[]`;
+      case "FixedArrayType":
+        return `${this.printType(type.element)}[${type.length}]`;
+      case "PtrType":
+        return `Ptr<${this.printType(type.element)}>`;
+      case "FnPtrType":
+        return `FnPtr<(${type.params.map((t) => this.printType(t)).join(", ")}) => ${this.printType(type.returnType)}>`;
       case "TupleType":
         return `[${type.elements.map((t) => this.printType(t)).join(", ")}]`;
       case "NamedType":
@@ -1230,6 +1277,7 @@ function flattenCallChain(expr: {
 }
 
 const unaryPrecedence = 14;
+const castPrecedence = 7;
 const nullCoalescePrecedence = 3;
 
 function binaryPrecedence(op: string): number {
@@ -1267,6 +1315,8 @@ function exprPrecedence(expr: Expression): number {
     case "UnaryExpression":
     case "TypeofExpression":
       return unaryPrecedence;
+    case "CastExpression":
+      return castPrecedence;
     case "IsExpression":
       return 7;
     default:

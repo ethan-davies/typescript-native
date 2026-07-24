@@ -97,6 +97,18 @@ import {
   type TypeAnnResolver,
   type UnionValueType,
 } from "./typecheck-advanced.js";
+import {
+  cAbiIncompatibilityReason,
+  isCAbiCompatible,
+  isFixedArrayType as ffiIsFixedArrayType,
+  isFnPtrType as ffiIsFnPtrType,
+  isPtrType as ffiIsPtrType,
+  isTrustedFfiModule,
+  requireUnsafe,
+  validateFunctionAttributes,
+  validateStructAttributes,
+  type FfiType,
+} from "./ffi.js";
 
 export type PrimitiveValueType = Exclude<PrimitiveTypeName, "void">;
 
@@ -130,6 +142,23 @@ export interface EnumValueType {
   readonly name: string;
 }
 
+export interface PtrValueType {
+  readonly kind: "ptr";
+  readonly element: ValueType | "void";
+}
+
+export interface FnPtrValueType {
+  readonly kind: "fnptr";
+  readonly params: readonly ValueType[];
+  readonly returnType: ValueType | "void";
+}
+
+export interface FixedArrayValueType {
+  readonly kind: "fixedArray";
+  readonly element: ValueType;
+  readonly length: number;
+}
+
 /** Unbound type parameter while checking a generic template body. */
 export interface TypeParamValueType {
   readonly kind: "typeParam";
@@ -159,7 +188,10 @@ export type ValueType =
   | LiteralValueType
   | MapValueType
   | FunctionValueType
-  | FutureValueType;
+  | FutureValueType
+  | PtrValueType
+  | FnPtrValueType
+  | FixedArrayValueType;
 
 export type {
   FunctionValueType,
@@ -192,6 +224,8 @@ export interface StructDef {
   readonly methods: StructMethodDef[];
   readonly decl: StructDeclaration;
   readonly exported: boolean;
+  /** True when the struct is marked `@repr("C")`. */
+  readonly reprC: boolean;
 }
 
 export interface ClassFieldDef {
@@ -355,14 +389,30 @@ interface MemberContext {
 }
 
 const NUMERIC_PRIMITIVES = new Set<PrimitiveValueType>([
+  "i8",
+  "i16",
   "i32",
   "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "isize",
+  "usize",
   "f32",
   "f64",
 ]);
 const EQUALITY_PRIMITIVES = new Set<PrimitiveValueType>([
+  "i8",
+  "i16",
   "i32",
   "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "isize",
+  "usize",
   "f32",
   "f64",
   "bool",
@@ -372,8 +422,16 @@ const EQUALITY_PRIMITIVES = new Set<PrimitiveValueType>([
 ]);
 
 const PRIMITIVE_TYPE_NAMES: readonly string[] = [
+  "i8",
+  "i16",
   "i32",
   "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "isize",
+  "usize",
   "f32",
   "f64",
   "bool",
@@ -484,6 +542,8 @@ let interfacesByMangled: Map<string, InterfaceDef> = new Map();
 let memberContext: MemberContext | null = null;
 /** True while type-checking the body of an async function or async lambda. */
 let inAsyncFunction = false;
+/** Nesting depth of `unsafe` functions / blocks for the current check. */
+let activeUnsafeDepth = 0;
 /** Type parameters in scope while checking a generic template. */
 let activeTypeParams: Map<string, TypeParamValueType> = new Map();
 /** Nesting depth while typechecking lambda bodies (for `this` rejection). */
@@ -1782,6 +1842,14 @@ function collectModuleSymbols(
 
   for (const decl of mod.ast.body) {
     if (decl.kind === "StructDeclaration" && decl.typeParams.length > 0) {
+      const reprC = validateStructAttributes(decl, diagnostics);
+      if (reprC) {
+        diagnostics.error(
+          `@repr("C") structs cannot have type parameters`,
+          decl.name.span,
+          "E0507",
+        );
+      }
       if (validateTypeParamList(decl.typeParams, diagnostics)) {
         genericStructs.set(decl.name.name, {
           decl,
@@ -2032,10 +2100,54 @@ function collectModuleSymbols(
       continue;
     }
 
+    const linkSymbol = validateFunctionAttributes(fn, diagnostics);
+    if (
+      fn.isExtern &&
+      fn.name.name.startsWith("sn_") &&
+      !isTrustedFfiModule(mod.path)
+    ) {
+      diagnostics.warning(
+        `Extern function '${fn.name.name}' uses the reserved 'sn_*' prefix (internal runtime ABI)`,
+        fn.name.span,
+        "E0508",
+      );
+    }
+
+    const abiOpts = {
+      allowLegacyString: true as const,
+      isReprCStruct: (n: string) => structIsReprC(n, structs),
+    };
+    // Trusted std/prelude modules still use Sonite-managed types on the runtime
+    // ABI boundary; strict C-ABI checking applies to user-facing externs only.
+    if (fn.isExtern && !isTrustedFfiModule(mod.path)) {
+      for (let i = 0; i < params.length; i += 1) {
+        const t = params[i]!;
+        if (!isExternAbiTypeAllowed(t, abiOpts)) {
+          diagnostics.error(
+            cAbiIncompatibilityReason(asFfiType(t)) ||
+              `Parameter type '${typeToString(t)}' is not C ABI compatible`,
+            fn.params[i]!.typeAnnotation.span,
+            "E0505",
+          );
+        }
+      }
+      if (
+        returnType !== "void" &&
+        !isExternAbiTypeAllowed(returnType, abiOpts)
+      ) {
+        diagnostics.error(
+          cAbiIncompatibilityReason(asFfiType(returnType)) ||
+            `Return type '${typeToString(returnType)}' is not C ABI compatible`,
+          fn.returnType.span,
+          "E0505",
+        );
+      }
+    }
+
     functions.set(fn.name.name, {
       name: fn.name.name,
       mangledName: fn.isExtern
-        ? fn.name.name
+        ? (linkSymbol ?? fn.name.name)
         : fn.name.name === "main"
           ? "main"
           : mangleSymbol(mod.moduleId, fn.name.name),
@@ -2378,12 +2490,14 @@ function collectStructs(
     }
 
     declarations.push(decl);
+    const reprC = validateStructAttributes(decl, diagnostics);
     structs.set(decl.name.name, {
       name: mangleSymbol(moduleId, decl.name.name),
       fields: [],
       methods: [],
       decl,
       exported: decl.exported,
+      reprC,
     });
   }
 
@@ -2406,6 +2520,8 @@ function collectStructs(
     const methods: StructMethodDef[] = [];
     const seen = new Set<string>();
     let ok = true;
+    const existing = structs.get(decl.name.name)!;
+    const reprC = existing.reprC;
 
     for (const field of decl.fields) {
       if (seen.has(field.name.name)) {
@@ -2429,10 +2545,35 @@ function collectStructs(
         ok = false;
         continue;
       }
+      if (
+        reprC &&
+        !isCAbiCompatible(asFfiType(fieldType), {
+          allowLegacyString: false,
+          isReprCStruct: (n) => structIsReprC(n, structs),
+        })
+      ) {
+        diagnostics.error(
+          cAbiIncompatibilityReason(asFfiType(fieldType)) ||
+            `Field type '${typeToString(fieldType)}' is not C ABI compatible`,
+          field.typeAnnotation.span,
+          "E0505",
+        );
+        ok = false;
+        continue;
+      }
       fields.push({ name: field.name.name, type: fieldType });
     }
 
     for (const method of decl.methods) {
+      if (reprC) {
+        diagnostics.error(
+          `@repr("C") structs cannot have methods`,
+          method.name.span,
+          "E0509",
+        );
+        ok = false;
+        continue;
+      }
       if (method.typeParams.length > 0) {
         // Generic methods are specialized at call sites.
         if (seen.has(method.name.name)) {
@@ -2499,13 +2640,13 @@ function collectStructs(
     }
 
     if (ok) {
-      const existing = structs.get(decl.name.name)!;
       structs.set(decl.name.name, {
         name: existing.name,
         fields,
         methods,
         decl,
         exported: decl.exported,
+        reprC,
       });
     } else {
       structs.delete(decl.name.name);
@@ -3479,6 +3620,18 @@ export function isArrayType(type: ValueType): type is ArrayValueType {
   return typeof type === "object" && type.kind === "array";
 }
 
+export function isPtrType(type: ValueType): type is PtrValueType {
+  return ffiIsPtrType(asFfiType(type));
+}
+
+export function isFnPtrType(type: ValueType): type is FnPtrValueType {
+  return ffiIsFnPtrType(asFfiType(type));
+}
+
+export function isFixedArrayType(type: ValueType): type is FixedArrayValueType {
+  return ffiIsFixedArrayType(asFfiType(type));
+}
+
 export function isFutureValueType(type: ValueType): type is FutureValueType {
   return isFutureType(type);
 }
@@ -3736,7 +3889,73 @@ function isPrintableType(type: ValueType): boolean {
 }
 
 export function isIntegerType(type: ValueType): boolean {
-  return type === "i32" || type === "i64";
+  return (
+    type === "i8" ||
+    type === "i16" ||
+    type === "i32" ||
+    type === "i64" ||
+    type === "u8" ||
+    type === "u16" ||
+    type === "u32" ||
+    type === "u64" ||
+    type === "isize" ||
+    type === "usize"
+  );
+}
+
+function isPointerSizedInteger(type: ValueType): boolean {
+  return (
+    type === "i64" || type === "u64" || type === "isize" || type === "usize"
+  );
+}
+
+function structIsReprC(
+  name: string,
+  structs: Map<string, StructDef>,
+): boolean {
+  const byLocal = structs.get(name);
+  if (byLocal) {
+    return byLocal.reprC;
+  }
+  for (const s of structs.values()) {
+    if (s.name === name) {
+      return s.reprC;
+    }
+  }
+  for (const s of specializedStructs.values()) {
+    if (s.name === name || s.decl.name.name === name) {
+      return s.reprC;
+    }
+  }
+  return false;
+}
+
+function inUnsafeContext(): boolean {
+  return activeUnsafeDepth > 0;
+}
+
+function asFfiType(t: ValueType | "void"): FfiType {
+  return t as FfiType;
+}
+
+/** C-ABI check for user externs; Future\<T\> is allowed for the async runtime ABI. */
+function isExternAbiTypeAllowed(
+  t: ValueType | "void",
+  opts: {
+    allowLegacyString?: boolean;
+    isReprCStruct?: (name: string) => boolean;
+  },
+): boolean {
+  if (t === "void") {
+    return true;
+  }
+  if (isFutureType(t)) {
+    return (
+      t.inner === "void" ||
+      isExternAbiTypeAllowed(t.inner as ValueType, opts)
+    );
+  }
+  return isCAbiCompatible(asFfiType(t), opts);
 }
 
 function classSatisfiesInterface(cls: ClassDef, iface: InterfaceDef): boolean {
@@ -3864,6 +4083,47 @@ export function annotationToValueType(
         return null;
       }
       return { kind: "function", isAsync: ann.isAsync, params, returnType };
+    }
+    case "PtrType": {
+      if (
+        ann.element.kind === "PrimitiveType" &&
+        ann.element.name === "void"
+      ) {
+        return { kind: "ptr", element: "void" };
+      }
+      const element = annotationToValueType(ann.element, namedKinds);
+      if (element === null) {
+        return null;
+      }
+      return { kind: "ptr", element };
+    }
+    case "FnPtrType": {
+      const params: ValueType[] = [];
+      for (const p of ann.params) {
+        const vt = annotationToValueType(p, namedKinds);
+        if (vt === null) {
+          return null;
+        }
+        params.push(vt);
+      }
+      if (
+        ann.returnType.kind === "PrimitiveType" &&
+        ann.returnType.name === "void"
+      ) {
+        return { kind: "fnptr", params, returnType: "void" };
+      }
+      const returnType = annotationToValueType(ann.returnType, namedKinds);
+      if (returnType === null) {
+        return null;
+      }
+      return { kind: "fnptr", params, returnType };
+    }
+    case "FixedArrayType": {
+      const element = annotationToValueType(ann.element, namedKinds);
+      if (element === null) {
+        return null;
+      }
+      return { kind: "fixedArray", element, length: ann.length };
     }
     case "MissingType":
       return null;
@@ -4113,6 +4373,62 @@ function resolveAnnotation(
       }
       return { kind: "function", isAsync: ann.isAsync, params, returnType };
     }
+    case "PtrType": {
+      if (
+        ann.element.kind === "PrimitiveType" &&
+        ann.element.name === "void"
+      ) {
+        return { kind: "ptr", element: "void" };
+      }
+      const element = resolveAnnotation(
+        ann.element,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (element === null) {
+        return null;
+      }
+      return { kind: "ptr", element };
+    }
+    case "FnPtrType": {
+      const params: ValueType[] = [];
+      for (const p of ann.params) {
+        const vt = resolveAnnotation(p, structs, enums, diagnostics);
+        if (vt === null) {
+          return null;
+        }
+        params.push(vt);
+      }
+      if (
+        ann.returnType.kind === "PrimitiveType" &&
+        ann.returnType.name === "void"
+      ) {
+        return { kind: "fnptr", params, returnType: "void" };
+      }
+      const returnType = resolveAnnotation(
+        ann.returnType,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (returnType === null) {
+        return null;
+      }
+      return { kind: "fnptr", params, returnType };
+    }
+    case "FixedArrayType": {
+      const element = resolveAnnotation(
+        ann.element,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (element === null) {
+        return null;
+      }
+      return { kind: "fixedArray", element, length: ann.length };
+    }
     case "NamedType":
       return resolveNamedType(ann, structs, enums, diagnostics);
     case "MissingType":
@@ -4199,6 +4515,7 @@ function resolveObjectType(
       decl: {
         kind: "StructDeclaration",
         exported: false,
+        attributes: [],
         name: { kind: "Identifier", name, span: ann.span },
         typeParams: [],
         fields: fields.map((f) => ({
@@ -4211,6 +4528,7 @@ function resolveObjectType(
         span: ann.span,
       },
       exported: false,
+      reprC: false,
     };
     syntheticObjectStructs.set(name, def);
     structs.set(name, def);
@@ -4796,6 +5114,7 @@ function instantiateGenericStruct(
     methods,
     decl: specializedDecl,
     exported: tpl.decl.exported,
+    reprC: false,
   };
   specializedStructs.set(instanceLocal, def);
   structs.set(instanceLocal, def);
@@ -5430,6 +5749,36 @@ function valueTypeToLocalAnnotation(type: ValueType): TypeAnnotation {
         span,
       };
     }
+    case "ptr": {
+      const elementAnn =
+        type.element === "void"
+          ? ({ kind: "PrimitiveType", name: "void", span } as const)
+          : valueTypeToLocalAnnotation(type.element);
+      return {
+        kind: "PtrType",
+        element: elementAnn,
+        span,
+      };
+    }
+    case "fnptr": {
+      const returnAnn =
+        type.returnType === "void"
+          ? ({ kind: "PrimitiveType", name: "void", span } as const)
+          : valueTypeToLocalAnnotation(type.returnType);
+      return {
+        kind: "FnPtrType",
+        params: type.params.map((p) => valueTypeToLocalAnnotation(p)),
+        returnType: returnAnn,
+        span,
+      };
+    }
+    case "fixedArray":
+      return {
+        kind: "FixedArrayType",
+        element: valueTypeToLocalAnnotation(type.element),
+        length: type.length,
+        span,
+      };
   }
 }
 
@@ -5798,6 +6147,10 @@ function checkFunction(
 
   const prevAsync = inAsyncFunction;
   inAsyncFunction = fn.isAsync;
+  const prevUnsafe = activeUnsafeDepth;
+  if (fn.isUnsafe) {
+    activeUnsafeDepth += 1;
+  }
 
   const isExtension = fn.params[0]?.isReceiver === true;
   const prevMemberContext = memberContext;
@@ -5809,6 +6162,7 @@ function checkFunction(
       diagnostics,
     );
     if (receiverType === null) {
+      activeUnsafeDepth = prevUnsafe;
       inAsyncFunction = prevAsync;
       return;
     }
@@ -5947,6 +6301,7 @@ function checkFunction(
   }
 
   memberContext = prevMemberContext;
+  activeUnsafeDepth = prevUnsafe;
   inAsyncFunction = prevAsync;
 }
 
@@ -7399,6 +7754,22 @@ function checkStatement(
       }
       return false;
     }
+    case "UnsafeBlock": {
+      activeUnsafeDepth += 1;
+      checkStatements(
+        stmt.body,
+        scope,
+        functions,
+        structs,
+        enums,
+        returnType,
+        diagnostics,
+        loopDepth,
+        switchDepth,
+      );
+      activeUnsafeDepth -= 1;
+      return false;
+    }
   }
 }
 
@@ -7451,6 +7822,8 @@ function checkAssignment(
       structs,
       enums,
       diagnostics,
+      false,
+      targetType,
     );
     if (!valueType) {
       return;
@@ -7503,6 +7876,82 @@ function checkAssignment(
     if (!valueMatchesBinding(stmt.value, valueType, fieldType)) {
       diagnostics.error(
         typeMismatchMessage(fieldType, valueType),
+        stmt.value.span,
+        "E0303",
+      );
+    }
+    return;
+  }
+
+  if (stmt.target.kind === "UnaryExpression") {
+    if (stmt.target.operator !== "*") {
+      diagnostics.error(
+        "Invalid assignment target",
+        stmt.target.span,
+        "E0305",
+      );
+      return;
+    }
+    requireUnsafe(
+      inUnsafeContext(),
+      diagnostics,
+      stmt.target.span,
+      "Pointer dereference assignment",
+    );
+    const ptrType = checkExpression(
+      stmt.target.operand,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+    );
+    if (!ptrType) {
+      return;
+    }
+    if (!isPtrType(ptrType)) {
+      diagnostics.error(
+        `Cannot dereference non-pointer type '${typeToString(ptrType)}'`,
+        stmt.target.operand.span,
+        "E0511",
+      );
+      return;
+    }
+    if (ptrType.element === "void") {
+      diagnostics.error(
+        "Cannot assign through `Ptr<void>`",
+        stmt.target.span,
+        "E0511",
+      );
+      return;
+    }
+    const elementType = ptrType.element as ValueType;
+    if (stmt.operator === "+=" || stmt.operator === "-=") {
+      if (!isNumericType(elementType)) {
+        diagnostics.error(
+          `Operator '${stmt.operator}' requires a numeric pointee, got '${typeToString(elementType)}'`,
+          stmt.target.span,
+          "E0306",
+        );
+        return;
+      }
+    }
+    const valueType = checkExpression(
+      stmt.value,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      false,
+      elementType,
+    );
+    if (!valueType) {
+      return;
+    }
+    if (!valueMatchesBinding(stmt.value, valueType, elementType)) {
+      diagnostics.error(
+        typeMismatchMessage(elementType, valueType),
         stmt.value.span,
         "E0303",
       );
@@ -7880,6 +8329,19 @@ function checkNamespaceCall(
       existsButPrivate ? "E0408" : "E0307",
     );
     return null;
+  }
+
+  if (
+    sig.isExtern &&
+    !isTrustedFfiModule(activeModulePath) &&
+    !isTrustedFfiModule(sig.modulePath)
+  ) {
+    requireUnsafe(
+      inUnsafeContext(),
+      diagnostics,
+      expr.span,
+      `Call to extern function '${nsName}.${sig.name}'`,
+    );
   }
 
   if (
@@ -9353,6 +9815,14 @@ function checkExpressionInner(
             span: sig.decl.name.span,
           });
         }
+        if (expectedType && isFnPtrType(expectedType)) {
+          return coerceFunctionToFnPtr(
+            sig,
+            expectedType,
+            expr.span,
+            diagnostics,
+          );
+        }
         return {
           kind: "function",
           isAsync: sig.isAsync,
@@ -9484,6 +9954,31 @@ function checkExpressionInner(
         }
         return "bool";
       }
+      if (expr.operator === "*") {
+        requireUnsafe(
+          inUnsafeContext(),
+          diagnostics,
+          expr.span,
+          "Pointer dereference",
+        );
+        if (!isPtrType(operand)) {
+          diagnostics.error(
+            `Cannot dereference non-pointer type '${typeToString(operand)}'`,
+            expr.operand.span,
+            "E0511",
+          );
+          return null;
+        }
+        if (operand.element === "void") {
+          diagnostics.error(
+            "Cannot dereference `Ptr<void>`",
+            expr.span,
+            "E0511",
+          );
+          return null;
+        }
+        return operand.element as ValueType;
+      }
       if (!isNumericType(operand)) {
         diagnostics.error(
           `Operator '-' requires a numeric operand, got '${typeToString(operand)}'`,
@@ -9493,6 +9988,69 @@ function checkExpressionInner(
         return null;
       }
       return operand;
+    }
+    case "CastExpression": {
+      const targetType = resolveAnnotation(
+        expr.typeAnnotation,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (targetType === null) {
+        return null;
+      }
+      const sourceType = checkExpression(
+        expr.expression,
+        scope,
+        functions,
+        structs,
+        enums,
+        diagnostics,
+      );
+      if (!sourceType) {
+        return null;
+      }
+      if (typesEqual(sourceType, targetType)) {
+        return targetType;
+      }
+      const srcPtr = isPtrType(sourceType);
+      const dstPtr = isPtrType(targetType);
+      if (srcPtr && dstPtr) {
+        requireUnsafe(
+          inUnsafeContext(),
+          diagnostics,
+          expr.span,
+          "Pointer cast",
+        );
+        return targetType;
+      }
+      if (srcPtr && isPointerSizedInteger(targetType)) {
+        requireUnsafe(
+          inUnsafeContext(),
+          diagnostics,
+          expr.span,
+          "Pointer-to-integer cast",
+        );
+        return targetType;
+      }
+      if (isPointerSizedInteger(sourceType) && dstPtr) {
+        requireUnsafe(
+          inUnsafeContext(),
+          diagnostics,
+          expr.span,
+          "Integer-to-pointer cast",
+        );
+        return targetType;
+      }
+      if (isIntegerType(sourceType) && isIntegerType(targetType)) {
+        return targetType;
+      }
+      diagnostics.error(
+        `Cannot cast from '${typeToString(sourceType)}' to '${typeToString(targetType)}'`,
+        expr.span,
+        "E0512",
+      );
+      return null;
     }
     case "TypeofExpression": {
       const operand = checkExpression(
@@ -10007,6 +10565,19 @@ function checkExpressionInner(
         }
 
         if (
+          sig.isExtern &&
+          !isTrustedFfiModule(activeModulePath) &&
+          !isTrustedFfiModule(sig.modulePath)
+        ) {
+          requireUnsafe(
+            inUnsafeContext(),
+            diagnostics,
+            expr.span,
+            `Call to extern function '${sig.name}'`,
+          );
+        }
+
+        if (
           !checkDeclarationCallArgs(
             expr,
             "function",
@@ -10054,6 +10625,24 @@ function checkExpressionInner(
       if (!calleeType) {
         return null;
       }
+      if (isFnPtrType(calleeType)) {
+        requireUnsafe(
+          inUnsafeContext(),
+          diagnostics,
+          expr.span,
+          "Call through function pointer",
+        );
+        return checkFnPtrCall(
+          expr,
+          calleeType,
+          scope,
+          functions,
+          structs,
+          enums,
+          diagnostics,
+          allowVoidCall,
+        );
+      }
       if (!isFunctionType(calleeType)) {
         diagnostics.error(
           `Cannot call value of type '${typeToString(calleeType)}'`,
@@ -10077,6 +10666,143 @@ function checkExpressionInner(
       diagnostics.error("Expected expression", expr.span, "E0103");
       return null;
   }
+}
+
+function checkFnPtrCall(
+  expr: Extract<Expression, { kind: "CallExpression" }>,
+  fnType: FnPtrValueType,
+  scope: Map<string, Binding>,
+  functions: Map<string, FunctionSig>,
+  structs: Map<string, StructDef>,
+  enums: Map<string, EnumDef>,
+  diagnostics: DiagnosticCollector,
+  allowVoidCall: boolean,
+): ValueType | null {
+  if (!rejectNamedArgsOnFunctionValue(expr.args, diagnostics)) {
+    return null;
+  }
+  if (expr.args.length !== fnType.params.length) {
+    diagnostics.error(
+      `Function pointer expects ${fnType.params.length} argument(s), got ${expr.args.length}`,
+      expr.span,
+      "E0315",
+    );
+    return null;
+  }
+  for (let i = 0; i < expr.args.length; i += 1) {
+    const arg = expr.args[i]! as Expression;
+    const expected = fnType.params[i]!;
+    const argType = checkExpression(
+      arg,
+      scope,
+      functions,
+      structs,
+      enums,
+      diagnostics,
+      false,
+      expected,
+    );
+    if (!argType) {
+      return null;
+    }
+    if (!valueMatchesBinding(arg, argType, expected)) {
+      diagnostics.error(
+        typeMismatchMessage(expected, argType),
+        arg.span,
+        "E0303",
+      );
+      return null;
+    }
+  }
+  if (fnType.returnType === "void") {
+    if (!allowVoidCall) {
+      diagnostics.error(
+        "Void function pointer cannot be used as a value",
+        expr.span,
+        "E0309",
+      );
+    }
+    return null;
+  }
+  return fnType.returnType;
+}
+
+function coerceFunctionToFnPtr(
+  sig: FunctionSig,
+  expected: FnPtrValueType,
+  span: SourceSpan,
+  diagnostics: DiagnosticCollector,
+): FnPtrValueType | null {
+  requireUnsafe(
+    inUnsafeContext(),
+    diagnostics,
+    span,
+    "Converting a function to FnPtr",
+  );
+  if (sig.isExtension) {
+    diagnostics.error(
+      "Extension methods cannot be converted to FnPtr",
+      span,
+      "E0513",
+    );
+    return null;
+  }
+  if (sig.isAsync) {
+    diagnostics.error(
+      "Async functions cannot be converted to FnPtr",
+      span,
+      "E0513",
+    );
+    return null;
+  }
+  const abiOpts = {
+    allowLegacyString: false as const,
+    isReprCStruct: (n: string) => {
+      for (const s of specializedStructs.values()) {
+        if (s.name === n) {
+          return s.reprC;
+        }
+      }
+      return false;
+    },
+  };
+  for (const p of sig.params) {
+    if (!isCAbiCompatible(asFfiType(p), abiOpts)) {
+      diagnostics.error(
+        cAbiIncompatibilityReason(asFfiType(p)) ||
+          `Function parameter type '${typeToString(p)}' is not C ABI compatible for FnPtr`,
+        span,
+        "E0505",
+      );
+      return null;
+    }
+  }
+  if (
+    sig.returnType !== "void" &&
+    !isCAbiCompatible(asFfiType(sig.returnType), abiOpts)
+  ) {
+    diagnostics.error(
+      cAbiIncompatibilityReason(asFfiType(sig.returnType)) ||
+        `Function return type '${typeToString(sig.returnType)}' is not C ABI compatible for FnPtr`,
+      span,
+      "E0505",
+    );
+    return null;
+  }
+  const produced: FnPtrValueType = {
+    kind: "fnptr",
+    params: sig.params,
+    returnType: sig.returnType,
+  };
+  if (!typesEqual(produced as ValueType, expected as ValueType)) {
+    diagnostics.error(
+      typeMismatchMessage(expected as ValueType, produced as ValueType),
+      span,
+      "E0303",
+    );
+    return null;
+  }
+  return expected;
 }
 
 function checkFunctionValueCall(
@@ -10168,6 +10894,15 @@ function checkLambdaExpression(
   diagnostics: DiagnosticCollector,
   expectedType: ValueType | null,
 ): ValueType | null {
+  if (expectedType && isFnPtrType(expectedType)) {
+    diagnostics.error(
+      "Lambdas cannot be converted to FnPtr; use a top-level function",
+      expr.span,
+      "E0513",
+    );
+    return null;
+  }
+
   const expectedFn =
     expectedType && isFunctionType(expectedType) ? expectedType : null;
 
@@ -11508,7 +12243,9 @@ function supportsEquality(type: ValueType): boolean {
     type.kind === "array" ||
     type.kind === "map" ||
     type.kind === "union" ||
-    type.kind === "object"
+    type.kind === "object" ||
+    type.kind === "ptr" ||
+    type.kind === "fnptr"
   );
 }
 
@@ -11550,7 +12287,9 @@ function checkComparison(
           other.kind === "interface" ||
           other.kind === "array" ||
           other.kind === "map" ||
-          other.kind === "object"))
+          other.kind === "object" ||
+          other.kind === "ptr" ||
+          other.kind === "fnptr"))
     ) {
       return "bool";
     }
@@ -11637,7 +12376,16 @@ function valueMatchesBinding(
   // Array literal width coercion for elements is handled per-element; here for whole value:
   if (
     value.kind === "IntegerLiteral" &&
-    (expected === "i32" || expected === "i64")
+    (expected === "i8" ||
+      expected === "i16" ||
+      expected === "i32" ||
+      expected === "i64" ||
+      expected === "u8" ||
+      expected === "u16" ||
+      expected === "u32" ||
+      expected === "u64" ||
+      expected === "isize" ||
+      expected === "usize")
   ) {
     return true;
   }

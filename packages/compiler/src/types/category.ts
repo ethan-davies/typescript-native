@@ -29,11 +29,29 @@ export type TypeKind =
   | "union"
   | "intersection"
   | "typeParam"
+  | "ptr"
+  | "fnptr"
+  | "fixedArray"
   | "void";
 
 export type ClassifiableType = ExtendedValueType | "void";
 
-const VALUE_PRIMITIVES = new Set<string>(["i32", "i64", "f32", "f64", "bool", "char"]);
+const VALUE_PRIMITIVES = new Set<string>([
+  "i8",
+  "i16",
+  "i32",
+  "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "isize",
+  "usize",
+  "f32",
+  "f64",
+  "bool",
+  "char",
+]);
 
 /** What the type is, independent of value/reference category. */
 export function typeKind(type: ClassifiableType): TypeKind {
@@ -64,6 +82,9 @@ export function typeKind(type: ClassifiableType): TypeKind {
     case "union":
     case "intersection":
     case "typeParam":
+    case "ptr":
+    case "fnptr":
+    case "fixedArray":
       return type.kind;
   }
 }
@@ -86,6 +107,9 @@ export function typeCategory(type: ClassifiableType): TypeCategory {
     case "struct":
     case "tuple":
     case "object":
+    case "ptr":
+    case "fnptr":
+    case "fixedArray":
       return "value";
     case "class":
     case "array":

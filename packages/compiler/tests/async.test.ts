@@ -138,7 +138,7 @@ async function main(): void {
     const src = `
 extern function sn_sleep_ms(ms: i64): Future<void>;
 
-async function boom(): i32 {
+unsafe async function boom(): i32 {
   await sn_sleep_ms(1);
   throw new Error("fail");
 }
@@ -164,7 +164,7 @@ async function main(): void {
     const src = `
 extern function sn_sleep_ms(ms: i64): Future<void>;
 
-async function inner(): i32 {
+unsafe async function inner(): i32 {
   await sn_sleep_ms(1);
   throw new Error("inner");
 }
@@ -195,7 +195,7 @@ async function main(): void {
     const src = `
 extern function sn_sleep_ms(ms: i64): Future<void>;
 
-async function main(): void {
+unsafe async function main(): void {
   try {
     await sn_sleep_ms(1);
   } finally {

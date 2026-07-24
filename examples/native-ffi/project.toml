@@ -1,0 +1,26 @@
+[package]
+name = "native-ffi-example"
+version = "0.1.0"
+entry = "src/main.sn"
+
+[build]
+outdir = "dist"
+
+[native]
+libraries = ["sn_example"]
+headers = ["native/include/sn_example.h"]
+
+[native.linux-x64]
+library_paths = ["native/linux-x64"]
+
+[native.linux-arm64]
+library_paths = ["native/linux-arm64"]
+
+[native.macos-x64]
+library_paths = ["native/macos-x64"]
+
+[native.macos-arm64]
+library_paths = ["native/macos-arm64"]
+
+[native.windows-x64]
+library_paths = ["native/windows-x64"]

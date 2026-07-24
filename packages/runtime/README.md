@@ -77,3 +77,24 @@ Supported prebuilt platform ids: `linux-x64`, `linux-arm64`, `macos-x64`, `macos
 ## Public API
 
 See [`include/sn/runtime.h`](include/sn/runtime.h). Symbols are prefixed with `sn_` and declared in generated LLVM IR; the CLI links the static archive at run time.
+
+### Internal runtime ABI vs public FFI
+
+Runtime symbols follow the naming convention:
+
+```text
+sn_<subsystem>_<operation>
+```
+
+Examples: `sn_str_contains`, `sn_array_length`, `sn_gc_alloc`, `sn_task_await_suspend`.
+
+These are **compiler/runtime implementation details**, not a public package API. User Sonite code should not declare `extern function sn_…` against the runtime — use the standard library wrappers instead.
+
+**Public FFI** (Phase 5) is separate: user-written `extern function` declarations plus `[native]` libraries in `project.toml`. See [docs/ffi.md](../../docs/ffi.md).
+
+| | Internal runtime ABI | Public FFI |
+| --- | --- | --- |
+| Who writes it | Compiler + `@sonite/runtime` | Package authors / applications |
+| Symbol prefix | `sn_` | Any C ABI symbol (often unprefixed) |
+| Linked how | Always via `libsn_runtime` | Via `[native]` in `project.toml` |
+| Stable for users? | No | Yes (C ABI surface you declare) |

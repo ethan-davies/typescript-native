@@ -73,6 +73,12 @@ export class Linker {
     this.native.linkerAddSystemLibrary.call(this.handle, name);
   }
 
+  /** Add a raw linker argument (e.g. `-pthread`, `-rpath`). */
+  addArg(arg: string): void {
+    this.assertAlive();
+    this.native.linkerAddArg.call(this.handle, arg);
+  }
+
   /** Apply default system libraries for the active target toolchain. */
   addDefaultSystemLibraries(): void {
     this.assertAlive();

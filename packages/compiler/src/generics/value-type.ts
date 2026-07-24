@@ -16,6 +16,17 @@ export type MonoValueType =
   | {
       readonly kind: "future";
       readonly inner: MonoValueType | "void";
+    }
+  | { readonly kind: "ptr"; readonly element: MonoValueType | "void" }
+  | {
+      readonly kind: "fnptr";
+      readonly params: readonly MonoValueType[];
+      readonly returnType: MonoValueType | "void";
+    }
+  | {
+      readonly kind: "fixedArray";
+      readonly element: MonoValueType;
+      readonly length: number;
     };
 
 const EMPTY_SPAN = {
@@ -73,6 +84,35 @@ export function valueTypeToAnnotation(type: MonoValueType): TypeAnnotation {
           ? { kind: "PrimitiveType", name: "void", span: EMPTY_SPAN }
           : valueTypeToAnnotation(type.inner),
       ],
+      span: EMPTY_SPAN,
+    };
+  }
+  if (type.kind === "ptr") {
+    return {
+      kind: "PtrType",
+      element:
+        type.element === "void"
+          ? { kind: "PrimitiveType", name: "void", span: EMPTY_SPAN }
+          : valueTypeToAnnotation(type.element),
+      span: EMPTY_SPAN,
+    };
+  }
+  if (type.kind === "fnptr") {
+    return {
+      kind: "FnPtrType",
+      params: type.params.map(valueTypeToAnnotation),
+      returnType:
+        type.returnType === "void"
+          ? { kind: "PrimitiveType", name: "void", span: EMPTY_SPAN }
+          : valueTypeToAnnotation(type.returnType),
+      span: EMPTY_SPAN,
+    };
+  }
+  if (type.kind === "fixedArray") {
+    return {
+      kind: "FixedArrayType",
+      element: valueTypeToAnnotation(type.element),
+      length: type.length,
       span: EMPTY_SPAN,
     };
   }

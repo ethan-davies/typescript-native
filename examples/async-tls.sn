@@ -10,22 +10,20 @@ async function client(port: i32): void {
 }
 
 function loadPem(name: string): string {
-  let p0 = sn_str_concat("examples/certs/", name);
+  let p0 = "examples/certs/" + name;
   if (exists(p0)) {
     return readFile(p0);
   }
-  let p1 = sn_str_concat("certs/", name);
+  let p1 = "certs/" + name;
   if (exists(p1)) {
     return readFile(p1);
   }
-  let p2 = sn_str_concat("../examples/certs/", name);
+  let p2 = "../examples/certs/" + name;
   if (exists(p2)) {
     return readFile(p2);
   }
   throw new Error("missing tls pem file");
 }
-
-extern function sn_str_concat(left: string, right: string): string;
 
 async function main(): void {
   let port: i32 = 19061;

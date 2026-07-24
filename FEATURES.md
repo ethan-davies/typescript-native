@@ -3,7 +3,7 @@
 Currently supported features:
 
 - A single top-level `function main(): void` or `async function main(): void` with no parameters (return type required)
-- Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, `null`, arrays `T[]`, tuples `[T, U]`, `struct`, `enum`, `class`, `interface`, and `Future<T>` types
+- Types: `i8`/`i16`/`i32`/`i64`, `u8`/`u16`/`u32`/`u64`, `isize`/`usize`, `f32`, `f64`, `bool`, `string`, `char`, `void`, `null`, arrays `T[]`, tuples `[T, U]`, `struct`, `enum`, `class`, `interface`, `Future<T>`, native `Ptr<T>` / `FnPtr<(…) => R>` / fixed `T[N]` (FFI)
 - Async/await: `async function`, `await` expressions (async functions only), cooperative single-threaded tasks, timers, TCP/UDP/DNS/TLS via the event loop (OpenSSL is bundled with the runtime when built via `pnpm --filter @sonite/runtime openssl`)
 - Interfaces may declare `async` methods; implementations must match async-ness. `try`/`catch`/`finally` may span `await` (EH re-established on resume; failed/cancelled futures throw)
 - Generics: type parameters on structs, classes, interfaces, functions, and methods; constraints (`T extends I`); nested type arguments; call-site inference; compile-time monomorphization (no runtime generics)
@@ -19,7 +19,7 @@ Currently supported features:
 - String methods via the auto-loaded prelude (`.contains`, `.startsWith`, `.trim`, `.trimStart`, `.slice`, `.replaceAll`, `.join`, …)
 - Template literals with interpolation: `` `Hello ${name}!` `` (lowered to `sn_*_to_string` + `sn_str_concat`)
 - Extension methods: `export function contains(this: string, needle: string): bool` callable as `"hi".contains("h")`
-- `extern function` declarations for calling C runtime symbols from SN
+- `extern function` declarations for C ABI imports; `@abi("C")` / `@symbol("…")`; `@repr("C")` structs; `unsafe` blocks/functions; project `[native]` linking (see [docs/ffi.md](docs/ffi.md))
 - Explicit standard-library modules via `import { … } from "std/…"`:
   - `std/math` — abs/min/max/clamp/floor/ceil/round/sqrt/pow, trig (sin/cos/tan/asin/acos/atan/atan2), constants `PI`/`E`/`TAU`
   - `std/random` — `random` / `randomInt` / `randomFloat` / `randomBool` / `seed` (pseudo-random, not crypto)

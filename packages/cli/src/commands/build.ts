@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { compileSourceFile, linkNative } from "../native.js";
+import { resolveNativeLinkSpec } from "../native-deps.js";
 import { loadProject, ProjectError } from "../project.js";
 import type { OptLevel } from "@sonite/llvm";
 
@@ -50,9 +51,12 @@ export async function runBuild(options: BuildOptions = {}): Promise<number> {
     return 0;
   }
 
+  const nativeLink = resolveNativeLinkSpec(project.root, project.native);
+
   const linkOpts: Parameters<typeof linkNative>[0] = {
     ir: compiled.ir,
     outputPath: binaryPath,
+    nativeLink,
     ...(irPath !== undefined ? { emitIrPath: irPath } : {}),
     ...(options.release !== undefined ? { release: options.release } : {}),
     ...(options.optLevel !== undefined ? { optLevel: options.optLevel } : {}),
