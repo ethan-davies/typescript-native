@@ -170,6 +170,40 @@ function spanAtOffset(source: string, offset: number): SourceSpan {
   return { start, end: start };
 }
 
+/** Span covering the full identifier starting at or containing `offset`. */
+export function identifierSpanAt(source: string, offset: number): SourceSpan {
+  const startOff = identifierStartOffset(source, offset);
+  let endOff = startOff;
+  while (endOff < source.length && /[A-Za-z0-9_]/.test(source[endOff]!)) {
+    endOff += 1;
+  }
+  let line = 1;
+  let column = 1;
+  for (let i = 0; i < startOff && i < source.length; i += 1) {
+    if (source[i] === "\n") {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  const start = { line, column, offset: startOff };
+  let endLine = line;
+  let endColumn = column;
+  for (let i = startOff; i < endOff; i += 1) {
+    if (source[i] === "\n") {
+      endLine += 1;
+      endColumn = 1;
+    } else {
+      endColumn += 1;
+    }
+  }
+  return {
+    start,
+    end: { line: endLine, column: endColumn, offset: endOff },
+  };
+}
+
 export function identifierStartOffset(source: string, offset: number): number {
   if (offset < 0 || offset > source.length) {
     return offset;
@@ -230,22 +264,28 @@ export function definitionAt(
 }
 
 /**
- * Find all references to the symbol at `offset`, including the definition.
+ * Find all references to the symbol at `offset`.
+ * When `includeDeclaration` is false, the definition site is omitted.
  */
 export function referencesAt(
   model: SemanticModel,
   file: string,
   offset: number,
+  options: { includeDeclaration?: boolean } = {},
 ): SemanticLocation[] {
+  const includeDeclaration = options.includeDeclaration !== false;
   const def = definitionAt(model, file, offset);
   if (!def) {
     return [];
   }
   const defKey = `${def.file}:${def.span.start.offset}`;
-  const results: SemanticLocation[] = [
-    { file: def.file, span: def.span },
-  ];
-  const seen = new Set<string>([defKey]);
+  const results: SemanticLocation[] = [];
+  const seen = new Set<string>();
+
+  if (includeDeclaration) {
+    results.push({ file: def.file, span: def.span });
+    seen.add(defKey);
+  }
 
   for (const [useKey, loc] of model.definitions) {
     if (
@@ -256,6 +296,14 @@ export function referencesAt(
       if (!useFile || useOff === undefined || seen.has(useKey)) {
         continue;
       }
+      // Skip the declaration site itself when includeDeclaration is false.
+      if (
+        !includeDeclaration &&
+        useFile === def.file &&
+        useOff === def.span.start.offset
+      ) {
+        continue;
+      }
       seen.add(useKey);
       const useMod = findModule(model, useFile);
       if (!useMod) {
@@ -263,7 +311,7 @@ export function referencesAt(
       }
       results.push({
         file: useFile,
-        span: spanAtOffset(useMod.source, useOff),
+        span: identifierSpanAt(useMod.source, useOff),
       });
     }
   }
@@ -277,6 +325,13 @@ export function referencesAt(
       if (!useFile || useOff === undefined || seen.has(useKey)) {
         continue;
       }
+      if (
+        !includeDeclaration &&
+        useFile === def.file &&
+        useOff === def.span.start.offset
+      ) {
+        continue;
+      }
       seen.add(useKey);
       const useMod = findModule(model, useFile);
       if (!useMod) {
@@ -284,7 +339,7 @@ export function referencesAt(
       }
       results.push({
         file: useFile,
-        span: spanAtOffset(useMod.source, useOff),
+        span: identifierSpanAt(useMod.source, useOff),
       });
     }
   }

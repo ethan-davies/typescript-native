@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import type { AnalyzeResult, ExportIndexEntry } from "@sonite/compiler";
 import {
+  CodeActionKind,
   createConnection,
   ProposedFeatures,
+  ResponseError,
   TextDocumentSyncKind,
   TextDocuments,
   type InitializeParams,
@@ -12,13 +14,21 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import {
   analyzeWithOverlay,
   buildExportIndexForFile,
+  codeActionsAtPosition,
+  collectReverseDeps,
   completionsAtPosition,
   definitionAtPosition,
   diagnosticsByFile,
   documentSymbolsAtFile,
   hoverAtPosition,
   pathToUri,
+  prepareRenameAtPosition,
   referencesAtPosition,
+  renameAtPosition,
+  semanticTokensAtFile,
+  SEMANTIC_TOKEN_MODIFIERS,
+  SEMANTIC_TOKEN_TYPES,
+  signatureHelpAtPosition,
   uriToPath,
 } from "./protocol.js";
 
@@ -26,6 +36,8 @@ const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 const analysisCache = new Map<string, AnalyzeResult>();
 const exportIndexCache = new Map<string, ExportIndexEntry[]>();
+/** imported path → set of importer paths that have been analyzed */
+const reverseDeps = new Map<string, Set<string>>();
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEBOUNCE_MS = 250;
 let workspaceRoots: string[] = [];
@@ -109,6 +121,26 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       },
       documentSymbolProvider: true,
       referencesProvider: true,
+      renameProvider: {
+        prepareProvider: true,
+      },
+      signatureHelpProvider: {
+        triggerCharacters: ["(", ","],
+        retriggerCharacters: [","],
+      },
+      codeActionProvider: {
+        codeActionKinds: [
+          CodeActionKind.QuickFix,
+          CodeActionKind.SourceOrganizeImports,
+        ],
+      },
+      semanticTokensProvider: {
+        legend: {
+          tokenTypes: [...SEMANTIC_TOKEN_TYPES],
+          tokenModifiers: [...SEMANTIC_TOKEN_MODIFIERS],
+        },
+        full: true,
+      },
     },
   };
 });
@@ -124,6 +156,28 @@ function getOverlay() {
 
 function invalidateExportIndex(): void {
   exportIndexCache.clear();
+}
+
+function mergeReverseDeps(result: AnalyzeResult): void {
+  const edges = collectReverseDeps(result);
+  for (const [imported, importers] of edges) {
+    const set = reverseDeps.get(imported) ?? new Set();
+    for (const importer of importers) {
+      set.add(importer);
+    }
+    reverseDeps.set(imported, set);
+  }
+}
+
+function invalidateDependents(filePath: string): void {
+  analysisCache.delete(filePath);
+  const importers = reverseDeps.get(filePath);
+  if (!importers) {
+    return;
+  }
+  for (const importer of importers) {
+    analysisCache.delete(importer);
+  }
 }
 
 function getExportIndex(filePath: string): ExportIndexEntry[] {
@@ -173,6 +227,7 @@ async function runAnalyze(filePath: string): Promise<void> {
   }
 
   analysisCache.set(filePath, result);
+  mergeReverseDeps(result);
 
   const byFile = diagnosticsByFile(result.diagnostics);
   const touched = new Set<string>([filePath, ...byFile.keys()]);
@@ -191,26 +246,27 @@ function ensureAnalyzed(filePath: string): AnalyzeResult {
   }
   const result = analyzeWithOverlay(filePath, getOverlay());
   analysisCache.set(filePath, result);
+  mergeReverseDeps(result);
   return result;
 }
 
 documents.onDidOpen((event) => {
   const filePath = uriToPath(event.document.uri);
-  analysisCache.delete(filePath);
+  invalidateDependents(filePath);
   invalidateExportIndex();
   scheduleAnalyze(filePath);
 });
 
 documents.onDidChangeContent((event) => {
   const filePath = uriToPath(event.document.uri);
-  analysisCache.delete(filePath);
+  invalidateDependents(filePath);
   invalidateExportIndex();
   scheduleAnalyze(filePath);
 });
 
 documents.onDidClose((event) => {
   const path = uriToPath(event.document.uri);
-  analysisCache.delete(path);
+  invalidateDependents(path);
   const timer = debounceTimers.get(path);
   if (timer) {
     clearTimeout(timer);
@@ -257,7 +313,6 @@ connection.onCompletion((params) => {
   }
   const result = ensureAnalyzed(filePath);
   const exportIndex = getExportIndex(filePath);
-  // Trigger on quote for import path completion.
   void params;
   return completionsAtPosition(
     result.semantic,
@@ -276,11 +331,13 @@ connection.onReferences((params) => {
     return [];
   }
   const result = ensureAnalyzed(filePath);
+  const includeDeclaration = params.context?.includeDeclaration !== false;
   return referencesAtPosition(
     result.semantic,
     filePath,
     doc.getText(),
     params.position,
+    includeDeclaration,
   );
 });
 
@@ -288,6 +345,79 @@ connection.onDocumentSymbol((params) => {
   const filePath = uriToPath(params.textDocument.uri);
   const result = ensureAnalyzed(filePath);
   return documentSymbolsAtFile(result.semantic, filePath);
+});
+
+connection.onPrepareRename((params) => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) {
+    return null;
+  }
+  const result = ensureAnalyzed(filePath);
+  return prepareRenameAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    params.position,
+  );
+});
+
+connection.onRenameRequest((params) => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) {
+    return null;
+  }
+  const result = ensureAnalyzed(filePath);
+  const edit = renameAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    params.position,
+    params.newName,
+  );
+  if (edit instanceof ResponseError) {
+    throw edit;
+  }
+  return edit;
+});
+
+connection.onSignatureHelp((params) => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) {
+    return null;
+  }
+  const result = ensureAnalyzed(filePath);
+  return signatureHelpAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    params.position,
+  );
+});
+
+connection.onCodeAction((params) => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) {
+    return [];
+  }
+  const result = ensureAnalyzed(filePath);
+  const exportIndex = getExportIndex(filePath);
+  return codeActionsAtPosition(
+    result.semantic,
+    filePath,
+    doc.getText(),
+    result.diagnostics,
+    exportIndex,
+  );
+});
+
+connection.languages.semanticTokens.on((params) => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const result = ensureAnalyzed(filePath);
+  return semanticTokensAtFile(result.semantic, filePath);
 });
 
 documents.listen(connection);

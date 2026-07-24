@@ -28,6 +28,14 @@ export type CompletionSymbolKind =
   | "module"
   | "constructor";
 
+/** LSP semantic-token modifiers we emit. */
+export type SemanticTokenModifier =
+  | "declaration"
+  | "definition"
+  | "readonly"
+  | "static"
+  | "defaultLibrary";
+
 export interface ScopeBindingInfo {
   readonly name: string;
   readonly detail: string;
@@ -56,6 +64,31 @@ export interface ModuleSymbolInfo {
   readonly location: SemanticLocation;
 }
 
+/** One parameter in a recorded call signature. */
+export interface CallSignatureParameter {
+  readonly name: string;
+  readonly type: string;
+  readonly optional: boolean;
+}
+
+/** Resolved signature at a CallExpression / NewExpression site. */
+export interface CallSignatureInfo {
+  readonly label: string;
+  readonly parameters: readonly CallSignatureParameter[];
+  readonly returnType: string;
+  readonly typeParameters: readonly string[];
+  /** Span of the full call/new expression (for lookup). */
+  readonly callSpan: SourceSpan;
+}
+
+/** Symbol classification for semantic tokens / rename conflicts. */
+export interface SymbolSemanticInfo {
+  readonly name: string;
+  readonly kind: CompletionSymbolKind;
+  readonly modifiers: readonly SemanticTokenModifier[];
+  readonly location: SemanticLocation;
+}
+
 export interface SemanticModel {
   readonly modules: readonly ResolvedModule[];
   /** `${file}:${offset}` → display type string */
@@ -73,6 +106,10 @@ export interface SemanticModel {
   readonly memberCompletions: ReadonlyMap<string, readonly ScopeBindingInfo[]>;
   /** `typeToString(type)` or type/class/enum local name → members */
   readonly membersByType: ReadonlyMap<string, readonly ScopeBindingInfo[]>;
+  /** `${file}:${callSpan.start.offset}` → signature help info */
+  readonly callSignatures: ReadonlyMap<string, CallSignatureInfo>;
+  /** `${file}:${offset}` → symbol kind/modifiers for tokens */
+  readonly symbolInfo: ReadonlyMap<string, SymbolSemanticInfo>;
 }
 
 export function semanticKey(file: string, offset: number): string {
@@ -88,6 +125,8 @@ export class SemanticCollector {
   readonly memberDefinitions = new Map<string, SemanticLocation>();
   readonly memberCompletions = new Map<string, ScopeBindingInfo[]>();
   readonly membersByType = new Map<string, ScopeBindingInfo[]>();
+  readonly callSignatures = new Map<string, CallSignatureInfo>();
+  readonly symbolInfo = new Map<string, SymbolSemanticInfo>();
 
   recordType(file: string, span: SourceSpan, typeString: string): void {
     this.expressionTypes.set(semanticKey(file, span.start.offset), typeString);
@@ -132,6 +171,20 @@ export class SemanticCollector {
     this.membersByType.set(typeString, existing);
   }
 
+  recordCallSignature(file: string, info: CallSignatureInfo): void {
+    this.callSignatures.set(
+      semanticKey(file, info.callSpan.start.offset),
+      info,
+    );
+  }
+
+  recordSymbolInfo(info: SymbolSemanticInfo): void {
+    this.symbolInfo.set(
+      semanticKey(info.location.file, info.location.span.start.offset),
+      info,
+    );
+  }
+
   freeze(modules: readonly ResolvedModule[]): SemanticModel {
     return {
       modules,
@@ -143,6 +196,8 @@ export class SemanticCollector {
       memberDefinitions: this.memberDefinitions,
       memberCompletions: this.memberCompletions,
       membersByType: this.membersByType,
+      callSignatures: this.callSignatures,
+      symbolInfo: this.symbolInfo,
     };
   }
 }
@@ -158,5 +213,7 @@ export function emptySemanticModel(modules: readonly ResolvedModule[] = []): Sem
     memberDefinitions: new Map(),
     memberCompletions: new Map(),
     membersByType: new Map(),
+    callSignatures: new Map(),
+    symbolInfo: new Map(),
   };
 }

@@ -5,11 +5,17 @@ import { describe, expect, it } from "vitest";
 import {
   analyzeFile,
   buildExportIndex,
+  codeActionsAt,
   completionsAt,
   computeNamedImportEdit,
   definitionAt,
   documentSymbolsForFile,
+  encodeSemanticTokens,
   hoverAt,
+  referencesAt,
+  renameAt,
+  semanticTokensForFile,
+  signatureHelpAt,
 } from "../src/index.js";
 
 function writeTempProject(files: Record<string, string>): string {
@@ -334,5 +340,262 @@ function main(): void {
     );
     expect(edit).not.toBeNull();
     expect(edit!.newText).toContain("import { helper } from");
+  });
+});
+
+describe("references, rename, signature help, code actions, tokens", () => {
+  it("finds local and shadowed references with includeDeclaration", () => {
+    const source = `const value = 1;
+function main(): void {
+  const value = 2;
+  print(value);
+}
+function other(): void {
+  print(value);
+}
+`;
+    const root = writeTempProject({ "main.sn": source });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    expect(result.success).toBe(true);
+
+    const outerDecl = source.indexOf("const value = 1") + "const ".length;
+    const withDecl = referencesAt(result.semantic, path, outerDecl, {
+      includeDeclaration: true,
+    });
+    const withoutDecl = referencesAt(result.semantic, path, outerDecl, {
+      includeDeclaration: false,
+    });
+    expect(withDecl.length).toBeGreaterThanOrEqual(2);
+    expect(withoutDecl.length).toBe(withDecl.length - 1);
+
+    const innerDecl = source.indexOf("const value = 2") + "const ".length;
+    const innerRefs = referencesAt(result.semantic, path, innerDecl, {
+      includeDeclaration: true,
+    });
+    // Inner value must not include the outer module declaration.
+    expect(
+      innerRefs.every((r) => r.span.start.offset !== outerDecl),
+    ).toBe(true);
+  });
+
+  it("finds cross-file and imported symbol references", () => {
+    const root = writeTempProject({
+      "main.sn": `import { greet } from "./a";
+function main(): void {
+  greet();
+}
+`,
+      "a.sn": `export function greet(): void {
+  print(1);
+}
+`,
+    });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const source = result.semantic.modules.find((m) => m.path === path)!.source;
+    const use = source.indexOf("greet();");
+    const refs = referencesAt(result.semantic, path, use, {
+      includeDeclaration: true,
+    });
+    expect(refs.length).toBeGreaterThanOrEqual(2);
+    expect(refs.some((r) => r.file.endsWith("a.sn"))).toBe(true);
+  });
+
+  it("renames locally and detects conflicts", () => {
+    const source = `function greet(name: string): void {
+  print(name);
+}
+function main(): void {
+  greet("Ethan");
+}
+`;
+    const root = writeTempProject({ "main.sn": source });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const offset = source.indexOf("greet(");
+    const renamed = renameAt(result.semantic, path, offset, "sayHello");
+    expect(renamed.error).toBeUndefined();
+    expect(renamed.edits.length).toBeGreaterThanOrEqual(2);
+    expect(renamed.edits.every((e) => e.newText === "sayHello")).toBe(true);
+
+    const conflictSource = `function main(): void {
+  const foo = 1;
+  const bar = 2;
+  print(foo);
+}
+`;
+    const root2 = writeTempProject({ "main.sn": conflictSource });
+    const path2 = join(root2, "main.sn");
+    const result2 = analyzeFile(path2);
+    const fooOff = conflictSource.indexOf("foo");
+    const conflict = renameAt(result2.semantic, path2, fooOff, "bar");
+    expect(conflict.error).toBeDefined();
+  });
+
+  it("renames across files for imported symbols", () => {
+    const root = writeTempProject({
+      "a.sn": `export function greet(): void {
+  print(1);
+}
+`,
+      "b.sn": `import { greet } from "./a";
+function main(): void {
+  greet();
+}
+`,
+    });
+    const path = join(root, "b.sn");
+    const result = analyzeFile(path);
+    const source = result.semantic.modules.find((m) => m.path === path)!.source;
+    const offset = source.indexOf("greet();");
+    const renamed = renameAt(result.semantic, path, offset, "sayHello");
+    expect(renamed.error).toBeUndefined();
+    expect(renamed.edits.some((e) => e.file.endsWith("a.sn"))).toBe(true);
+    expect(renamed.edits.some((e) => e.file.endsWith("b.sn"))).toBe(true);
+  });
+
+  it("provides signature help with active parameter and nested calls", () => {
+    const source = `function fetchRequest(url: string, options: i32): void {
+  print(url);
+}
+function main(): void {
+  fetchRequest("a", 1);
+  fetchRequest(foo(bar(1)), 2);
+}
+function foo(x: i32): string {
+  return "x";
+}
+function bar(x: i32): i32 {
+  return x;
+}
+`;
+    const root = writeTempProject({ "main.sn": source });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const firstCall = source.indexOf('fetchRequest("a"') + "fetchRequest(".length;
+    const help = signatureHelpAt(result.semantic, path, firstCall, source);
+    expect(help).not.toBeNull();
+    expect(help!.signatures[0]?.parameters.length).toBe(2);
+    expect(help!.activeParameter).toBe(0);
+
+    const secondArg =
+      source.indexOf('fetchRequest("a", 1)') + 'fetchRequest("a", '.length;
+    const help2 = signatureHelpAt(result.semantic, path, secondArg, source);
+    expect(help2?.activeParameter).toBe(1);
+
+    const nested = source.indexOf("bar(1)") + "bar(".length;
+    const helpNested = signatureHelpAt(result.semantic, path, nested, source);
+    expect(helpNested).not.toBeNull();
+    expect(helpNested!.signatures[0]?.label).toContain("bar");
+  });
+
+  it("warns on unused imports and offers code actions", () => {
+    const root = writeTempProject({
+      "main.sn": `import { used, unused } from "./lib";
+function main(): void {
+  used();
+}
+`,
+      "lib.sn": `export function used(): void {
+  print(1);
+}
+export function unused(): void {
+  print(2);
+}
+`,
+    });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const unused = result.diagnostics.filter((d) => d.code === "E0412");
+    expect(unused.some((d) => d.message.includes("unused"))).toBe(true);
+
+    const source = result.semantic.modules.find((m) => m.path === path)!.source;
+    const actions = codeActionsAt(result.semantic, path, source, {
+      diagnostics: result.diagnostics,
+    });
+    expect(
+      actions.some((a) => a.title.includes("Remove unused import")),
+    ).toBe(true);
+    expect(actions.some((a) => a.kind === "source.organizeImports")).toBe(true);
+  });
+
+  it("offers add-missing-import code action", () => {
+    const root = writeTempProject({
+      "main.sn": `function main(): void {
+  helper(1);
+}
+`,
+      "util.sn": `export function helper(x: i32): i32 {
+  return x;
+}
+`,
+    });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const exportIndex = buildExportIndex({
+      importerPath: path,
+      workspaceRoots: [root],
+    });
+    const source = result.semantic.modules.find((m) => m.path === path)!.source;
+    const actions = codeActionsAt(result.semantic, path, source, {
+      diagnostics: result.diagnostics,
+      exportIndex,
+    });
+    expect(
+      actions.some((a) => a.title.includes("Import 'helper'")),
+    ).toBe(true);
+  });
+
+  it("aliases auto-imports that would conflict with locals", () => {
+    const source = `function helper(): void {
+  print(1);
+}
+function main(): void {
+  print(1);
+}
+`;
+    const root = writeTempProject({
+      "main.sn": source,
+      "util.sn": `export function helper(x: i32): i32 {
+  return x;
+}
+`,
+    });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const edit = computeNamedImportEdit(
+      source,
+      result.semantic.modules.find((m) => m.path === path)!.ast,
+      "./util",
+      "helper",
+    );
+    expect(edit?.newText).toMatch(/helper as helper\d/);
+  });
+
+  it("emits semantic tokens for declarations and shadowed symbols", () => {
+    const source = `const value = 1;
+function main(): void {
+  const value = 2;
+  print(value);
+}
+function other(): void {
+  print(value);
+}
+`;
+    const root = writeTempProject({ "main.sn": source });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const tokens = semanticTokensForFile(result.semantic, path);
+    expect(tokens.length).toBeGreaterThan(0);
+    const encoded = encodeSemanticTokens(tokens);
+    expect(encoded.length % 5).toBe(0);
+    expect(encoded.length).toBeGreaterThan(0);
+
+    const valueInfo = [...result.semantic.symbolInfo.values()].filter(
+      (s) => s.name === "value" && s.location.file === path,
+    );
+    expect(valueInfo.length).toBeGreaterThanOrEqual(2);
+    expect(valueInfo.every((s) => s.modifiers.includes("readonly"))).toBe(true);
   });
 });

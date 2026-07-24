@@ -3,27 +3,40 @@ import { fileURLToPath } from "node:url";
 import {
   analyzeFile,
   buildExportIndex,
+  codeActionsAt,
   completionsAt,
   computeNamedImportEdit,
   definitionAt,
   documentSymbolsForFile,
+  encodeSemanticTokens,
   hoverAt,
   offsetToPosition,
+  prepareRenameAt,
   referencesAt,
+  renameAt,
+  semanticTokensForFile,
+  signatureHelpAt,
+  SEMANTIC_TOKEN_MODIFIERS,
+  SEMANTIC_TOKEN_TYPES,
   type AnalyzeResult,
+  type CodeActionInfo,
   type Diagnostic as SnDiagnostic,
   type DocumentSymbolInfo,
   type DocumentSymbolKind,
   type ExportIndexEntry,
+  type ImportTextEdit,
   type ScopeBindingInfo,
   type SemanticLocation,
   type SemanticModel,
   type SourceSpan,
 } from "@sonite/compiler";
 import {
+  CodeActionKind,
   CompletionItemKind,
   DiagnosticSeverity,
+  ResponseError,
   SymbolKind,
+  type CodeAction,
   type CompletionItem,
   type Diagnostic,
   type DocumentSymbol,
@@ -31,8 +44,12 @@ import {
   type Location,
   type Position,
   type Range,
+  type SignatureHelp,
   type TextEdit,
+  type WorkspaceEdit,
 } from "vscode-languageserver/node.js";
+
+export { SEMANTIC_TOKEN_MODIFIERS, SEMANTIC_TOKEN_TYPES };
 
 export function uriToPath(uri: string): string {
   if (uri.startsWith("file://")) {
@@ -238,7 +255,6 @@ export function toCompletionItems(
       type: "5",
       module: "6",
     };
-    // Auto-imports sort after already-available symbols of the same kind.
     const autoRank = item.autoImport ? "1" : "0";
     const completion: CompletionItem = {
       label: item.name,
@@ -280,7 +296,6 @@ export function toCompletionItems(
 }
 
 export interface WorkspaceOverlay {
-  /** Absolute path → current editor contents */
   getDocument(path: string): string | undefined;
 }
 
@@ -341,9 +356,10 @@ export function referencesAtPosition(
   filePath: string,
   source: string,
   position: Position,
+  includeDeclaration = true,
 ): Location[] {
   const offset = positionToOffset(source, position);
-  const locs = referencesAt(semantic, filePath, offset);
+  const locs = referencesAt(semantic, filePath, offset, { includeDeclaration });
   return locs.map((loc: SemanticLocation) => ({
     uri: pathToUri(loc.file),
     range: spanToRange(loc.span),
@@ -384,7 +400,139 @@ export function documentSymbolsAtFile(
   return documentSymbolsForFile(semantic, filePath).map(toDocumentSymbol);
 }
 
-/** Collect diagnostics for every file that produced them. */
+function importEditToTextEdit(source: string, edit: ImportTextEdit): TextEdit {
+  return {
+    range: {
+      start: offsetToPosition(source, edit.startOffset),
+      end: offsetToPosition(source, edit.endOffset),
+    },
+    newText: edit.newText,
+  };
+}
+
+export function prepareRenameAtPosition(
+  semantic: SemanticModel,
+  filePath: string,
+  source: string,
+  position: Position,
+): Range | null {
+  const offset = positionToOffset(source, position);
+  const loc = prepareRenameAt(semantic, filePath, offset);
+  if (!loc) {
+    return null;
+  }
+  return spanToRange(loc.span);
+}
+
+export function renameAtPosition(
+  semantic: SemanticModel,
+  filePath: string,
+  source: string,
+  position: Position,
+  newName: string,
+): WorkspaceEdit | ResponseError {
+  const offset = positionToOffset(source, position);
+  const result = renameAt(semantic, filePath, offset, newName);
+  if (result.error) {
+    return new ResponseError(1, result.error);
+  }
+  const changes: Record<string, TextEdit[]> = {};
+  for (const edit of result.edits) {
+    const uri = pathToUri(edit.file);
+    const list = changes[uri] ?? [];
+    list.push({
+      range: spanToRange(edit.span),
+      newText: edit.newText,
+    });
+    changes[uri] = list;
+  }
+  return { changes };
+}
+
+export function signatureHelpAtPosition(
+  semantic: SemanticModel,
+  filePath: string,
+  source: string,
+  position: Position,
+): SignatureHelp | null {
+  const offset = positionToOffset(source, position);
+  const info = signatureHelpAt(semantic, filePath, offset, source);
+  if (!info) {
+    return null;
+  }
+  return {
+    signatures: info.signatures.map((sig) => ({
+      label: sig.label,
+      parameters: sig.parameters.map((p) => ({
+        label: `${p.name}${p.optional ? "?" : ""}: ${p.type}`,
+      })),
+    })),
+    activeSignature: info.activeSignature,
+    activeParameter: info.activeParameter,
+  };
+}
+
+function codeActionKindToLsp(kind: CodeActionInfo["kind"]): CodeActionKind {
+  switch (kind) {
+    case "quickfix":
+      return CodeActionKind.QuickFix;
+    case "quickfix.import":
+      return CodeActionKind.QuickFix;
+    case "source.organizeImports":
+      return CodeActionKind.SourceOrganizeImports;
+  }
+}
+
+export function codeActionsAtPosition(
+  semantic: SemanticModel,
+  filePath: string,
+  source: string,
+  diagnostics: readonly SnDiagnostic[],
+  exportIndex?: readonly ExportIndexEntry[],
+): CodeAction[] {
+  const options: {
+    diagnostics: readonly SnDiagnostic[];
+    exportIndex?: readonly ExportIndexEntry[];
+  } = { diagnostics };
+  if (exportIndex) {
+    options.exportIndex = exportIndex;
+  }
+  const actions = codeActionsAt(semantic, filePath, source, options);
+  return actions.map((action) => {
+    const changes: Record<string, TextEdit[]> = {};
+    for (const fileEdit of action.edits) {
+      const uri = pathToUri(fileEdit.file);
+      const fileSource =
+        fileEdit.file === filePath
+          ? source
+          : (semantic.modules.find((m) => m.path === fileEdit.file)?.source ??
+            "");
+      const list = changes[uri] ?? [];
+      for (const edit of fileEdit.edits) {
+        list.push(importEditToTextEdit(fileSource, edit));
+      }
+      changes[uri] = list;
+    }
+    const codeAction: CodeAction = {
+      title: action.title,
+      kind: codeActionKindToLsp(action.kind),
+      edit: { changes },
+    };
+    if (action.isPreferred !== undefined) {
+      codeAction.isPreferred = action.isPreferred;
+    }
+    return codeAction;
+  });
+}
+
+export function semanticTokensAtFile(
+  semantic: SemanticModel,
+  filePath: string,
+): { data: number[] } {
+  const tokens = semanticTokensForFile(semantic, filePath);
+  return { data: encodeSemanticTokens(tokens) };
+}
+
 export function diagnosticsByFile(
   diagnostics: readonly SnDiagnostic[],
 ): Map<string, Diagnostic[]> {
@@ -422,4 +570,18 @@ export function buildExportIndexForFile(
       return readFileSync(absolutePath, "utf8");
     },
   });
+}
+
+export function collectReverseDeps(
+  result: AnalyzeResult,
+): Map<string, Set<string>> {
+  const reverse = new Map<string, Set<string>>();
+  for (const mod of result.modules) {
+    for (const binding of mod.imports) {
+      const set = reverse.get(binding.modulePath) ?? new Set();
+      set.add(mod.path);
+      reverse.set(binding.modulePath, set);
+    }
+  }
+  return reverse;
 }

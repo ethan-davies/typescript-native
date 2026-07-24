@@ -1,11 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { emptySemanticModel } from "@sonite/compiler";
 import {
+  analyzeFile,
+  emptySemanticModel,
+  encodeSemanticTokens,
+  semanticTokensForFile,
+} from "@sonite/compiler";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ResponseError } from "vscode-languageserver/node.js";
+import {
+  collectReverseDeps,
   positionToOffset,
+  renameAtPosition,
+  semanticTokensAtFile,
   spanToRange,
   toCompletionItems,
   toLspDiagnostics,
 } from "../src/protocol.js";
+
+function writeTempProject(files: Record<string, string>): string {
+  const root = join(
+    tmpdir(),
+    `sn-lsp-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  mkdirSync(root, { recursive: true });
+  for (const [rel, source] of Object.entries(files)) {
+    const path = join(root, rel);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, source);
+  }
+  return root;
+}
 
 describe("LSP protocol helpers", () => {
   it("converts 1-based spans to 0-based ranges", () => {
@@ -101,5 +127,77 @@ describe("LSP protocol helpers", () => {
     expect(items[0]!.additionalTextEdits![0]!.newText).toContain(
       'import { abs } from "std/math"',
     );
+  });
+
+  it("builds WorkspaceEdit for rename and errors on conflict", () => {
+    const source = `function greet(): void {
+  print(1);
+}
+function main(): void {
+  greet();
+}
+`;
+    const root = writeTempProject({ "main.sn": source });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const offset = source.indexOf("greet(");
+    const line = source.slice(0, offset).split("\n").length - 1;
+    const character = offset - (source.lastIndexOf("\n", offset - 1) + 1);
+    const edit = renameAtPosition(
+      result.semantic,
+      path,
+      source,
+      { line, character },
+      "sayHello",
+    );
+    expect(edit).not.toBeInstanceOf(ResponseError);
+    if (edit instanceof ResponseError) {
+      return;
+    }
+    expect(edit.changes).toBeDefined();
+    const uris = Object.keys(edit.changes ?? {});
+    expect(uris.length).toBeGreaterThanOrEqual(1);
+
+    const conflictSource = `function main(): void {
+  const foo = 1;
+  const bar = 2;
+  print(foo);
+}
+`;
+    const root2 = writeTempProject({ "main.sn": conflictSource });
+    const path2 = join(root2, "main.sn");
+    const result2 = analyzeFile(path2);
+    const fooOff = conflictSource.indexOf("foo");
+    const fooLine = conflictSource.slice(0, fooOff).split("\n").length - 1;
+    const fooChar =
+      fooOff - (conflictSource.lastIndexOf("\n", fooOff - 1) + 1);
+    const conflict = renameAtPosition(
+      result2.semantic,
+      path2,
+      conflictSource,
+      { line: fooLine, character: fooChar },
+      "bar",
+    );
+    expect(conflict).toBeInstanceOf(ResponseError);
+  });
+
+  it("encodes semantic tokens and reverse deps", () => {
+    const source = `function main(): void {
+  const n = 1;
+  print(n);
+}
+`;
+    const root = writeTempProject({ "main.sn": source });
+    const path = join(root, "main.sn");
+    const result = analyzeFile(path);
+    const encoded = semanticTokensAtFile(result.semantic, path);
+    expect(encoded.data.length % 5).toBe(0);
+    expect(encoded.data.length).toBeGreaterThan(0);
+
+    const tokens = semanticTokensForFile(result.semantic, path);
+    expect(encodeSemanticTokens(tokens)).toEqual(encoded.data);
+
+    const reverse = collectReverseDeps(result);
+    expect(reverse).toBeInstanceOf(Map);
   });
 });

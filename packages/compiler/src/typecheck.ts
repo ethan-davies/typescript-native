@@ -26,6 +26,7 @@ import {
   emptySemanticModel,
   type SemanticModel,
   type ScopeBindingInfo,
+  type SemanticTokenModifier,
 } from "./analysis/semantic.js";
 import {
   InstantiationCollector,
@@ -411,6 +412,9 @@ let activeModulePath = "";
 let activeModuleId = "";
 /** Optional semantic collector for IDE queries (LSP). */
 let activeSemantic: SemanticCollector | null = null;
+/** Named/namespace import locals for the module under check (unused-import tracking). */
+let activeImportedLocals = new Map<string, SourceSpan>();
+let activeUsedImports = new Set<string>();
 /** Templates for the active module. */
 let activeGenericStructs: Map<string, GenericStructTemplate> = new Map();
 let activeGenericClasses: Map<string, GenericClassTemplate> = new Map();
@@ -604,6 +608,8 @@ export function typecheckModules(
 
     const errorsBeforeImports = diagnostics.diagnostics.length;
     const exportTable = exportTables.get(mod.path);
+    activeImportedLocals = new Map();
+    activeUsedImports = new Set();
 
     for (const binding of mod.imports) {
       const imported = byPath.get(binding.modulePath);
@@ -629,6 +635,9 @@ export function typecheckModules(
             byPath,
           ),
         );
+        if (!isHiddenPreludeImport(binding)) {
+          activeImportedLocals.set(binding.alias, binding.span);
+        }
         continue;
       }
 
@@ -695,6 +704,9 @@ export function typecheckModules(
         genericTypeAliases,
       });
       localNames.add(binding.localName);
+      if (!isHiddenPreludeImport(binding)) {
+        activeImportedLocals.set(binding.localName, binding.span);
+      }
     }
 
     void exportTable;
@@ -775,6 +787,12 @@ export function typecheckModules(
         }
       }
     }
+
+    for (const [name, span] of activeImportedLocals) {
+      if (!activeUsedImports.has(name)) {
+        diagnostics.warning(`Unused import '${name}'`, span, "E0412");
+      }
+    }
   }
 
   activeNamespaces = new Map();
@@ -795,6 +813,8 @@ export function typecheckModules(
   activeGenericFunctions = new Map();
   activeExtensions = [];
   allModuleSymbols = new Map();
+  activeImportedLocals = new Map();
+  activeUsedImports = new Set();
   diagnostics.clearFile();
   activeSemantic = null;
 
@@ -1492,6 +1512,10 @@ function indexModuleSymbols(
         location: { file, span: binding.span },
       });
       activeSemantic.recordDeclaration(file, binding.span);
+      recordSymbolAt(file, binding.span, binding.alias, "module", [
+        "declaration",
+        "definition",
+      ]);
       const imported = allModuleSymbols.get(binding.modulePath);
       if (imported) {
         const members = namespaceMemberCompletions(imported);
@@ -1507,6 +1531,7 @@ function indexModuleSymbols(
       const imported = allModuleSymbols.get(binding.modulePath);
       let kind: ScopeBindingInfo["kind"] = "variable";
       let detail = `import ${binding.exportName}`;
+      const modifiers: SemanticTokenModifier[] = ["declaration", "definition"];
       if (imported) {
         if (imported.functions.has(binding.exportName)) {
           kind = "function";
@@ -1536,6 +1561,12 @@ function indexModuleSymbols(
           const val = imported.values.get(binding.exportName)!;
           kind = val.mutability === "const" ? "constant" : "variable";
           detail = typeToString(val.type);
+          if (val.mutability === "const") {
+            modifiers.push("readonly");
+          }
+        }
+        if (binding.modulePath.includes("/std/") || binding.specifier.startsWith("std")) {
+          modifiers.push("defaultLibrary");
         }
         const defLoc = exportLocation(imported, binding.exportName);
         if (defLoc) {
@@ -1549,6 +1580,7 @@ function indexModuleSymbols(
         location: { file, span: binding.span },
       });
       activeSemantic.recordDeclaration(file, binding.span);
+      recordSymbolAt(file, binding.span, binding.localName, kind, modifiers);
     }
   }
   for (const sig of functions.values()) {
@@ -1567,6 +1599,7 @@ function indexModuleSymbols(
       location: { file, span: sig.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, sig.decl.name.span);
+    recordSymbolAt(file, sig.decl.name.span, sig.name, "function");
   }
   for (const def of structs.values()) {
     activeSemantic.addModuleSymbol(file, {
@@ -1576,6 +1609,7 @@ function indexModuleSymbols(
       location: { file, span: def.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, def.decl.name.span);
+    recordSymbolAt(file, def.decl.name.span, def.decl.name.name, "struct");
   }
   for (const def of enums.values()) {
     activeSemantic.addModuleSymbol(file, {
@@ -1585,6 +1619,17 @@ function indexModuleSymbols(
       location: { file, span: def.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, def.decl.name.span);
+    recordSymbolAt(file, def.decl.name.span, def.decl.name.name, "enum");
+    for (const variant of def.decl.variants) {
+      recordSymbolAt(
+        file,
+        variant.name.span,
+        variant.name.name,
+        "enumMember",
+        ["declaration", "definition", "readonly"],
+      );
+      activeSemantic.recordDeclaration(file, variant.name.span);
+    }
   }
   for (const def of classes.values()) {
     activeSemantic.addModuleSymbol(file, {
@@ -1594,6 +1639,7 @@ function indexModuleSymbols(
       location: { file, span: def.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, def.decl.name.span);
+    recordSymbolAt(file, def.decl.name.span, def.decl.name.name, "class");
   }
   for (const def of interfaces.values()) {
     activeSemantic.addModuleSymbol(file, {
@@ -1603,6 +1649,7 @@ function indexModuleSymbols(
       location: { file, span: def.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, def.decl.name.span);
+    recordSymbolAt(file, def.decl.name.span, def.decl.name.name, "interface");
   }
   for (const def of typeAliases.values()) {
     activeSemantic.addModuleSymbol(file, {
@@ -1612,15 +1659,22 @@ function indexModuleSymbols(
       location: { file, span: def.decl.name.span },
     });
     activeSemantic.recordDeclaration(file, def.decl.name.span);
+    recordSymbolAt(file, def.decl.name.span, def.decl.name.name, "type");
   }
   for (const def of values.values()) {
+    const kind = def.mutability === "const" ? "constant" : "variable";
+    const modifiers: SemanticTokenModifier[] =
+      def.mutability === "const"
+        ? ["declaration", "definition", "readonly"]
+        : ["declaration", "definition"];
     activeSemantic.addModuleSymbol(file, {
       name: def.name,
-      kind: def.mutability === "const" ? "constant" : "variable",
+      kind,
       detail: typeToString(def.type),
       location: { file, span: def.span },
     });
     activeSemantic.recordDeclaration(file, def.span);
+    recordSymbolAt(file, def.span, def.name, kind, modifiers);
   }
 }
 
@@ -3351,6 +3405,72 @@ function resultOfCall(
   return returnType;
 }
 
+function noteImportUse(name: string): void {
+  if (activeImportedLocals.has(name)) {
+    activeUsedImports.add(name);
+  }
+}
+
+function returnTypeDisplay(returnType: ReturnType): string {
+  if (returnType === "void") {
+    return "void";
+  }
+  return typeToString(returnType);
+}
+
+/** Record signature help info for a call/new expression site. */
+function recordDeclCallSignature(
+  callSpan: SourceSpan,
+  displayName: string,
+  paramDecls: readonly Parameter[] | null,
+  paramTypes: readonly ValueType[],
+  returnType: ReturnType,
+  typeParamNames: readonly string[] = [],
+): void {
+  if (!activeSemantic || !activeModulePath) {
+    return;
+  }
+  const parameters = paramTypes.map((t, i) => {
+    const decl = paramDecls?.[i];
+    return {
+      name: decl?.name.name ?? `arg${i}`,
+      type: typeToString(t),
+      optional: decl?.defaultValue != null,
+    };
+  });
+  const paramLabel = parameters
+    .map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`)
+    .join(", ");
+  const typeParamsLabel =
+    typeParamNames.length > 0 ? `<${typeParamNames.join(", ")}>` : "";
+  const ret = returnTypeDisplay(returnType);
+  activeSemantic.recordCallSignature(activeModulePath, {
+    label: `${displayName}${typeParamsLabel}(${paramLabel}): ${ret}`,
+    parameters,
+    returnType: ret,
+    typeParameters: [...typeParamNames],
+    callSpan,
+  });
+}
+
+function recordSymbolAt(
+  file: string,
+  span: SourceSpan,
+  name: string,
+  kind: ScopeBindingInfo["kind"],
+  modifiers: readonly SemanticTokenModifier[] = ["declaration", "definition"],
+): void {
+  if (!activeSemantic) {
+    return;
+  }
+  activeSemantic.recordSymbolInfo({
+    name,
+    kind,
+    modifiers,
+    location: { file, span },
+  });
+}
+
 export function isTupleType(type: ValueType): type is TupleValueType {
   return typeof type === "object" && type.kind === "tuple";
 }
@@ -4031,6 +4151,7 @@ function resolveNamedType(
     ann.typeArgs.length === 0 &&
     activeTypeAliases.has(ann.name)
   ) {
+    noteImportUse(ann.name);
     return expandTypeAlias(
       activeTypeAliases.get(ann.name)!,
       [],
@@ -4056,6 +4177,7 @@ function resolveNamedType(
       );
       return null;
     }
+    noteImportUse(ann.namespace);
     if (ns.typeAliases.has(ann.name)) {
       return expandTypeAlias(
         ns.typeAliases.get(ann.name)!,
@@ -4090,12 +4212,15 @@ function resolveNamedType(
     return null;
   }
   if (enums.has(ann.name)) {
+    noteImportUse(ann.name);
     return { kind: "enum", name: enums.get(ann.name)!.name };
   }
   if (structs.has(ann.name)) {
+    noteImportUse(ann.name);
     return { kind: "struct", name: structs.get(ann.name)!.name };
   }
   if (specializedStructs.has(ann.name)) {
+    noteImportUse(ann.name);
     return { kind: "struct", name: specializedStructs.get(ann.name)!.name };
   }
   if (syntheticObjectStructs.has(ann.name)) {
@@ -4109,12 +4234,15 @@ function resolveNamedType(
     };
   }
   if (activeClasses.has(ann.name)) {
+    noteImportUse(ann.name);
     return { kind: "class", name: activeClasses.get(ann.name)!.name };
   }
   if (specializedClasses.has(ann.name)) {
+    noteImportUse(ann.name);
     return { kind: "class", name: specializedClasses.get(ann.name)!.name };
   }
   if (activeInterfaces.has(ann.name)) {
+    noteImportUse(ann.name);
     const iface = activeInterfaces.get(ann.name)!;
     if (iface.indexType && iface.methods.length === 0) {
       return { kind: "map", valueType: iface.indexType };
@@ -5443,6 +5571,15 @@ function checkGenericFunctionCall(
     return null;
   }
   void resolvedArgTypes;
+  noteImportUse(tpl.decl.name.name);
+  recordDeclCallSignature(
+    expr.span,
+    tpl.decl.name.name,
+    tpl.decl.params,
+    paramTypes,
+    returnType,
+    tpl.decl.typeParams.map((p) => p.name.name),
+  );
   return resultOfCall(
     tpl.decl.isAsync,
     returnType,
@@ -5541,6 +5678,16 @@ function checkFunction(
       defFile: activeModulePath,
       bindingKind: "parameter",
     });
+    if (activeSemantic && activeModulePath) {
+      activeSemantic.recordDeclaration(activeModulePath, param.name.span);
+      recordSymbolAt(
+        activeModulePath,
+        param.name.span,
+        param.name.name,
+        "parameter",
+        ["declaration", "definition", "readonly"],
+      );
+    }
   }
 
   const paramTypes: ValueType[] = [];
@@ -6411,6 +6558,15 @@ function checkStatement(
             typeToString(annotated),
           );
           activeSemantic.recordDeclaration(activeModulePath, name.span);
+          recordSymbolAt(
+            activeModulePath,
+            name.span,
+            name.name,
+            stmt.mutability === "const" ? "constant" : "variable",
+            stmt.mutability === "const"
+              ? ["declaration", "definition", "readonly"]
+              : ["declaration", "definition"],
+          );
         }
         return false;
       }
@@ -6468,6 +6624,15 @@ function checkStatement(
           typeToString(bindingType),
         );
         activeSemantic.recordDeclaration(activeModulePath, name.span);
+        recordSymbolAt(
+          activeModulePath,
+          name.span,
+          name.name,
+          stmt.mutability === "const" ? "constant" : "variable",
+          stmt.mutability === "const"
+            ? ["declaration", "definition", "readonly"]
+            : ["declaration", "definition"],
+        );
       }
       return false;
     }
@@ -7500,6 +7665,14 @@ function checkNamespaceCall(
       },
     );
   }
+
+  recordDeclCallSignature(
+    expr.span,
+    `${nsName}.${sig.name}`,
+    sig.decl.params,
+    sig.params,
+    sig.returnType,
+  );
 
   return resultOfCall(
     sig.isAsync,
@@ -8761,6 +8934,15 @@ function checkExpressionInner(
           ) {
             return null;
           }
+          noteImportUse(expr.className.name);
+          recordDeclCallSignature(
+            expr.span,
+            classDef.localName,
+            ctorParams,
+            classDef.constructorParams,
+            { kind: "class", name: classDef.name },
+            classTpl.decl.typeParams.map((p) => p.name.name),
+          );
           return { kind: "class", name: classDef.name };
         }
         const instantiated = instantiateGenericClass(
@@ -8873,11 +9055,20 @@ function checkExpressionInner(
           }
         }
       }
+      noteImportUse(expr.className.name);
+      recordDeclCallSignature(
+        expr.span,
+        classDef.localName,
+        classDef.constructorDecl?.params ?? null,
+        classDef.constructorParams,
+        { kind: "class", name: classDef.name },
+      );
       return { kind: "class", name: classDef.name };
     }
     case "Identifier": {
       const binding = scope.get(expr.name);
       if (binding) {
+        noteImportUse(expr.name);
         if (
           activeSemantic &&
           activeModulePath &&
@@ -8893,6 +9084,7 @@ function checkExpressionInner(
       }
       const modVal = activeValues.get(expr.name);
       if (modVal) {
+        noteImportUse(expr.name);
         if (activeSemantic && activeModulePath) {
           activeSemantic.recordDefinition(activeModulePath, expr.span, {
             file: modVal.modulePath,
@@ -8908,6 +9100,7 @@ function checkExpressionInner(
       }
       const sig = functions.get(expr.name);
       if (sig) {
+        noteImportUse(expr.name);
         if (activeSemantic && activeModulePath) {
           activeSemantic.recordDefinition(activeModulePath, expr.span, {
             file: sig.modulePath,
@@ -9546,6 +9739,7 @@ function checkExpressionInner(
           );
         }
 
+        noteImportUse(expr.callee.name);
         if (activeSemantic && activeModulePath) {
           activeSemantic.recordDefinition(activeModulePath, expr.callee.span, {
             file: sig.modulePath,
@@ -9579,6 +9773,15 @@ function checkExpressionInner(
         ) {
           return null;
         }
+
+        recordDeclCallSignature(
+          expr.span,
+          sig.name,
+          sig.decl.params,
+          sig.params,
+          sig.returnType,
+          sig.decl.typeParams.map((p) => p.name.name),
+        );
 
         return resultOfCall(
           sig.isAsync,
@@ -9678,8 +9881,22 @@ function checkFunctionValueCall(
         "E0309",
       );
     }
+    recordDeclCallSignature(
+      expr.span,
+      "fn",
+      null,
+      fnType.params as ValueType[],
+      fnType.returnType as ReturnType,
+    );
     return null;
   }
+  recordDeclCallSignature(
+    expr.span,
+    "fn",
+    null,
+    fnType.params as ValueType[],
+    fnType.returnType as ReturnType,
+  );
   return resultOfCall(
     fnType.isAsync,
     fnType.returnType as ReturnType,
@@ -10998,8 +11215,10 @@ function checkMethodArgs(
         "E0309",
       );
     }
+    recordDeclCallSignature(expr.span, name, paramDecls, params, returnType);
     return null;
   }
+  recordDeclCallSignature(expr.span, name, paramDecls, params, returnType);
   return resultOfCall(
     isAsync,
     returnType,
