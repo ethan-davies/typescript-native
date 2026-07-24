@@ -787,6 +787,13 @@ export function typecheckModules(
         } else {
           const def = classes.get(decl.name.name);
           if (def) {
+            for (const ifaceType of decl.implementsTypes) {
+              if (ifaceType.namespace) {
+                noteImportUse(ifaceType.namespace);
+              } else {
+                noteImportUse(ifaceType.name);
+              }
+            }
             checkClassMembers(def, functions, structs, enums, diagnostics);
           }
         }
@@ -2882,6 +2889,7 @@ function collectClasses(
           visiting.delete(localName);
           return null;
         }
+        noteImportUse(ifaceType.namespace);
       } else if (byLocal.has(ifaceType.name) && interfaces.has(ifaceType.name)) {
         // Same-module interface (not yet finished is fine — interfaces are complete).
         iface = interfaces.get(ifaceType.name);
@@ -2896,6 +2904,9 @@ function collectClasses(
         );
         visiting.delete(localName);
         return null;
+      }
+      if (ifaceType.namespace == null) {
+        noteImportUse(ifaceType.name);
       }
       if (seenIfaces.has(iface.name)) {
         diagnostics.error(
@@ -8721,6 +8732,7 @@ function checkExpressionInner(
             ) {
               return null;
             }
+            noteImportUse(expr.object.name);
             return field.type;
           }
         }
@@ -9853,6 +9865,8 @@ function checkExpressionInner(
             );
             return null;
           }
+          noteImportUse(expr.callee.name);
+          noteBindingUse(binding);
           if (
             activeSemantic &&
             activeModulePath &&
@@ -10497,6 +10511,7 @@ function checkMethodCall(
       ) {
         return null;
       }
+      noteImportUse(callee.object.name);
       return checkMethodArgs(
         method.name,
         method.params,

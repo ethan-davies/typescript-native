@@ -15,7 +15,7 @@ Pinned LLVM 22.1.8 + LLD native binding for the Sonite toolchain.
 
 Each platform package ships `native/sonite_llvm.node` plus bundled `lib/` LLVM/LLD shared libraries. Users do **not** need system LLVM, clang, llc, or ld.lld.
 
-When publishing to npm, bump all `@sonite/llvm-*` packages in lockstep with `@sonite/llvm` and replace `workspace:*` optionalDependency ranges with the published version. Platform packages use `os`/`cpu` filters so npm installs only the matching artifact.
+When publishing to npm, bump all `@sonite/llvm-*` packages in lockstep with `@sonite/llvm` and replace `workspace:*` optionalDependency ranges with the published version. Add `os`/`cpu` filters to each published platform package so npm installs only the matching artifact (they are omitted in the monorepo to avoid pnpm Unsupported platform WARNs on workspace members).
 
 ## Contributor build
 

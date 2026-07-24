@@ -6,7 +6,5 @@
   "type": "module",
   "main": "./index.js",
   "files": ["index.js"],
-  "os": ["win32"],
-  "cpu": ["arm64"],
   "engines": { "node": ">=20" }
 }

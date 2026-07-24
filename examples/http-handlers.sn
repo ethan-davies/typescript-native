@@ -1,6 +1,6 @@
 import { Server, Request, Response, URL } from "std/http";
 
-async function handleHi(req: Request): Response {
+async function handleHi(_req: Request): Response {
   return Response.text("hi");
 }
 

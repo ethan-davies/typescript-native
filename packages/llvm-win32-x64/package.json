@@ -6,7 +6,5 @@
   "type": "module",
   "main": "./index.js",
   "files": ["index.js", "native", "lib", "BUILD_INFO.json"],
-  "os": ["win32"],
-  "cpu": ["x64"],
   "engines": { "node": ">=20" }
 }

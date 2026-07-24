@@ -148,6 +148,100 @@ function greet(name: string, _ignored: i32): void {
     expect(fail.success).toBe(false);
     expect(fail.diagnostics.some((d) => d.severity === "error")).toBe(true);
   });
+
+  it("does not warn when a function-typed parameter is called", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-fn-call-"));
+    try {
+      writeFileSync(
+        join(dir, "main.sn"),
+        `function apply(fn: (i32) => i32, x: i32): i32 {
+  return fn(x);
+}
+
+function main(): void {
+  print(apply((n: i32): i32 => n + 1, 1));
+}
+`,
+      );
+      const result = analyzeFile(join(dir, "main.sn"));
+      expect(
+        result.diagnostics.some(
+          (d) => d.code === "E0415" && d.message.includes("'fn'"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not warn when an imported class is used via a static method", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-static-import-"));
+    try {
+      writeFileSync(
+        join(dir, "lib.sn"),
+        `export class Foo {
+  static bar(): i32 {
+    return 1;
+  }
+}
+`,
+      );
+      writeFileSync(
+        join(dir, "main.sn"),
+        `import { Foo } from "./lib";
+
+function main(): void {
+  print(Foo.bar());
+}
+`,
+      );
+      const result = analyzeFile(join(dir, "main.sn"));
+      expect(
+        result.diagnostics.some(
+          (d) => d.code === "E0412" && d.message.includes("Foo"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not warn when an imported interface is used in implements", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sn-implements-import-"));
+    try {
+      writeFileSync(
+        join(dir, "lib.sn"),
+        `export interface Greeter {
+  greet(): void;
+}
+`,
+      );
+      writeFileSync(
+        join(dir, "main.sn"),
+        `import { Greeter } from "./lib";
+
+class Hello implements Greeter {
+  greet(): void {
+    print("hi");
+  }
+}
+
+function main(): void {
+  let h = new Hello();
+  h.greet();
+}
+`,
+      );
+      const result = analyzeFile(join(dir, "main.sn"));
+      expect(
+        result.diagnostics.some(
+          (d) => d.code === "E0412" && d.message.includes("Greeter"),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("format recovery and range", () => {

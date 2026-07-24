@@ -1029,11 +1029,11 @@ class Route {
   }
 }
 
-async function fallbackHandler(req: Request): Response {
+async function fallbackHandler(_req: Request): Response {
   return Response.status(500);
 }
 
-function defaultErrFn(req: Request, code: i32): Response {
+function defaultErrFn(_req: Request, code: i32): Response {
   if (code == 400) {
     let bad = Response.text("Bad Request");
     bad.status = 400;
@@ -1353,7 +1353,7 @@ function applyMiddleware(server: Server, request: Request, response: Response): 
   if (mws.length == 0) {
     return response;
   }
-  let handler: (Request) => Response = (req: Request): Response => {
+  let handler: (Request) => Response = (_req: Request): Response => {
     return response;
   };
   let chain: (Request) => Response = handler;
@@ -1739,9 +1739,7 @@ async function clientFetch(
     let pooled = takePool(client, key);
     let connHandle: i64 = 0;
     let tlsHandle: i64 = 0;
-    let fromPool = false;
     if (pooled != null) {
-      fromPool = true;
       if (pooled.secure) {
         tlsHandle = pooled.handle;
       } else {
