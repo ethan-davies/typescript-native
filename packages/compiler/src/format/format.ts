@@ -7,6 +7,9 @@ import {
 } from "../diagnostics/diagnostic.js";
 import { Lexer } from "../lexer/lexer.js";
 import { Parser } from "../parser/parser.js";
+import { attachComments } from "./comments.js";
+import type { FormatOptions } from "./options.js";
+import { resolveFormatOptions } from "./options.js";
 import { printProgram } from "./printer.js";
 
 export interface FormatResult {
@@ -16,20 +19,25 @@ export interface FormatResult {
   readonly success: boolean;
 }
 
+export interface FormatSourceOptions extends Partial<FormatOptions> {
+  readonly fileName?: string;
+}
+
 /**
  * Parse source and pretty-print it. Does not rewrite when parse errors occur.
- * Comments are not preserved in v1.
+ * Comments are preserved via a post-parse attachment pass.
  */
 export function formatSource(
   source: string,
-  options: { readonly fileName?: string } = {},
+  options: FormatSourceOptions = {},
 ): FormatResult {
   const diagnostics = new DiagnosticCollector();
   const fileName = options.fileName ?? "<source>";
   diagnostics.setFile(fileName);
 
+  const formatOpts = resolveFormatOptions(options);
   const lexer = new Lexer(source, diagnostics);
-  const tokens = lexer.tokenize();
+  const { tokens, comments } = lexer.tokenizeWithComments();
   const parser = new Parser(tokens, diagnostics);
   const ast = parser.parse();
 
@@ -42,16 +50,20 @@ export function formatSource(
     };
   }
 
+  const attachments = attachComments(ast, comments);
   return {
-    code: printProgram(ast),
+    code: printProgram(ast, formatOpts, attachments),
     ast,
     diagnostics: diagnostics.diagnostics,
     success: true,
   };
 }
 
-export function formatFile(filePath: string): FormatResult {
+export function formatFile(
+  filePath: string,
+  options: Partial<FormatOptions> = {},
+): FormatResult {
   const absolute = resolve(filePath);
   const source = readFileSync(absolute, "utf8");
-  return formatSource(source, { fileName: absolute });
+  return formatSource(source, { ...options, fileName: absolute });
 }

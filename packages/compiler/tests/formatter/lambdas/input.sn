@@ -1,0 +1,6 @@
+function main(): void {
+const doubled= [1,2,3].map((value:i32):i32=>value*2);
+const block=(value:i32):i32=>{const x=value*2;return x;};
+print(doubled);
+print(block);
+}

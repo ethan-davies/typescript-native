@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatSource } from "../src/format/format.js";
+import { parseFormatSection } from "../src/format/config.js";
 
 const repoRoot = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const examplesDir = join(repoRoot, "examples");
@@ -29,7 +30,7 @@ function formatFailure(result: {
 describe("formatSource", () => {
   it("formats a minimal program", () => {
     const out = assertIdempotent(`function main():void{print("hi");}`);
-    expect(out).toBe(`function main(): void {\n  print("hi");\n}\n`);
+    expect(out).toBe(`function main(): void {\n    print("hi");\n}\n`);
   });
 
   it("preserves parentheses needed for precedence", () => {
@@ -100,11 +101,56 @@ function main(): void {
 `);
   });
 
+  it("sorts and groups imports", () => {
+    const out = assertIdempotent(`import { foo } from "./foo";
+import { Client } from "@sonite/http";
+import { readFile } from "std/fs";
+import { bar } from "./utils";
+function main(): void {}
+`);
+    expect(out).toBe(`import { readFile } from "std/fs";
+
+import { Client } from "@sonite/http";
+
+import { foo } from "./foo";
+import { bar } from "./utils";
+
+function main(): void {}
+`);
+  });
+
+  it("preserves line comments", () => {
+    const out = assertIdempotent(`// Get the greeting.
+function main(): void {
+    // say hi
+    print("hi");
+}
+`);
+    expect(out).toContain("// Get the greeting.");
+    expect(out).toContain("// say hi");
+  });
+
+  it("preserves string raw lexemes", () => {
+    const out = assertIdempotent(`function main(): void {
+    print("hello\\nworld");
+}
+`);
+    expect(out).toContain('"hello\\nworld"');
+  });
+
   it("reports parse errors without rewriting", () => {
     const result = formatSource(`function main(: void {`);
     expect(result.success).toBe(false);
     expect(result.code).toBeNull();
     expect(result.diagnostics.length).toBeGreaterThan(0);
+  });
+
+  it("honors format options", () => {
+    const out = formatSource(`function main(): void { print("x"); }`, {
+      indentWidth: 2,
+    });
+    expect(out.success).toBe(true);
+    expect(out.code).toBe(`function main(): void {\n  print("x");\n}\n`);
   });
 
   const exampleFiles = [
@@ -122,4 +168,23 @@ function main(): void {
       assertIdempotent(source, name);
     });
   }
+});
+
+describe("parseFormatSection", () => {
+  it("parses [format] keys", () => {
+    const opts = parseFormatSection(`
+[package]
+name = "x"
+
+[format]
+indent_width = 2
+use_tabs = true
+line_width = 80
+`);
+    expect(opts).toEqual({
+      indentWidth: 2,
+      useTabs: true,
+      lineWidth: 80,
+    });
+  });
 });

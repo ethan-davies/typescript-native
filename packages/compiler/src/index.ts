@@ -12,8 +12,23 @@ export type {
   CompileResult,
 } from "./compiler.js";
 
-export { formatSource, formatFile, printProgram } from "./format/index.js";
-export type { FormatResult } from "./format/index.js";
+export {
+  formatSource,
+  formatFile,
+  printProgram,
+  loadFormatOptions,
+  parseFormatSection,
+  findProjectToml,
+  DEFAULT_FORMAT_OPTIONS,
+  resolveFormatOptions,
+} from "./format/index.js";
+export type {
+  FormatResult,
+  FormatSourceOptions,
+  FormatOptions,
+  SourceComment,
+  CommentAttachments,
+} from "./format/index.js";
 
 export { Lexer, TokenKind } from "./lexer/index.js";
 export type { Token } from "./lexer/index.js";

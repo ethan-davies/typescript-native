@@ -1,0 +1,8 @@
+// Module greeting helper.
+function greet(name: string): void {
+    /* say hello */
+    print(name);
+}
+function main(): void {
+    greet("hi");
+}

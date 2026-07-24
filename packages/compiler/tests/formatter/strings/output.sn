@@ -1,0 +1,6 @@
+function main(): void {
+    print("hello");
+    print("line\nbreak");
+    const name = "Ethan";
+    print(`${name} you!`);
+}

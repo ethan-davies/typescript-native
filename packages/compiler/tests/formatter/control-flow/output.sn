@@ -1,0 +1,23 @@
+function main(): void {
+    let age = 16;
+    if (age < 13) {
+        print("child");
+    } elseif (age < 18) {
+        print("teen");
+    } else {
+        print("adult");
+    }
+    while (age > 0) {
+        age = age - 1;
+    }
+    for (let i = 0; i < 3; i++) {
+        print(i);
+    }
+    try {
+        print(1);
+    } catch (e) {
+        print(e);
+    } finally {
+        print(2);
+    }
+}

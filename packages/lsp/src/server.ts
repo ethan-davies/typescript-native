@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import type { AnalyzeResult, ExportIndexEntry } from "@sonite/compiler";
 import {
+  formatSource,
+  loadFormatOptions,
+} from "@sonite/compiler";
+import {
   CodeActionKind,
   createConnection,
   ProposedFeatures,
@@ -9,6 +13,7 @@ import {
   TextDocuments,
   type InitializeParams,
   type InitializeResult,
+  type TextEdit,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import {
@@ -134,6 +139,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
           CodeActionKind.SourceOrganizeImports,
         ],
       },
+      documentFormattingProvider: true,
       semanticTokensProvider: {
         legend: {
           tokenTypes: [...SEMANTIC_TOKEN_TYPES],
@@ -418,6 +424,28 @@ connection.languages.semanticTokens.on((params) => {
   const filePath = uriToPath(params.textDocument.uri);
   const result = ensureAnalyzed(filePath);
   return semanticTokensAtFile(result.semantic, filePath);
+});
+
+connection.onDocumentFormatting((params): TextEdit[] => {
+  const filePath = uriToPath(params.textDocument.uri);
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) {
+    return [];
+  }
+  const source = doc.getText();
+  const formatOpts = loadFormatOptions(filePath);
+  const result = formatSource(source, { ...formatOpts, fileName: filePath });
+  if (!result.success || result.code === null || result.code === source) {
+    return [];
+  }
+  const edit: TextEdit = {
+    range: {
+      start: doc.positionAt(0),
+      end: doc.positionAt(source.length),
+    },
+    newText: result.code,
+  };
+  return [edit];
 });
 
 documents.listen(connection);

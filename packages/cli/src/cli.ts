@@ -74,10 +74,15 @@ program
 program
   .command("fmt")
   .description("Format .sn source files")
-  .argument("[paths...]", "files or directories to format")
+  .argument("[paths...]", "files, directories, globs, or - for stdin")
   .option("-c, --check", "check formatting without writing", false)
-  .action((paths: string[], options: { check: boolean }) => {
-    process.exitCode = runFmt({ paths, check: options.check });
+  .option("-w, --write", "write formatted output (default)", false)
+  .action((paths: string[], options: { check: boolean; write: boolean }) => {
+    process.exitCode = runFmt({
+      paths,
+      check: options.check,
+      write: options.write,
+    });
   });
 
 program

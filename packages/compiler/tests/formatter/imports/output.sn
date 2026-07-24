@@ -1,0 +1,8 @@
+import { readFile } from "std/fs";
+
+import { Client } from "@sonite/http";
+
+import { foo } from "./foo";
+import { bar } from "./utils";
+
+function main(): void {}

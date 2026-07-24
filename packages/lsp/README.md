@@ -21,6 +21,7 @@ Speaks LSP over stdio. Used by `sonite-vscode`.
 - Rename symbol (with conflict detection)
 - Signature help
 - Code actions (add missing import, remove unused import, organize imports)
+- Document formatting (`textDocument/formatting` via shared `formatSource`)
 - Completion (keywords, in-scope bindings, module symbols, members after `.`, import path strings, auto-import)
 - Document symbols
 - Semantic tokens (full document)

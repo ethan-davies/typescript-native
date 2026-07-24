@@ -1,4 +1,5 @@
 import type { DiagnosticCollector, SourceLocation, SourceSpan } from "../diagnostics/diagnostic.js";
+import type { SourceComment } from "./comments.js";
 import { KEYWORDS, TokenKind, type Token } from "./tokens.js";
 
 export class Lexer {
@@ -9,6 +10,7 @@ export class Lexer {
   private column = 1;
   /** >0 while lexing inside a `${ ... }` expression of a template literal. */
   private templateExprDepth = 0;
+  private readonly comments: SourceComment[] = [];
 
   constructor(source: string, diagnostics: DiagnosticCollector) {
     this.source = source;
@@ -16,6 +18,12 @@ export class Lexer {
   }
 
   tokenize(): Token[] {
+    return this.tokenizeWithComments().tokens;
+  }
+
+  /** Tokenize and also collect comments discarded from the token stream. */
+  tokenizeWithComments(): { tokens: Token[]; comments: SourceComment[] } {
+    this.comments.length = 0;
     const tokens: Token[] = [];
 
     for (;;) {
@@ -26,7 +34,7 @@ export class Lexer {
       }
     }
 
-    return tokens;
+    return { tokens, comments: [...this.comments] };
   }
 
   private nextToken(): Token {
@@ -359,13 +367,21 @@ export class Lexer {
       }
 
       if (ch === "/" && this.peekNext() === "/") {
+        const start = this.location();
         while (!this.isAtEnd() && this.peek() !== "\n") {
           this.advance();
         }
+        const text = this.source.slice(start.offset, this.offset);
+        this.comments.push({
+          kind: "line",
+          text,
+          span: span(start, this.location()),
+        });
         continue;
       }
 
       if (ch === "/" && this.peekNext() === "*") {
+        const start = this.location();
         this.advance();
         this.advance();
         while (!this.isAtEnd()) {
@@ -382,6 +398,12 @@ export class Lexer {
             this.advance();
           }
         }
+        const text = this.source.slice(start.offset, this.offset);
+        this.comments.push({
+          kind: "block",
+          text,
+          span: span(start, this.location()),
+        });
         continue;
       }
 

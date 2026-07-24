@@ -1,0 +1,5 @@
+async function work(): i32 {
+const a=await 1;
+return a;
+}
+function main(): void {}

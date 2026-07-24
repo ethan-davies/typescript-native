@@ -17,11 +17,18 @@ export interface ProjectBuild {
   readonly outdir: string;
 }
 
+export interface ProjectFormat {
+  readonly indentWidth: number;
+  readonly useTabs: boolean;
+  readonly lineWidth: number;
+}
+
 export interface Project {
   readonly root: string;
   readonly manifestPath: string;
   readonly package: ProjectPackage;
   readonly build: ProjectBuild;
+  readonly format: ProjectFormat;
   /** Version requirements from `[dependencies]` (exact, `^`, or `~`). */
   readonly dependencies: Readonly<Record<string, string>>;
   /** Absolute path to the entry .sn file. */
@@ -105,6 +112,7 @@ export function loadProjectFromManifest(manifestPath: string): Project {
   const authors = optionalStringArray(pkgTable, "authors");
   const outdir = optionalString(buildTable, "outdir") ?? "dist";
   const dependencies = parseDependencies(table);
+  const format = parseFormatTable(table);
 
   if (!name.trim()) {
     throw new ProjectError("package.name must not be empty");
@@ -136,11 +144,62 @@ export function loadProjectFromManifest(manifestPath: string): Project {
     manifestPath: absoluteManifest,
     package: pkg,
     build: { outdir },
+    format,
     dependencies,
     entryPath: resolve(root, entry),
     outdirPath: resolve(root, outdir),
     binaryName: name,
   };
+}
+
+function parseFormatTable(table: Record<string, unknown>): ProjectFormat {
+  const defaults: ProjectFormat = {
+    indentWidth: 4,
+    useTabs: false,
+    lineWidth: 100,
+  };
+  if (table.format === undefined) {
+    return defaults;
+  }
+  const formatTable = requireTable(table, "format");
+  let indentWidth = defaults.indentWidth;
+  let useTabs = defaults.useTabs;
+  let lineWidth = defaults.lineWidth;
+
+  if (formatTable.indent_width !== undefined) {
+    if (
+      typeof formatTable.indent_width !== "number" ||
+      !Number.isFinite(formatTable.indent_width) ||
+      formatTable.indent_width < 0
+    ) {
+      throw new ProjectError(
+        "project.toml: format.indent_width must be a non-negative number",
+      );
+    }
+    indentWidth = Math.floor(formatTable.indent_width);
+  }
+  if (formatTable.use_tabs !== undefined) {
+    if (typeof formatTable.use_tabs !== "boolean") {
+      throw new ProjectError(
+        "project.toml: format.use_tabs must be a boolean",
+      );
+    }
+    useTabs = formatTable.use_tabs;
+  }
+  if (formatTable.line_width !== undefined) {
+    if (
+      typeof formatTable.line_width !== "number" ||
+      !Number.isFinite(formatTable.line_width) ||
+      formatTable.line_width <= 0
+    ) {
+      throw new ProjectError(
+        "project.toml: format.line_width must be a positive number",
+      );
+    }
+    lineWidth = Math.floor(formatTable.line_width);
+  }
+
+  return { indentWidth, useTabs, lineWidth };
 }
 
 function parseDependencies(

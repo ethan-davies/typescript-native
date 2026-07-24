@@ -131,7 +131,12 @@ export interface ImportSpecifier extends AstNodeBase {
 export type ImportClause =
   | {
       readonly kind: "NamespaceImport";
-      /** Null means use the resolved file basename. */
+      /**
+       * `star` → `import * as name from "path"`
+       * `path` → `import "path"` or `import "path" as name`
+       */
+      readonly style: "star" | "path";
+      /** Null means use the resolved file basename (path-style side-effect import). */
       readonly localName: Identifier | null;
     }
   | {

@@ -402,7 +402,7 @@ export class Parser {
       return {
         kind: "ImportDeclaration",
         source,
-        clause: { kind: "NamespaceImport", localName },
+        clause: { kind: "NamespaceImport", style: "path", localName },
         span: { start, end: semicolon.span.end },
       };
     }
@@ -444,7 +444,7 @@ export class Parser {
       return {
         kind: "ImportDeclaration",
         source,
-        clause: { kind: "NamespaceImport", localName },
+        clause: { kind: "NamespaceImport", style: "star", localName },
         span: { start, end: semicolon.span.end },
       };
     }

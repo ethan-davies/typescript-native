@@ -582,12 +582,12 @@ describe("Parser", () => {
     expect(ast.body[0]).toMatchObject({
       kind: "ImportDeclaration",
       source: { value: "math" },
-      clause: { kind: "NamespaceImport", localName: null },
+      clause: { kind: "NamespaceImport", style: "path", localName: null },
     });
     expect(ast.body[1]).toMatchObject({
       kind: "ImportDeclaration",
       source: { value: "math/vector" },
-      clause: { kind: "NamespaceImport", localName: { name: "v" } },
+      clause: { kind: "NamespaceImport", style: "path", localName: { name: "v" } },
     });
     expect(ast.body[2]).toMatchObject({
       kind: "FunctionDeclaration",
@@ -643,7 +643,7 @@ describe("Parser", () => {
     expect(ast.body[0]).toMatchObject({
       kind: "ImportDeclaration",
       source: { value: "math" },
-      clause: { kind: "NamespaceImport", localName: { name: "math" } },
+      clause: { kind: "NamespaceImport", style: "star", localName: { name: "math" } },
     });
     expect(ast.body[1]).toMatchObject({
       kind: "ImportDeclaration",

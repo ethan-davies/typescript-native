@@ -1,0 +1,5 @@
+function add(a:i32,b:i32):i32{return a+b;}
+async function fetchUser(id:string):string{const x=await id;return x;}
+function main(): void {
+  print(add(1,2));
+}
