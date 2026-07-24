@@ -13,4 +13,4 @@ Place the static runtime library here for each supported platform:
 
 Produced by `pnpm --filter @sonite/runtime build` (Unix) or `make -f Makefile.win` (Windows), which copies into `prebuilt/<host>/`.
 
-Windows builds are **minimal** (print / strings / GC / alloc). Async reactor, net, and TLS are not available on Windows in this milestone.
+When OpenSSL has been bundled (`pnpm --filter @sonite/runtime openssl`), `libssl.a` / `libcrypto.a` (or `.lib` on Windows) are copied alongside the runtime archive.

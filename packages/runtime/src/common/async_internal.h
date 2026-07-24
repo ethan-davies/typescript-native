@@ -60,9 +60,9 @@ typedef void (*SnReactorIoCb)(void *userdata, int events);
 #define SN_REACTOR_WRITE 2
 #define SN_REACTOR_ERROR 4
 
-void sn_reactor_add_fd(int fd, int events, SnReactorIoCb cb, void *userdata);
-void sn_reactor_mod_fd(int fd, int events, SnReactorIoCb cb, void *userdata);
-void sn_reactor_del_fd(int fd);
+void sn_reactor_add_fd(intptr_t fd, int events, SnReactorIoCb cb, void *userdata);
+void sn_reactor_mod_fd(intptr_t fd, int events, SnReactorIoCb cb, void *userdata);
+void sn_reactor_del_fd(intptr_t fd);
 
 void sn_timer_init(void);
 void sn_timer_shutdown(void);

@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
   detectPlatformId,
@@ -99,6 +100,34 @@ function opensslLibDirs(): string[] {
     }
   }
   return [...dirs];
+}
+
+/**
+ * Probe monorepo / env OpenSSL without depending on @sonite/runtime
+ * (avoids a circular package edge: llvm ← runtime).
+ */
+function probeOpenSslLibDir(platformId: PlatformId): string | null {
+  const candidates: string[] = [];
+  const envRoot = process.env.SONITE_OPENSSL_ROOT;
+  if (envRoot) {
+    candidates.push(join(envRoot, "lib"), envRoot);
+  }
+  const llvmSrc = dirname(fileURLToPath(import.meta.url));
+  const runtimeRoot = join(llvmSrc, "..", "..", "runtime");
+  candidates.push(
+    join(runtimeRoot, "prebuilt", platformId),
+    join(runtimeRoot, "deps", "openssl", platformId, "lib"),
+  );
+  for (const dir of candidates) {
+    if (
+      existsSync(join(dir, "libssl.a")) ||
+      existsSync(join(dir, "libssl.lib")) ||
+      existsSync(join(dir, "ssl.lib"))
+    ) {
+      return dir;
+    }
+  }
+  return null;
 }
 
 function linuxToolchain(platformId: PlatformId, triple: string): TargetToolchain {
@@ -257,6 +286,13 @@ function findWindowsSdkLibDirs(): string[] {
 
 function windowsToolchain(platformId: PlatformId, triple: string): TargetToolchain {
   const libraryPaths = findWindowsSdkLibDirs();
+  // Bundled OpenSSL (absolute .lib paths) is attached by the CLI via
+  // @sonite/runtime getBundledOpenSslLibraries(); keep names out of
+  // systemLibraries to avoid double-linking.
+  const opensslLibDir = probeOpenSslLibDir(platformId);
+  if (opensslLibDir) {
+    libraryPaths.push(opensslLibDir);
+  }
   return {
     platformId,
     triple,

@@ -16,6 +16,17 @@ C runtime library linked into every `sn run` binary.
 
 `type_id` on class instances indexes runtime `TypeInfo` (class IDs start at `SN_TYPEID_CLASS_BASE` = 256). Builtin IDs 1–7 cover string/array/map/closure/env/future/task. Arrays, maps, and strings do **not** embed `type_id` in their current ABI; the GC side table records type identity via `sn_gc_set_type` / `sn_gc_set_array_meta` / `sn_gc_set_map_meta`. Aggregate / box layouts use registered `SN_KIND_STRUCT` TypeInfo entries (≥ 256).
 
+## Layout (platform abstraction)
+
+```text
+src/
+├── common/     # alloc, GC, strings, arrays, async scheduler, timers, …
+├── posix/      # Unix FS, paths, process, sockets, TLS, …
+├── linux/      # epoll reactor
+├── macos/      # kqueue reactor
+└── windows/    # Win32 FS/paths/process + Winsock/IOCP reactor + TLS
+```
+
 ## Async runtime
 
 Single-threaded cooperative concurrency:
@@ -23,14 +34,14 @@ Single-threaded cooperative concurrency:
 - **Scheduler / event loop** — `sn_task_spawn`, runnable queue, `sn_event_loop_run` / `sn_future_await_run`
 - **Timers** — `sn_timer_sleep_ms` → `Future<void>`
 - **Bytes** — length-prefixed `SnBytes` buffers (`sn_bytes_*`)
-- **TCP / UDP** — non-blocking sockets registered with the platform reactor (epoll)
+- **TCP / UDP** — non-blocking sockets registered with the platform reactor (epoll / kqueue / IOCP)
 - **DNS** — `sn_dns_resolve` via a worker thread + Future completion
 - **TLS** — OpenSSL client/server (`sn_tls_*`); handshakes run on detached threads so they compose with nested `await_run`, then I/O returns to the non-blocking reactor
 - **Compose** — `sn_future_all` / `sn_future_race` over `Future*[]`
 
-See `src/async.c`, `reactor.c`, `timer.c`, `net.c`, `udp.c`, `dns.c`, `tls.c`, `bytes.c`, and `tests/async_smoke.c`.
+See `src/common/async.c`, platform `reactor.c`, `posix/net.c`, and `tests/async_smoke.c`.
 
-Linking native programs requires system libraries such as `pthread`, `ssl`, and `crypto` in addition to `libsn_runtime.a` (the `sn` CLI adds these automatically via the target toolchain config).
+Linking native programs requires system libraries such as `pthread` (and, when OpenSSL is not bundled, `ssl` / `crypto`) in addition to `libsn_runtime.a`. The `sn` CLI adds these via the target toolchain config, and prefers absolute bundled OpenSSL archives from `getBundledOpenSslLibraries()` when present.
 
 ## Heap & GC
 
@@ -47,7 +58,17 @@ pnpm --filter @sonite/runtime test
 
 Produces `dist/libsn_runtime.a` and copies it to `prebuilt/<host-platform>/libsn_runtime.a` for packaging.
 
-On Windows, use `make -f Makefile.win` to produce `sn_runtime.lib` (minimal runtime; async/net/TLS deferred).
+### Bundled OpenSSL
+
+TLS uses OpenSSL. For reproducible linking, pin and build a static OpenSSL into `deps/openssl/<platform>/`:
+
+```bash
+pnpm --filter @sonite/runtime openssl
+```
+
+When `deps/openssl/<platform>/lib/libssl.a` exists, the Makefile and CLI prefer those archives over system `-lssl -lcrypto`. `installHostPrebuilt` also copies them into `prebuilt/<platform>/`. Override the search root with `SONITE_OPENSSL_ROOT`.
+
+On Windows, use `make -f Makefile.win` to produce `sn_runtime.lib` (includes Winsock async/net and OpenSSL TLS when headers/libs are available).
 
 **Maintainer note:** building the C sources still uses `clang` (or `CC`) via the Makefile. End-user `sn build` / `sn run` never invoke clang; they link the prebuilt archive through `@sonite/llvm`.
 

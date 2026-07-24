@@ -1,3 +1,5 @@
+import { PermissionDenied } from "std/errors";
+
 extern function sn_process_args(): string[];
 extern function sn_process_getenv(name: string): string | null;
 extern function sn_process_setenv(name: string, value: string): bool;
@@ -14,14 +16,14 @@ export function getEnv(name: string): string | null {
 
 export function setEnv(name: string, value: string): void {
   if (!sn_process_setenv(name, value)) {
-    throw new Error("Failed to set environment variable: " + name);
+    throw new PermissionDenied("Failed to set environment variable: " + name);
   }
 }
 
 export function cwd(): string {
   let path = sn_process_cwd();
   if (path == null) {
-    throw new Error("Failed to get current working directory");
+    throw new PermissionDenied("Failed to get current working directory");
   }
   return path;
 }

@@ -42,6 +42,79 @@ function tryHostPlatformId(): RuntimePlatformId | null {
   }
 }
 
+function opensslLibNames(platformId: RuntimePlatformId): [string, string][] {
+  if (platformId.startsWith("win32")) {
+    return [
+      ["libssl.lib", "libcrypto.lib"],
+      ["ssl.lib", "crypto.lib"],
+      ["libssl.a", "libcrypto.a"],
+    ];
+  }
+  return [["libssl.a", "libcrypto.a"]];
+}
+
+function opensslSearchRoots(platformId: RuntimePlatformId): string[] {
+  const roots: string[] = [];
+  const envRoot = process.env.SONITE_OPENSSL_ROOT;
+  if (envRoot) {
+    roots.push(envRoot, join(envRoot, "lib"));
+  }
+  roots.push(
+    join(packageRoot, "prebuilt", platformId),
+    join(packageRoot, "deps", "openssl", platformId),
+    join(packageRoot, "deps", "openssl", platformId, "lib"),
+  );
+  return roots;
+}
+
+/**
+ * Absolute paths to bundled static OpenSSL libraries (ssl then crypto),
+ * or an empty array when not bundled.
+ */
+export function getBundledOpenSslLibraries(
+  platformId?: RuntimePlatformId,
+): string[] {
+  const target = platformId ?? tryHostPlatformId();
+  if (!target) {
+    return [];
+  }
+  for (const root of opensslSearchRoots(target)) {
+    for (const [sslName, cryptoName] of opensslLibNames(target)) {
+      const ssl = join(root, sslName);
+      const crypto = join(root, cryptoName);
+      if (existsSync(ssl) && existsSync(crypto)) {
+        return [ssl, crypto];
+      }
+    }
+  }
+  return [];
+}
+
+/** Include path for bundled OpenSSL headers, or null if not present. */
+export function getBundledOpenSslIncludePath(
+  platformId?: RuntimePlatformId,
+): string | null {
+  const target = platformId ?? tryHostPlatformId();
+  if (!target) {
+    return null;
+  }
+  const candidates: string[] = [];
+  const envRoot = process.env.SONITE_OPENSSL_ROOT;
+  if (envRoot) {
+    candidates.push(join(envRoot, "include"), envRoot);
+  }
+  candidates.push(
+    join(packageRoot, "prebuilt", target, "include"),
+    join(packageRoot, "deps", "openssl", target, "include"),
+  );
+  for (const include of candidates) {
+    if (existsSync(join(include, "openssl", "ssl.h"))) {
+      return include;
+    }
+  }
+  return null;
+}
+
 /**
  * Resolve the static runtime archive for a target platform.
  * Prefers packaged prebuilds; falls back to locally-built dist/ for monorepo dev.
@@ -108,5 +181,18 @@ export function installHostPrebuilt(): string {
   mkdirSync(destDir, { recursive: true });
   const dest = join(destDir, libName);
   copyFileSync(local, dest);
+
+  // Stage bundled OpenSSL static libs next to the runtime archive when present.
+  const depsLib = join(packageRoot, "deps", "openssl", host, "lib");
+  for (const [sslName, cryptoName] of opensslLibNames(host)) {
+    const sslSrc = join(depsLib, sslName);
+    const cryptoSrc = join(depsLib, cryptoName);
+    if (existsSync(sslSrc) && existsSync(cryptoSrc)) {
+      copyFileSync(sslSrc, join(destDir, sslName));
+      copyFileSync(cryptoSrc, join(destDir, cryptoName));
+      break;
+    }
+  }
+
   return dest;
 }

@@ -1,49 +1,49 @@
-# Windows (MSVC/clang-cl) minimal runtime build.
-# Produces sn_runtime.lib for win32-x64. Requires clang-cl or cl on PATH.
+# Windows (MSVC/clang-cl) runtime build.
+# Produces sn_runtime.lib for win32-x64.
 #
 # Usage (from packages/runtime):
 #   make -f Makefile.win CC=clang-cl
 
 CC ?= clang-cl
 AR ?= llvm-ar
-CFLAGS ?= /nologo /O2 /Iinclude /D_CRT_SECURE_NO_WARNINGS /DWIN32_LEAN_AND_MEAN
+CFLAGS ?= /nologo /O2 /Iinclude /Isrc/common /D_CRT_SECURE_NO_WARNINGS /DWIN32_LEAN_AND_MEAN
 OBJ_DIR := dist/obj-win
 DIST_DIR := dist
 LIBRARY := $(DIST_DIR)/sn_runtime.lib
 
-# Core sources that are mostly portable; exclude Unix-only reactor/net/tls/async.
-CORE_SOURCES := \
-	src/alloc.c \
-	src/array.c \
-	src/bytes.c \
-	src/encoding.c \
-	src/exception.c \
-	src/gc.c \
-	src/map.c \
-	src/math.c \
-	src/path.c \
-	src/print.c \
-	src/process.c \
-	src/random.c \
-	src/string.c \
-	src/time.c \
-	src/timer.c \
-	src/typeinfo.c \
-	src/win_stubs.c
+OPENSSL_PLATFORM := win32-x64
+OPENSSL_ROOT ?= $(abspath deps/openssl/$(OPENSSL_PLATFORM))
+OPENSSL_STATIC_LIB := $(OPENSSL_ROOT)/lib/libssl.lib
+OPENSSL_STATIC_A := $(OPENSSL_ROOT)/lib/libssl.a
 
-OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.obj,$(notdir $(CORE_SOURCES)))
+ifneq ($(wildcard $(OPENSSL_STATIC_LIB)),)
+  CFLAGS += /I$(OPENSSL_ROOT)/include
+else ifneq ($(wildcard $(OPENSSL_STATIC_A)),)
+  CFLAGS += /I$(OPENSSL_ROOT)/include
+endif
 
-.PHONY: all clean
+SRC_COMMON := $(wildcard src/common/*.c)
+SRC_WINDOWS := $(wildcard src/windows/*.c)
+SOURCES := $(SRC_COMMON) $(SRC_WINDOWS)
+
+OBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.obj,$(SOURCES))
+
+.PHONY: all clean openssl
 
 all: $(LIBRARY)
 
-$(OBJ_DIR):
-	mkdir -p $(OBJ_DIR)
+openssl:
+	node scripts/fetch-openssl.js
 
-$(OBJ_DIR)/%.obj: src/%.c | $(OBJ_DIR)
+$(OBJ_DIR)/common $(OBJ_DIR)/windows:
+	mkdir -p $@
+
+$(OBJ_DIR)/%.obj: src/%.c | $(OBJ_DIR)/common $(OBJ_DIR)/windows
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) /c $< /Fo$@
 
 $(LIBRARY): $(OBJECTS)
+	@mkdir -p $(DIST_DIR)
 	$(AR) rcs $@ $(OBJECTS)
 	@echo "built $@"
 

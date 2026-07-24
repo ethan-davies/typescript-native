@@ -1,28 +1,25 @@
-#define _POSIX_C_SOURCE 200809L
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 
 #include "async_internal.h"
+#include "winsock.h"
 
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 
 #include "sn/runtime.h"
 
-#define SN_TYPEID_TCP_LISTENER 8
-#define SN_TYPEID_TCP_CONN 9
-
 typedef struct SnTcpListener {
-  int fd;
+  intptr_t fd;
 } SnTcpListener;
 
 typedef struct SnTcpConn {
-  int fd;
+  intptr_t fd;
 } SnTcpConn;
 
 typedef struct SnAcceptReq {
@@ -31,7 +28,7 @@ typedef struct SnAcceptReq {
 } SnAcceptReq;
 
 typedef struct SnConnectReq {
-  int fd;
+  intptr_t fd;
   SnFuture *future;
 } SnConnectReq;
 
@@ -62,20 +59,20 @@ static void *i64_to_handle(int64_t v) {
   return (void *)(intptr_t)v;
 }
 
-static int set_nonblock(int fd) {
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags < 0) {
-    return -1;
-  }
-  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+static int set_nonblock(intptr_t fd) {
+  u_long mode = 1;
+  return ioctlsocket((SOCKET)fd, FIONBIO, &mode);
+}
+
+static int would_block(void) {
+  int err = WSAGetLastError();
+  return err == WSAEWOULDBLOCK || err == WSAEINPROGRESS;
 }
 
 static void *make_error(const char *msg) {
-  /* Minimal Error-shaped object: header + message pointer at field index 1.
-   * Layout must match builtin Error (ObjectHeader + string*). */
   void *err = sn_alloc(16 + (int64_t)sizeof(void *));
   memset(err, 0, 16 + sizeof(void *));
-  ((SnObjectHeader *)err)->type_id = SN_TYPEID_CLASS_BASE; /* best-effort */
+  ((SnObjectHeader *)err)->type_id = SN_TYPEID_CLASS_BASE;
   ((SnObjectHeader *)err)->vtable = NULL;
   char *m = sn_str_concat(msg, "");
   *((char **)((char *)err + 16)) = m;
@@ -90,20 +87,19 @@ static void accept_cb(void *userdata, int events) {
   if (!(events & (SN_REACTOR_READ | SN_REACTOR_ERROR))) {
     return;
   }
-  int cfd = accept(req->listener->fd, NULL, NULL);
-  if (cfd < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+  SOCKET cfd = accept((SOCKET)req->listener->fd, NULL, NULL);
+  if (cfd == INVALID_SOCKET) {
+    if (would_block()) {
       return;
     }
     sn_future_fail(req->future, make_error("accept failed"));
     return;
   }
-  set_nonblock(cfd);
+  set_nonblock((intptr_t)cfd);
   SnTcpConn *conn = (SnTcpConn *)sn_alloc((int64_t)sizeof(SnTcpConn));
-  conn->fd = cfd;
+  conn->fd = (intptr_t)cfd;
   sn_gc_set_type(conn, SN_TYPEID_TCP_CONN);
   sn_reactor_del_fd(req->listener->fd);
-  /* Re-arm listener for subsequent accepts only when needed; leave unregistered. */
   sn_future_complete(req->future, box_i64(handle_to_i64(conn)));
 }
 
@@ -113,10 +109,10 @@ static void connect_cb(void *userdata, int events) {
     return;
   }
   int err = 0;
-  socklen_t len = sizeof(err);
-  if (getsockopt(req->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err != 0) {
+  int len = sizeof(err);
+  if (getsockopt((SOCKET)req->fd, SOL_SOCKET, SO_ERROR, (char *)&err, &len) != 0 || err != 0) {
     sn_reactor_del_fd(req->fd);
-    close(req->fd);
+    closesocket((SOCKET)req->fd);
     req->fd = -1;
     sn_future_fail(req->future, make_error("connect failed"));
     return;
@@ -145,11 +141,11 @@ static void read_cb(void *userdata, int events) {
   if (buf == NULL) {
     abort();
   }
-  ssize_t n = read(req->conn->fd, buf, (size_t)maxb);
+  int n = recv((SOCKET)req->conn->fd, (char *)buf, maxb, 0);
   sn_reactor_del_fd(req->conn->fd);
   if (n < 0) {
     free(buf);
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    if (would_block()) {
       sn_reactor_add_fd(req->conn->fd, SN_REACTOR_READ, read_cb, req);
       return;
     }
@@ -172,9 +168,9 @@ static void write_cb(void *userdata, int events) {
   size_t len = req->bytes != NULL ? (size_t)req->bytes->length : 0;
   const uint8_t *data = req->bytes != NULL ? req->bytes->data : NULL;
   while (req->sent < len) {
-    ssize_t n = write(req->conn->fd, data + req->sent, len - req->sent);
+    int n = send((SOCKET)req->conn->fd, (const char *)(data + req->sent), (int)(len - req->sent), 0);
     if (n < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      if (would_block()) {
         return;
       }
       sn_reactor_del_fd(req->conn->fd);
@@ -188,6 +184,7 @@ static void write_cb(void *userdata, int events) {
 }
 
 void *sn_tcp_listen(const char *host, int32_t port) {
+  sn_winsock_ensure();
   sn_async_ensure_init();
   SnFuture *fut = (SnFuture *)sn_future_new();
   char portbuf[16];
@@ -206,34 +203,35 @@ void *sn_tcp_listen(const char *host, int32_t port) {
     return fut;
   }
 
-  int fd = -1;
+  SOCKET fd = INVALID_SOCKET;
   for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
     fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-    if (fd < 0) {
+    if (fd == INVALID_SOCKET) {
       continue;
     }
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 && listen(fd, 128) == 0) {
+    BOOL yes = TRUE;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&yes, sizeof(yes));
+    if (bind(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0 && listen(fd, 128) == 0) {
       break;
     }
-    close(fd);
-    fd = -1;
+    closesocket(fd);
+    fd = INVALID_SOCKET;
   }
   freeaddrinfo(res);
-  if (fd < 0) {
+  if (fd == INVALID_SOCKET) {
     sn_future_fail(fut, make_error("listen failed"));
     return fut;
   }
-  set_nonblock(fd);
+  set_nonblock((intptr_t)fd);
   SnTcpListener *listener = (SnTcpListener *)sn_alloc((int64_t)sizeof(SnTcpListener));
-  listener->fd = fd;
+  listener->fd = (intptr_t)fd;
   sn_gc_set_type(listener, SN_TYPEID_TCP_LISTENER);
   sn_future_complete(fut, box_i64(handle_to_i64(listener)));
   return fut;
 }
 
 void *sn_tcp_accept(int64_t listener_handle) {
+  sn_winsock_ensure();
   sn_async_ensure_init();
   SnFuture *fut = (SnFuture *)sn_future_new();
   SnTcpListener *listener = (SnTcpListener *)i64_to_handle(listener_handle);
@@ -241,16 +239,16 @@ void *sn_tcp_accept(int64_t listener_handle) {
     sn_future_fail(fut, make_error("invalid listener"));
     return fut;
   }
-  int cfd = accept(listener->fd, NULL, NULL);
-  if (cfd >= 0) {
-    set_nonblock(cfd);
+  SOCKET cfd = accept((SOCKET)listener->fd, NULL, NULL);
+  if (cfd != INVALID_SOCKET) {
+    set_nonblock((intptr_t)cfd);
     SnTcpConn *conn = (SnTcpConn *)sn_alloc((int64_t)sizeof(SnTcpConn));
-    conn->fd = cfd;
+    conn->fd = (intptr_t)cfd;
     sn_gc_set_type(conn, SN_TYPEID_TCP_CONN);
     sn_future_complete(fut, box_i64(handle_to_i64(conn)));
     return fut;
   }
-  if (errno != EAGAIN && errno != EWOULDBLOCK) {
+  if (!would_block()) {
     sn_future_fail(fut, make_error("accept failed"));
     return fut;
   }
@@ -262,6 +260,7 @@ void *sn_tcp_accept(int64_t listener_handle) {
 }
 
 void *sn_tcp_connect(const char *host, int32_t port) {
+  sn_winsock_ensure();
   sn_async_ensure_init();
   SnFuture *fut = (SnFuture *)sn_future_new();
   char portbuf[16];
@@ -278,46 +277,48 @@ void *sn_tcp_connect(const char *host, int32_t port) {
     return fut;
   }
 
-  int fd = -1;
+  SOCKET fd = INVALID_SOCKET;
   int pending = 0;
   for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
     fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-    if (fd < 0) {
+    if (fd == INVALID_SOCKET) {
       continue;
     }
-    set_nonblock(fd);
-    int rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+    set_nonblock((intptr_t)fd);
+    int rc = connect(fd, ai->ai_addr, (int)ai->ai_addrlen);
     if (rc == 0) {
       pending = 0;
       break;
     }
-    if (errno == EINPROGRESS) {
+    int err = WSAGetLastError();
+    if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
       pending = 1;
       break;
     }
-    close(fd);
-    fd = -1;
+    closesocket(fd);
+    fd = INVALID_SOCKET;
   }
   freeaddrinfo(res);
-  if (fd < 0) {
+  if (fd == INVALID_SOCKET) {
     sn_future_fail(fut, make_error("connect failed"));
     return fut;
   }
   if (!pending) {
     SnTcpConn *conn = (SnTcpConn *)sn_alloc((int64_t)sizeof(SnTcpConn));
-    conn->fd = fd;
+    conn->fd = (intptr_t)fd;
     sn_gc_set_type(conn, SN_TYPEID_TCP_CONN);
     sn_future_complete(fut, box_i64(handle_to_i64(conn)));
     return fut;
   }
   SnConnectReq *req = (SnConnectReq *)sn_alloc((int64_t)sizeof(SnConnectReq));
-  req->fd = fd;
+  req->fd = (intptr_t)fd;
   req->future = fut;
-  sn_reactor_add_fd(fd, SN_REACTOR_WRITE, connect_cb, req);
+  sn_reactor_add_fd((intptr_t)fd, SN_REACTOR_WRITE, connect_cb, req);
   return fut;
 }
 
 void *sn_tcp_read(int64_t conn_handle, int32_t max_bytes) {
+  sn_winsock_ensure();
   sn_async_ensure_init();
   SnFuture *fut = (SnFuture *)sn_future_new();
   SnTcpConn *conn = (SnTcpConn *)i64_to_handle(conn_handle);
@@ -325,7 +326,6 @@ void *sn_tcp_read(int64_t conn_handle, int32_t max_bytes) {
     sn_future_fail(fut, make_error("invalid connection"));
     return fut;
   }
-  /* Bound allocation so a peer cannot force unbounded buffers per read. */
   if (max_bytes <= 0) {
     max_bytes = 65536;
   }
@@ -341,6 +341,7 @@ void *sn_tcp_read(int64_t conn_handle, int32_t max_bytes) {
 }
 
 void *sn_tcp_write(int64_t conn_handle, int64_t bytes_handle) {
+  sn_winsock_ensure();
   sn_async_ensure_init();
   SnFuture *fut = (SnFuture *)sn_future_new();
   SnTcpConn *conn = (SnTcpConn *)i64_to_handle(conn_handle);
@@ -358,9 +359,9 @@ void *sn_tcp_write(int64_t conn_handle, int64_t bytes_handle) {
   size_t len = bytes != NULL ? (size_t)bytes->length : 0;
   const uint8_t *data = bytes != NULL ? bytes->data : NULL;
   while (req->sent < len) {
-    ssize_t n = write(conn->fd, data + req->sent, len - req->sent);
+    int n = send((SOCKET)conn->fd, (const char *)(data + req->sent), (int)(len - req->sent), 0);
     if (n < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      if (would_block()) {
         sn_reactor_add_fd(conn->fd, SN_REACTOR_WRITE, write_cb, req);
         return fut;
       }
@@ -385,11 +386,11 @@ void sn_tcp_close(void *conn_or_listener) {
   if (conn_or_listener == NULL) {
     return;
   }
-  int fd = *(int *)conn_or_listener;
+  intptr_t fd = *(intptr_t *)conn_or_listener;
   if (fd >= 0) {
     sn_reactor_del_fd(fd);
-    close(fd);
-    *(int *)conn_or_listener = -1;
+    closesocket((SOCKET)fd);
+    *(intptr_t *)conn_or_listener = -1;
   }
 }
 

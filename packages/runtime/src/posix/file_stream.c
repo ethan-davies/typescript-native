@@ -12,7 +12,6 @@
 
 #include "sn/runtime.h"
 
-#define SN_TYPEID_FILE 11
 #define SN_FILE_WORKERS 2
 #define SN_FILE_MAX_READ 1048576
 

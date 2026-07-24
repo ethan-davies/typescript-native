@@ -1,3 +1,5 @@
+import { FileNotFound, PermissionDenied } from "std/errors";
+
 extern function sn_fs_read_file(path: string): string | null;
 extern function sn_fs_write_file(path: string, contents: string): bool;
 extern function sn_fs_append_file(path: string, contents: string): bool;
@@ -5,24 +7,36 @@ extern function sn_fs_exists(path: string): bool;
 extern function sn_fs_delete_file(path: string): bool;
 extern function sn_fs_copy_file(src: string, dst: string): bool;
 extern function sn_fs_move_file(src: string, dst: string): bool;
+extern function sn_fs_size(path: string): i64;
+extern function sn_fs_is_dir(path: string): bool;
+extern function sn_fs_is_file(path: string): bool;
+
+export struct FileStat {
+  size: i64;
+  isDir: bool;
+  isFile: bool;
+}
 
 export function readFile(path: string): string {
   let contents = sn_fs_read_file(path);
   if (contents == null) {
-    throw new Error("Failed to read file: " + path);
+    if (!sn_fs_exists(path)) {
+      throw new FileNotFound("File not found: " + path);
+    }
+    throw new PermissionDenied("Failed to read file: " + path);
   }
   return contents;
 }
 
 export function writeFile(path: string, contents: string): void {
   if (!sn_fs_write_file(path, contents)) {
-    throw new Error("Failed to write file: " + path);
+    throw new PermissionDenied("Failed to write file: " + path);
   }
 }
 
 export function appendFile(path: string, contents: string): void {
   if (!sn_fs_append_file(path, contents)) {
-    throw new Error("Failed to append file: " + path);
+    throw new PermissionDenied("Failed to append file: " + path);
   }
 }
 
@@ -32,18 +46,50 @@ export function exists(path: string): bool {
 
 export function deleteFile(path: string): void {
   if (!sn_fs_delete_file(path)) {
-    throw new Error("Failed to delete file: " + path);
+    if (!sn_fs_exists(path)) {
+      throw new FileNotFound("File not found: " + path);
+    }
+    throw new PermissionDenied("Failed to delete file: " + path);
   }
 }
 
 export function copyFile(src: string, dst: string): void {
   if (!sn_fs_copy_file(src, dst)) {
-    throw new Error("Failed to copy file");
+    if (!sn_fs_exists(src)) {
+      throw new FileNotFound("File not found: " + src);
+    }
+    throw new PermissionDenied("Failed to copy file");
   }
 }
 
 export function moveFile(src: string, dst: string): void {
   if (!sn_fs_move_file(src, dst)) {
-    throw new Error("Failed to move file");
+    if (!sn_fs_exists(src)) {
+      throw new FileNotFound("File not found: " + src);
+    }
+    throw new PermissionDenied("Failed to move file");
   }
+}
+
+export function size(path: string): i64 {
+  return sn_fs_size(path);
+}
+
+export function isDirectory(path: string): bool {
+  return sn_fs_is_dir(path);
+}
+
+export function isFile(path: string): bool {
+  return sn_fs_is_file(path);
+}
+
+export function stat(path: string): FileStat {
+  if (!sn_fs_exists(path)) {
+    throw new FileNotFound("File not found: " + path);
+  }
+  return FileStat {
+    size: sn_fs_size(path),
+    isDir: sn_fs_is_dir(path),
+    isFile: sn_fs_is_file(path),
+  };
 }

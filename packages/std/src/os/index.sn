@@ -1,0 +1,12 @@
+extern function sn_os_platform(): string;
+extern function sn_os_architecture(): string;
+
+/** Current OS: "linux", "macos", or "windows". */
+export function platform(): string {
+  return sn_os_platform();
+}
+
+/** Current CPU architecture: "x64" or "arm64". */
+export function architecture(): string {
+  return sn_os_architecture();
+}

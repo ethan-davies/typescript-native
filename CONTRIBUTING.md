@@ -9,10 +9,9 @@ Please read the [Code of Conduct](./CODE_OF_CONDUCT.md) before participating. Se
 - [Node.js](https://nodejs.org/) 20+
 - [pnpm](https://pnpm.io/) 10+
 - A C++17 compiler and Node headers (to build `@sonite/llvm` from source)
-- OpenSSL development libraries (linked into Sonite programs on Unix)
 - On Windows: Windows SDK / MSVC tools for system libraries when linking
 
-**End users** do not need LLVM, clang, llc, or ld.lld. The `@sonite/llvm` package installs a platform-specific optional dependency (`@sonite/llvm-linux-x64`, …) that bundles the native addon and LLVM/LLD shared libraries.
+**End users** do not need LLVM, Clang, LLD, llc, ld.lld, or OpenSSL installed separately. The `@sonite/llvm` package installs a platform-specific optional dependency (`@sonite/llvm-linux-x64`, …) that bundles the native addon and LLVM/LLD shared libraries. Runtime prebuilts under `@sonite/runtime` include the static Sonite runtime and, when built with `pnpm --filter @sonite/runtime openssl`, statically linked OpenSSL archives.
 
 **Contributors** building the native binding:
 
@@ -20,9 +19,26 @@ Please read the [Code of Conduct](./CODE_OF_CONDUCT.md) before participating. Se
 pnpm build:native
 ```
 
-This downloads the pinned LLVM **22.1.8** SDK into `~/.cache/sonite/` (override with `SONITE_LLVM_SDK` or `SN_CACHE_DIR`). For emergency local iteration only: `SONITE_BUNDLE_FROM_SYSTEM=1` (still copies libs into the platform package).
+This downloads the pinned LLVM **22.1.8** SDK into `~/.cache/sonite/` (override with `SONITE_LLVM_SDK` or `SN_CACHE_DIR`). For emergency local iteration only: `SONITE_BUNDLE_FROM_SYSTEM=1` (still copies libs into the platform package). **CI and release builds must not set `SONITE_BUNDLE_FROM_SYSTEM=1`.**
 
-Runtime C sources are still built with `clang`/`make` for maintainers; `sn build` / `sn run` never invoke clang — they link `prebuilt/<platform>/libsn_runtime.a` (or `sn_runtime.lib` on Windows).
+Optional: bundle OpenSSL for self-contained TLS linking:
+
+```bash
+pnpm --filter @sonite/runtime openssl
+```
+
+Runtime C sources are still built with `clang`/`make` for maintainers; `sn build` / `sn run` never invoke clang — they link `prebuilt/<platform>/libsn_runtime.a` (or `sn_runtime.lib` on Windows) through the direct LLVM/LLD toolchain.
+
+### Supported platforms
+
+| Platform | Architecture | Status |
+| --- | --- | --- |
+| Linux | x64 | Supported |
+| Linux | ARM64 | Supported |
+| macOS | x64 | Supported |
+| macOS | ARM64 | Supported |
+| Windows | x64 | Supported |
+| Windows | ARM64 | Deferred |
 
 ## Setup
 

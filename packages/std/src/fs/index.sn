@@ -6,6 +6,11 @@ export {
   deleteFile,
   copyFile,
   moveFile,
+  size,
+  isDirectory,
+  isFile,
+  stat,
+  FileStat,
 } from "./file";
 export { FileStream } from "./file_stream";
 export {
@@ -20,4 +25,7 @@ export {
   extension,
   normalize,
   absolute,
+  isAbsolute,
+  relative,
+  resolve,
 } from "./path";

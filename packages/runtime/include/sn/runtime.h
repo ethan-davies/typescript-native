@@ -84,6 +84,12 @@ typedef enum SnRefClass {
  * Layout produced by codegen: { ptr result_fut, i64 state, params..., locals..., await_tmp }. */
 #define SN_TYPEID_FRAME 8
 #define SN_TYPEID_BYTES 10
+#define SN_TYPEID_TCP_LISTENER 11
+#define SN_TYPEID_TCP_CONN 12
+#define SN_TYPEID_UDP_SOCK 13
+#define SN_TYPEID_UDP_PACKET 14
+#define SN_TYPEID_TLS_CONN 15
+#define SN_TYPEID_FILE 16
 #define SN_TYPEID_CLASS_BASE 256
 
 /* Length-prefixed byte buffer (GC-managed). Layout matches SnArray header. */
@@ -285,11 +291,23 @@ bool sn_process_setenv(const char *name, const char *value);
 char *sn_process_cwd(void);
 void sn_process_exit(int32_t code);
 
+/* Platform detection ("linux"|"macos"|"windows" and "x64"|"arm64"). */
+char *sn_os_platform(void);
+char *sn_os_architecture(void);
+
 /* Time (milliseconds) */
 int64_t sn_time_now_ms(void);
 void sn_time_sleep_ms(int64_t ms);
 
 /* Filesystem */
+typedef struct SnFileStat {
+  int64_t size;
+  int64_t mtime_ms;
+  int32_t is_dir;
+  int32_t is_file;
+  int32_t mode; /* permission bits where applicable; 0 on Windows if unknown */
+} SnFileStat;
+
 char *sn_fs_read_file(const char *path); /* NULL on failure */
 bool sn_fs_write_file(const char *path, const char *contents);
 bool sn_fs_append_file(const char *path, const char *contents);
@@ -300,6 +318,10 @@ bool sn_fs_move_file(const char *src, const char *dst);
 bool sn_fs_create_dir(const char *path);
 bool sn_fs_delete_dir(const char *path);
 void *sn_fs_list_dir(const char *path); /* string[] or NULL on failure */
+bool sn_fs_stat(const char *path, SnFileStat *out); /* false if missing */
+int64_t sn_fs_size(const char *path);               /* -1 on failure */
+bool sn_fs_is_dir(const char *path);
+bool sn_fs_is_file(const char *path);
 
 /* Async file streams (worker pool + Future). Handles are opaque i64. */
 void *sn_file_open(const char *path, const char *mode); /* Future<i64> */
@@ -316,6 +338,9 @@ char *sn_path_dirname(const char *path);
 char *sn_path_extension(const char *path);
 char *sn_path_normalize(const char *path);
 char *sn_path_absolute(const char *path);
+bool sn_path_is_absolute(const char *path);
+char *sn_path_relative(const char *from, const char *to);
+char *sn_path_resolve(const char *path); /* same as absolute for single path */
 
 /* Encoding */
 char *sn_base64_encode(const char *data);

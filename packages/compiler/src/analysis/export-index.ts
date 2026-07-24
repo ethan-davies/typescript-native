@@ -34,6 +34,14 @@ const STD_PUBLIC_MODULES = [
   "process",
   "time",
   "encoding",
+  "os",
+  "errors",
+  "net",
+  "tls",
+  "http",
+  "async",
+  "bytes",
+  "json",
 ] as const;
 
 export interface BuildExportIndexOptions {

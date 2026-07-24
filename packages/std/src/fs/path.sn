@@ -4,6 +4,9 @@ extern function sn_path_dirname(path: string): string;
 extern function sn_path_extension(path: string): string;
 extern function sn_path_normalize(path: string): string;
 extern function sn_path_absolute(path: string): string;
+extern function sn_path_is_absolute(path: string): bool;
+extern function sn_path_relative(fromPath: string, toPath: string): string;
+extern function sn_path_resolve(path: string): string;
 
 export function join(a: string, b: string): string {
   return sn_path_join(a, b);
@@ -27,4 +30,16 @@ export function normalize(path: string): string {
 
 export function absolute(path: string): string {
   return sn_path_absolute(path);
+}
+
+export function isAbsolute(path: string): bool {
+  return sn_path_is_absolute(path);
+}
+
+export function relative(fromPath: string, toPath: string): string {
+  return sn_path_relative(fromPath, toPath);
+}
+
+export function resolve(path: string): string {
+  return sn_path_resolve(path);
 }

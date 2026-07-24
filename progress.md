@@ -1,103 +1,673 @@
-# Progress
+# Sonite v1.0.0 Roadmap
 
-Living checklist for **sonite** — what’s done, what’s in flight, and what’s still ahead.
+## Phase 1 — Cross-Platform Toolchain, Runtime & Standard Library
 
-Last updated: 2026-07-23
+### Native compiler toolchain
+
+* [ ] LLVM version pinned
+* [ ] LLVM C API binding production-ready
+* [ ] LLVM object emission through `TargetMachine`
+* [ ] LLD integration
+* [ ] No `clang` subprocess
+* [ ] No `llc` subprocess
+* [ ] No `ld.lld` subprocess
+* [ ] No system LLVM requirement
+* [ ] No system Clang requirement
+* [ ] No system LLD requirement
+* [ ] Native LLVM libraries bundled
+* [ ] Native LLD libraries bundled
+* [ ] Native library loading works without environment configuration
+* [ ] Reproducible native toolchain builds
+* [ ] Platform detection
+* [ ] Correct target triples
+* [ ] Correct object formats
+* [ ] Correct ABI configuration
+* [ ] Correct system library linking
+
+### Supported targets
+
+* [ ] Linux x64
+* [ ] Linux ARM64
+* [ ] macOS x64
+* [ ] macOS ARM64
+* [ ] Windows x64
+* [ ] Windows ARM64 explicitly deferred
+
+### Native packages
+
+* [ ] `@sonite/llvm-linux-x64`
+* [ ] `@sonite/llvm-linux-arm64`
+* [ ] `@sonite/llvm-macos-x64`
+* [ ] `@sonite/llvm-macos-arm64`
+* [ ] `@sonite/llvm-win32-x64`
+* [ ] Automatic platform package selection
+* [ ] Unsupported platform diagnostics
+
+### Runtime
+
+* [ ] Linux x64 runtime
+* [ ] Linux ARM64 runtime
+* [ ] macOS x64 runtime
+* [ ] macOS ARM64 runtime
+* [ ] Windows x64 runtime
+* [ ] Cross-platform runtime ABI
+* [ ] Memory management
+* [ ] Garbage collection
+* [ ] Exceptions
+* [ ] Strings
+* [ ] Arrays
+* [ ] Console I/O
+* [ ] Template-string formatting
+* [ ] Async/await
+* [ ] Async I/O
+* [ ] Byte streams
+* [ ] Filesystem
+* [ ] Paths
+* [ ] TCP
+* [ ] UDP
+* [ ] DNS
+* [ ] TLS
+* [ ] HTTP
+* [ ] HTTPS
+
+### Standard library
+
+* [ ] Cross-platform strings
+* [ ] Cross-platform collections
+* [ ] Cross-platform math
+* [ ] Cross-platform filesystem
+* [ ] Cross-platform paths
+* [ ] Cross-platform networking
+* [ ] Cross-platform TLS
+* [ ] Cross-platform HTTP
+* [ ] Cross-platform HTTPS
+* [ ] Platform detection
+* [ ] Consistent error types
+* [ ] Consistent API semantics
+
+### Cross-platform validation
+
+* [ ] All core language features compile on every target
+* [ ] All runtime functionality works on every target
+* [ ] All stdlib functionality works on every target
+* [ ] Async client/server round-trip on every target
+* [ ] HTTPS round-trip on every target
+* [ ] Clean-machine installation tests
+* [ ] No-system-LLVM tests
+* [ ] Native dependency inspection
+* [ ] Full cross-platform CI
 
 ---
 
-## Vision
+# Phase 2 — Complete IDE / LSP Experience
 
-Build a programming language with TypeScript-like syntax that ahead-of-time compiles to native code via LLVM. The compiler itself is written in TypeScript (Node.js).
+You already have a substantial amount of this implemented, so this phase is about **finishing and hardening it**, not starting from scratch.
 
-Target pipeline:
+### Existing functionality to verify
 
+* [x] Diagnostics
+* [x] Completion
+* [x] Hover
+* [x] Go-to-definition
+* [x] Document symbols
+* [x] Go-to-references largely implemented
+* [x] Auto-import largely implemented
+
+### Complete
+
+* [ ] Go-to-references fully production-ready
+* [ ] Rename symbol
+* [ ] Signature help
+* [ ] Code actions
+* [ ] Auto-import fully production-ready
+* [ ] Semantic tokens
+* [ ] Unused-import diagnostics
+* [ ] Remove unused import action
+* [ ] Organize imports
+* [ ] Add missing import action
+* [ ] Correct import insertion
+* [ ] Correct import removal
+* [ ] Correct import sorting
+
+### Language server robustness
+
+* [ ] Incremental document updates
+* [ ] Correct diagnostics after edits
+* [ ] Correct diagnostics after imports change
+* [ ] Workspace-aware module resolution
+* [ ] Multi-file project analysis
+* [ ] Dependency/package analysis
+* [ ] Large-project performance
+* [ ] Cancellation support
+* [ ] Graceful compiler failures
+* [ ] No LSP crashes on invalid code
+
+### VS Code extension
+
+* [ ] Syntax highlighting
+* [ ] LSP integration
+* [ ] Semantic tokens
+* [ ] Completion UI
+* [ ] Diagnostics UI
+* [ ] Code actions
+* [ ] Formatting integration
+* [ ] Rename integration
+* [ ] Signature help
+* [ ] Auto-import
+* [ ] Marketplace-ready packaging
+
+---
+
+# Phase 3 — Formatter & Code Quality
+
+This should be a dedicated milestone because a formatter becomes important once the language is used by multiple people.
+
+### Formatter
+
+* [ ] Formatter implementation
+* [ ] Parse source
+* [ ] Format AST
+* [ ] Preserve comments
+* [ ] Preserve string contents
+* [ ] Stable output
+* [ ] Idempotent formatting
+* [ ] Configurable indentation
+* [ ] Configurable line width
+* [ ] Import formatting
+* [ ] Import ordering
+* [ ] Multiline formatting
+* [ ] Function formatting
+* [ ] Type formatting
+* [ ] Generic formatting
+* [ ] Struct/class formatting
+* [ ] Interface formatting
+* [ ] Async/await formatting
+* [ ] Error recovery on incomplete source
+
+### CLI
+
+* [ ] `sn fmt`
+* [ ] `sn fmt --check`
+* [ ] Format individual files
+* [ ] Format entire projects
+* [ ] Format only changed files where practical
+* [ ] CI-friendly exit codes
+
+### LSP
+
+* [ ] Document formatting
+* [ ] Format on save
+* [ ] Range formatting if practical
+
+### Code quality
+
+* [ ] Compiler warnings framework
+* [ ] Unused-variable diagnostics
+* [ ] Unreachable-code diagnostics
+* [ ] Other useful static diagnostics
+* [ ] Configurable warning levels
+
+---
+
+# Phase 4 — Compiler & Language Stabilisation
+
+Before adding major new features, make the language you already have reliable.
+
+### Compiler correctness
+
+* [ ] Parser edge cases
+* [ ] Scanner edge cases
+* [ ] Typechecker edge cases
+* [ ] Generic typechecking edge cases
+* [ ] Generic inference correctness
+* [ ] Interface checking
+* [ ] Async typechecking
+* [ ] Exception checking
+* [ ] Module resolution
+* [ ] Circular dependency handling
+* [ ] Import/export correctness
+* [ ] Closure correctness
+* [ ] Lambda correctness
+* [ ] Function overload/dispatch correctness if applicable
+
+### Code generation
+
+* [ ] Correct LLVM IR generation
+* [ ] Correct ABI lowering
+* [ ] Correct struct layout
+* [ ] Correct array layout
+* [ ] Correct string representation
+* [ ] Correct closure representation
+* [ ] Correct generic monomorphisation/code generation
+* [ ] Correct async state-machine generation
+* [ ] Correct exception handling
+* [ ] Correct debug location generation
+
+### Runtime correctness
+
+* [ ] Memory safety validation
+* [ ] GC stress tests
+* [ ] Async stress tests
+* [ ] Concurrent task tests
+* [ ] Exception stress tests
+* [ ] Network stress tests
+* [ ] TLS stress tests
+* [ ] Resource cleanup validation
+* [ ] Socket cleanup
+* [ ] File handle cleanup
+* [ ] TLS cleanup
+
+### Compiler stability
+
+* [ ] Compiler never crashes on normal invalid input
+* [ ] Structured compiler diagnostics
+* [ ] Source spans on all major errors
+* [ ] Error codes
+* [ ] Helpful error messages
+* [ ] Suggestions where practical
+* [ ] Panic/crash reporting for compiler bugs
+
+---
+
+# Phase 5 — Public FFI & Native Interoperability
+
+This is where `extern` evolves from primarily being an internal runtime mechanism into a supported way for Sonite packages to interact with native libraries.
+
+### FFI language features
+
+* [ ] Public `extern` declarations
+* [ ] C ABI support
+* [ ] External functions
+* [ ] External variables if needed
+* [ ] External structs
+* [ ] Native pointers
+* [ ] Pointer types
+* [ ] Native arrays/buffers
+* [ ] Native callbacks
+* [ ] Function pointers
+* [ ] C-compatible primitive types
+* [ ] C-compatible struct layout
+* [ ] ABI annotations
+* [ ] `unsafe` boundary if required
+
+### Linking
+
+* [ ] Native library declarations
+* [ ] Static libraries
+* [ ] Dynamic libraries
+* [ ] Platform-specific libraries
+* [ ] Library search paths
+* [ ] Linker arguments
+* [ ] Include/header metadata if needed
+* [ ] Package-provided native dependencies
+
+### Package integration
+
+Allow packages to declare native dependencies.
+
+Conceptually:
+
+```toml
+[native]
+libraries = ["sqlite3"]
 ```
-.sn source → lexer → parser → validate → typecheck → LLVM IR → clang (bundled/cached) → native binary
+
+Support:
+
+* [ ] Native dependency metadata
+* [ ] Platform-specific native dependencies
+* [ ] Native library discovery
+* [ ] Native library bundling
+* [ ] Native dependency installation
+* [ ] Cross-platform native package handling
+
+### Safety
+
+* [ ] Clear FFI safety model
+* [ ] Unsafe FFI operations identified
+* [ ] Pointer lifetime rules
+* [ ] Memory ownership rules
+* [ ] Callback lifetime rules
+* [ ] ABI mismatch diagnostics
+
+### Runtime
+
+* [ ] Internal runtime `extern` ABI documented internally
+* [ ] Runtime symbols separated from public FFI
+* [ ] Runtime symbol naming conventions
+* [ ] No accidental exposure of internal runtime APIs
+
+---
+
+# Phase 6 — Package Ecosystem & Build System Maturity
+
+You already have:
+
+* Package registry
+* Package publishing API
+* Package CLI commands
+* Dependency system
+* `project.toml`
+
+This phase is about making the ecosystem production-ready.
+
+### Dependency management
+
+* [ ] Lockfile implementation
+* [ ] Deterministic dependency resolution
+* [ ] Transitive dependencies
+* [ ] Semantic version constraints
+* [ ] Version conflict resolution
+* [ ] Dependency updates
+* [ ] Dependency removal
+* [ ] Dependency overrides
+* [ ] Local/path dependencies
+* [ ] Git dependencies if desired
+* [ ] Development dependencies if desired
+
+### CLI
+
+Ensure the package system has:
+
+* [ ] `sn init`
+* [ ] `sn add`
+* [ ] `sn remove`
+* [ ] `sn install`
+* [ ] `sn update`
+* [ ] `sn publish`
+* [ ] `sn search`
+* [ ] `sn info`
+* [ ] `sn login`
+* [ ] `sn logout`
+* [ ] `sn build`
+* [ ] `sn run`
+
+### Lockfiles
+
+* [ ] Lockfile format
+* [ ] Dependency versions
+* [ ] Resolved package URLs
+* [ ] Integrity hashes
+* [ ] Transitive dependency information
+* [ ] Platform-specific dependency information
+* [ ] Reproducible installs
+* [ ] Lockfile validation
+
+### Registry
+
+* [ ] Package publishing
+* [ ] Package downloading
+* [ ] Package metadata
+* [ ] Version management
+* [ ] Package ownership
+* [ ] Authentication
+* [ ] Package deletion policy
+* [ ] Deprecation
+* [ ] Package search
+* [ ] Package documentation
+* [ ] Download statistics
+* [ ] Abuse/security controls
+
+### Package security
+
+* [ ] Tarball integrity verification
+* [ ] Checksums
+* [ ] Registry HTTPS
+* [ ] Authentication tokens
+* [ ] Secure credential storage
+* [ ] Dependency provenance where practical
+
+### Project management
+
+* [ ] Project configuration validation
+* [ ] Build profiles
+* [ ] Debug build
+* [ ] Release build
+* [ ] Optimisation levels
+* [ ] Project metadata
+* [ ] Entry point configuration
+* [ ] Build output configuration
+
+### Workspaces
+
+If desired before v1:
+
+* [ ] Workspace configuration
+* [ ] Multiple Sonite packages
+* [ ] Shared lockfile
+* [ ] Workspace dependencies
+* [ ] Workspace builds
+
+I would consider workspaces optional for v1 unless Sonite's own repository structure requires them.
+
+---
+
+# Phase 7 — Debugging & Production Diagnostics
+
+This is the final major development phase before release.
+
+### Debug information
+
+* [ ] LLVM debug metadata
+* [ ] Source locations
+* [ ] Function names
+* [ ] Local variable information
+* [ ] Type information where practical
+* [ ] Debug builds
+* [ ] Release builds
+
+### Runtime diagnostics
+
+* [ ] Stack traces
+* [ ] Source file locations
+* [ ] Line numbers
+* [ ] Function names
+* [ ] Async stack traces
+* [ ] Exception stack traces
+* [ ] Runtime panic reporting
+
+### Debug Adapter Protocol
+
+Implement a Sonite debug adapter.
+
+* [ ] DAP implementation
+* [ ] VS Code integration
+* [ ] Launch configuration
+* [ ] Attach configuration
+* [ ] Breakpoints
+* [ ] Conditional breakpoints
+* [ ] Logpoints if practical
+* [ ] Step over
+* [ ] Step into
+* [ ] Step out
+* [ ] Continue
+* [ ] Pause
+* [ ] Restart
+* [ ] Stop
+
+### Debug inspection
+
+* [ ] Call stack
+* [ ] Local variables
+* [ ] Global variables
+* [ ] Function arguments
+* [ ] Object inspection
+* [ ] Array inspection
+* [ ] String inspection
+* [ ] Async task inspection where practical
+
+### Native debugger integration
+
+Integrate with:
+
+```text id="9xqdbk"
+LLDB
 ```
 
----
+on:
 
-## Done
+```text id="y1b39k"
+Linux
+macOS
+```
 
-### Project scaffolding
-- [x] pnpm workspace monorepo (Node 20+)
-- [x] `@sonite/compiler` — lexer, parser, validate, typecheck, codegen, formatter
-- [x] `@sonite/cli` — `sn` CLI (depends on compiler)
-- [x] `@sonite/runtime` — C runtime (`libsn_runtime.a`)
-- [x] `@sonite/std` — standard library (prelude + modules)
-- [x] `@sonite/lsp` / VS Code extension
-- [x] Strict TypeScript configs (`tsconfig.base.json` + per-package)
-- [x] Vitest in the compiler package
-- [x] `.gitignore`, `.editorconfig`, VS Code workspace hints
-- [x] `README.md`, MIT `LICENSE`
-- [x] Examples under `examples/`
+and:
 
-### Core standard library (expanded)
-- [x] Prelude: string/array/number/bool/nullable (+ ambient print/console)
-- [x] `std/math`, `std/random`, `std/collections` (Stack/Queue/Set/List/Map/Deque)
-- [x] `std/io`, `std/fs`, `std/process`, `std/time`, `std/encoding`
-- [x] Template literals `` `${expr}` ``
-- [x] `console.log` / `error` / `warn` / `readLine` builtins
+```text id="3v6x6s"
+Windows debugger tooling
+```
 
-### Compiler pipeline (working)
-- [x] `compile()` / `compileFile()` API in `@sonite/compiler`
-- [x] Diagnostic collector with source spans and severity
-- [x] Formatted diagnostic output for the CLI
-- [x] Post-parse validation requiring exactly one `main(): void` (other functions allowed)
-- [x] Type checker for the current language surface
-- [x] Source formatter (`formatSource` / `sn fmt`) — parse → pretty-print; comments not preserved yet
-- [x] Module system — relative / `std/…` / package (+ subpath) resolution; named & namespace imports; re-exports / `export *`; formal export tables; module-level values; lockfile-backed package roots in compile + LSP; import-path completion, auto-import, find-references
+where appropriate.
 
-### CLI / toolchain
-- [x] `sn` entrypoint using **Commander**
-- [x] `project.toml` project manifest (name, version, entry, build.outdir, …)
-- [x] `sn init` — scaffold project
-- [x] `sn build` — compile project entry to native binary in `dist/`
-- [x] `sn run [file]` — single-file or project build+run
-- [x] `sn fmt [--check]` — format `.sn` files
-- [x] `sn compile` — emit LLVM IR
-- [x] `sn <file.sn>` — shorthand for `run`
-- [x] Clang resolution: `SN_CLANG` → system PATH → download/cache pinned LLVM under `~/.cache/sonite/`
-- [x] `pnpm dev` builds the compiler then runs the CLI via `tsx`
-- [x] Registry package manager — `sn login`/`logout` (device-code Bearer token), `search`/`info`, `add`/`remove`/`install`/`update`/`publish`; `[dependencies]` with exact/`^`/`~` semver + transitive resolution; `project.lock` with checksums; global store under `~/.config/sonite/packages/`; bare package imports in the compiler
-
-### Language surface
-(See README for the full feature list — modules, generics, classes, interfaces, control flow, exceptions, std, etc.)
+The Sonite developer should interact with the Sonite debugger rather than needing to understand native debugger internals.
 
 ---
 
-## Next up
+# Phase 8 — v1.0.0 Release Readiness
 
-Add features one at a time (implement end-to-end when adding — no stubs):
+I would add this as a final phase **after Phase 7**. This is not a new feature phase; it is the actual release gate.
 
-1. **Formatter polish** — preserve comments; optional style config
-2. **CLI polish** — `--emit-ast`, colored diagnostics, keep temp binaries on failure
+## Language specification
 
----
+* [ ] Core language specification written
+* [ ] Type system specification written
+* [ ] Generics documented
+* [ ] Async/await documented
+* [ ] Error handling documented
+* [ ] Module system documented
+* [ ] Package system documented
+* [ ] FFI documented
+* [ ] Runtime behaviour documented
+* [ ] Standard library API documented
 
-## Deferred / later
+## Standard library
 
-- [ ] Broader semver operators (`>=`, ranges, `*`) / PubGrub-style backtracking
-- [ ] Cross-compilation targets
-- [ ] Memory model / GC maturity
-- [ ] CI (GitHub Actions: typecheck + test + build)
+* [ ] Public API reviewed
+* [ ] API naming consistent
+* [ ] API stability review
+* [ ] Deprecated APIs identified
+* [ ] Unstable APIs explicitly marked
+* [ ] Core library documentation complete
+* [ ] JSON intentionally excluded from core if still desired
 
----
+## CLI
 
-## Known limitations (today)
+Finalise and document:
 
-| Area | Limitation |
-| --- | --- |
-| Formatter | Comments are stripped; style is fixed (2-space, K&R braces) |
-| Native binary | First-time clang download (if no system clang) fetches a large LLVM archive (~1–2 GB) into `~/.cache/sonite/` |
-| Strings | Concat allocates via `sn_alloc` (no automatic free yet) |
+* [ ] `sn init`
+* [ ] `sn build`
+* [ ] `sn run`
+* [ ] `sn fmt`
+* [ ] `sn fmt --check`
+* [ ] `sn add`
+* [ ] `sn remove`
+* [ ] `sn install`
+* [ ] `sn update`
+* [ ] `sn publish`
+* [ ] `sn search`
+* [ ] `sn info`
+* [ ] `sn login`
+* [ ] `sn logout`
 
----
+Remove or clearly mark experimental commands.
 
-## How to work from this file
+## Installation
 
-1. Pick the top item under **Next up**.
-2. Implement it fully (lexer → IR) behind tests — no half-stubs for unused features.
-3. Check it off here and adjust **Known limitations**.
-4. Keep the README high-level; keep detailed status here.
+* [ ] npm installation tested
+* [ ] Linux installation tested
+* [ ] macOS installation tested
+* [ ] Windows installation tested
+* [ ] Clean-machine installation
+* [ ] No system LLVM requirement
+* [ ] Native packages automatically selected
+* [ ] CLI available after installation
+* [ ] Uninstall process verified
+
+## Documentation
+
+Create:
+
+* [ ] Official website
+* [ ] Getting started guide
+* [ ] Installation guide
+* [ ] Language guide
+* [ ] Language reference
+* [ ] Standard library reference
+* [ ] Module system documentation
+* [ ] Package management guide
+* [ ] `project.toml` reference
+* [ ] Lockfile documentation
+* [ ] FFI guide
+* [ ] Async/await guide
+* [ ] Networking guide
+* [ ] TLS/HTTPS guide
+* [ ] Debugging guide
+* [ ] LSP/VS Code guide
+* [ ] Cross-platform guide
+* [ ] Migration/versioning guide
+
+## Examples
+
+Create official examples for:
+
+* [ ] Hello World
+* [ ] CLI application
+* [ ] Filesystem application
+* [ ] Async application
+* [ ] TCP server
+* [ ] HTTP server
+* [ ] HTTPS server
+* [ ] HTTP client
+* [ ] Package usage
+* [ ] Package creation
+* [ ] FFI example
+* [ ] Debugging example
+
+## Testing
+
+* [ ] Full compiler test suite
+* [ ] Full runtime test suite
+* [ ] Full stdlib test suite
+* [ ] Full LSP test suite
+* [ ] Formatter tests
+* [ ] Package manager tests
+* [ ] Registry tests
+* [ ] FFI tests
+* [ ] Debugger tests
+* [ ] Cross-platform CI
+* [ ] Clean-machine tests
+* [ ] End-to-end tests
+* [ ] Regression test suite
+
+## Performance
+
+* [ ] Compiler performance benchmark
+* [ ] Runtime performance benchmark
+* [ ] Async performance benchmark
+* [ ] Startup time benchmark
+* [ ] Memory usage benchmark
+* [ ] Package installation performance
+* [ ] Large-project compilation test
+
+Establish baseline metrics before v1.0.
+
+## Security
+
+* [ ] Registry HTTPS
+* [ ] Package integrity checks
+* [ ] Lockfile integrity
+* [ ] Secure authentication
+* [ ] FFI security documentation
+* [ ] Native dependency security review
+* [ ] Dependency vulnerability policy
+* [ ] Report-security process
+
+## Stability
+
+* [ ] No known critical compiler crashes
+* [ ] No known critical runtime crashes
+* [ ] No known critical package manager bugs
+* [ ] No known critical cross-platform issues
+* [ ] No known critical async deadlocks
+* [ ] No known critical memory leaks
+* [ ] No known critical data corruption issues

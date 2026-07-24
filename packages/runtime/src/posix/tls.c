@@ -14,7 +14,6 @@
 
 #include "sn/runtime.h"
 
-#define SN_TYPEID_TLS_CONN 13
 #define SN_TLS_INSECURE_SKIP_VERIFY 1
 
 typedef struct SnTcpConn {

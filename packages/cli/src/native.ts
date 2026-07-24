@@ -10,6 +10,7 @@ import {
   type OptLevel,
 } from "@sonite/llvm";
 import {
+  getBundledOpenSslLibraries,
   getRuntimeLibraryPath,
   hostRuntimePlatformId,
 } from "@sonite/runtime";
@@ -102,7 +103,22 @@ export async function linkNative(options: LinkOptions): Promise<number> {
     linker = Linker.forHost(options.triple ?? backend.getTriple());
     linker.addObject(objPath);
     linker.addLibrary(runtimeLibrary);
-    linker.addDefaultSystemLibraries();
+
+    const bundledOpenSsl = getBundledOpenSslLibraries();
+    for (const lib of bundledOpenSsl) {
+      linker.addLibrary(lib);
+    }
+    if (bundledOpenSsl.length > 0) {
+      for (const name of linker.getToolchain().systemLibraries) {
+        if (name === "ssl" || name === "crypto") {
+          continue;
+        }
+        linker.addSystemLibrary(name);
+      }
+    } else {
+      linker.addDefaultSystemLibraries();
+    }
+
     linker.setOutput(binPath);
     linker.link();
 

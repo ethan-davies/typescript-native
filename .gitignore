@@ -2,6 +2,19 @@
 node_modules/
 .pnpm-store/
 
+# Bundled OpenSSL builds (sources/cache live under ~/.cache/sonite)
+packages/runtime/deps/openssl/**
+!packages/runtime/deps/openssl/.gitkeep
+!packages/runtime/deps/openssl/README.md
+
+# OpenSSL static libs staged into prebuilt/ by installHostPrebuilt
+packages/runtime/prebuilt/*/libssl.a
+packages/runtime/prebuilt/*/libcrypto.a
+packages/runtime/prebuilt/*/libssl.lib
+packages/runtime/prebuilt/*/libcrypto.lib
+packages/runtime/prebuilt/*/ssl.lib
+packages/runtime/prebuilt/*/crypto.lib
+
 # Build output
 dist/
 *.tsbuildinfo

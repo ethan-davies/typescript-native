@@ -109,3 +109,37 @@ void *sn_fs_list_dir(const char *path) {
   closedir(dir);
   return arr;
 }
+
+bool sn_fs_stat(const char *path, SnFileStat *out) {
+  if (path == NULL || out == NULL) {
+    return false;
+  }
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    return false;
+  }
+  out->size = (int64_t)st.st_size;
+  out->mtime_ms = (int64_t)st.st_mtime * 1000;
+  out->is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+  out->is_file = S_ISREG(st.st_mode) ? 1 : 0;
+  out->mode = (int32_t)(st.st_mode & 0777);
+  return true;
+}
+
+int64_t sn_fs_size(const char *path) {
+  SnFileStat st;
+  if (!sn_fs_stat(path, &st)) {
+    return -1;
+  }
+  return st.size;
+}
+
+bool sn_fs_is_dir(const char *path) {
+  SnFileStat st;
+  return sn_fs_stat(path, &st) && st.is_dir != 0;
+}
+
+bool sn_fs_is_file(const char *path) {
+  SnFileStat st;
+  return sn_fs_stat(path, &st) && st.is_file != 0;
+}

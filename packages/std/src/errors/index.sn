@@ -1,0 +1,43 @@
+/** Portable OS / I/O error types. Prefer these over bare `Error` for platform failures. */
+
+export class FileNotFound extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class PermissionDenied extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class ConnectionRefused extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class ConnectionReset extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class Timeout extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class DnsFailure extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class TlsError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}

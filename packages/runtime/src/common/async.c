@@ -1,8 +1,11 @@
 #include "async_internal.h"
 
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 #include "sn/runtime.h"
 
@@ -84,8 +87,10 @@ void sn_async_init(void) {
     return;
   }
   async_ready = 1;
+#ifndef _WIN32
   /* Avoid process death when peer closes during TLS/TCP write. */
   signal(SIGPIPE, SIG_IGN);
+#endif
   runnable_len = 0;
   all_tasks_len = 0;
   current_task = NULL;

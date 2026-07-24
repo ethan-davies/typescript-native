@@ -16,6 +16,7 @@
     }
   },
   "scripts": {
+    "openssl": "node scripts/fetch-openssl.js",
     "build": "tsc -p tsconfig.build.json && make && node ./dist/install-prebuilt.js",
     "clean": "rm -rf dist && make clean",
     "test": "make test",

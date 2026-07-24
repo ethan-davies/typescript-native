@@ -15,9 +15,6 @@
 
 #include "sn/runtime.h"
 
-#define SN_TYPEID_UDP_SOCK 11
-#define SN_TYPEID_UDP_PACKET 12
-
 typedef struct SnUdpSocket {
   int fd;
 } SnUdpSocket;

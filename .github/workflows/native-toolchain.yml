@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # Release/CI builds must use the pinned LLVM SDK, never a system LLVM.
+  SONITE_BUNDLE_FROM_SYSTEM: "0"
+
 jobs:
   linux-x64:
     runs-on: ubuntu-latest
@@ -22,15 +26,29 @@ jobs:
         run: pnpm install
       - name: Build native toolchain
         run: pnpm build:native
+      - name: Fetch bundled OpenSSL
+        run: pnpm --filter @sonite/runtime openssl
       - name: Build packages
-        run: pnpm --filter @sonite/compiler build && pnpm --filter @sonite/llvm build:ts && pnpm --filter @sonite/runtime build && pnpm --filter @sonite/cli build
+        run: |
+          pnpm --filter @sonite/compiler build
+          pnpm --filter @sonite/llvm build:ts
+          pnpm --filter @sonite/runtime build
+          pnpm --filter @sonite/cli build
       - name: Validate native deps
         run: |
           node packages/llvm/scripts/validate-native-deps.js \
             packages/llvm-linux-x64/native/sonite_llvm.node \
             packages/llvm-linux-x64/lib
-      - name: Unit tests
+      - name: Compiler tests
+        run: pnpm --filter @sonite/compiler test
+      - name: LLVM + toolchain tests
         run: pnpm --filter @sonite/llvm test && pnpm --filter @sonite/cli exec vitest run tests/native-toolchain.test.ts
+      - name: Runtime smoke tests
+        run: pnpm --filter @sonite/runtime test
+      - name: Async / net / TLS / HTTP e2e
+        run: pnpm --filter @sonite/cli exec vitest run tests/async-run.test.ts
+      - name: FS / path e2e
+        run: pnpm --filter @sonite/cli exec vitest run tests/fs-path-run.test.ts
       - name: Clean PATH e2e
         run: |
           SCRUB=$(mktemp -d)
@@ -39,6 +57,13 @@ jobs:
           ln -s /usr/bin/env "$SCRUB/env"
           env PATH="$SCRUB" HOME="$HOME" node packages/cli/dist/cli.js run examples/hello.sn
           rm -rf "$SCRUB"
+      - name: Upload runtime prebuilt
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-linux-x64
+          path: |
+            packages/runtime/prebuilt/linux-x64/
+          if-no-files-found: warn
 
   linux-arm64:
     runs-on: ubuntu-24.04-arm
@@ -53,13 +78,34 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm build:native
-      - run: pnpm --filter @sonite/compiler build && pnpm --filter @sonite/llvm build:ts && pnpm --filter @sonite/runtime build && pnpm --filter @sonite/cli build
+      - run: pnpm --filter @sonite/runtime openssl
+      - run: |
+          pnpm --filter @sonite/compiler build
+          pnpm --filter @sonite/llvm build:ts
+          pnpm --filter @sonite/runtime build
+          pnpm --filter @sonite/cli build
       - run: |
           node packages/llvm/scripts/validate-native-deps.js \
             packages/llvm-linux-arm64/native/sonite_llvm.node \
             packages/llvm-linux-arm64/lib
+      - run: pnpm --filter @sonite/compiler test
       - run: pnpm --filter @sonite/llvm test
-      - run: node packages/cli/dist/cli.js run examples/hello.sn
+      - run: pnpm --filter @sonite/runtime test
+      - run: pnpm --filter @sonite/cli exec vitest run tests/async-run.test.ts
+      - run: pnpm --filter @sonite/cli exec vitest run tests/fs-path-run.test.ts
+      - name: Clean PATH e2e
+        run: |
+          SCRUB=$(mktemp -d)
+          ln -s "$(command -v node)" "$SCRUB/node"
+          ln -s /bin/sh "$SCRUB/sh"
+          ln -s /usr/bin/env "$SCRUB/env"
+          env PATH="$SCRUB" HOME="$HOME" node packages/cli/dist/cli.js run examples/hello.sn
+          rm -rf "$SCRUB"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-linux-arm64
+          path: packages/runtime/prebuilt/linux-arm64/
+          if-no-files-found: warn
 
   macos-arm64:
     runs-on: macos-14
@@ -74,13 +120,34 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm build:native
-      - run: pnpm --filter @sonite/compiler build && pnpm --filter @sonite/llvm build:ts && pnpm --filter @sonite/runtime build && pnpm --filter @sonite/cli build
+      - run: pnpm --filter @sonite/runtime openssl
+      - run: |
+          pnpm --filter @sonite/compiler build
+          pnpm --filter @sonite/llvm build:ts
+          pnpm --filter @sonite/runtime build
+          pnpm --filter @sonite/cli build
       - run: |
           node packages/llvm/scripts/validate-native-deps.js \
             packages/llvm-macos-arm64/native/sonite_llvm.node \
             packages/llvm-macos-arm64/lib
+      - run: pnpm --filter @sonite/compiler test
       - run: pnpm --filter @sonite/llvm test
-      - run: node packages/cli/dist/cli.js run examples/hello.sn
+      - run: pnpm --filter @sonite/runtime test
+      - run: pnpm --filter @sonite/cli exec vitest run tests/async-run.test.ts
+      - run: pnpm --filter @sonite/cli exec vitest run tests/fs-path-run.test.ts
+      - name: Clean PATH e2e
+        run: |
+          SCRUB=$(mktemp -d)
+          ln -s "$(command -v node)" "$SCRUB/node"
+          ln -s /bin/sh "$SCRUB/sh"
+          ln -s /usr/bin/env "$SCRUB/env"
+          env PATH="$SCRUB" HOME="$HOME" node packages/cli/dist/cli.js run examples/hello.sn
+          rm -rf "$SCRUB"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-macos-arm64
+          path: packages/runtime/prebuilt/macos-arm64/
+          if-no-files-found: warn
 
   macos-x64:
     runs-on: macos-13
@@ -95,13 +162,34 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm build:native
-      - run: pnpm --filter @sonite/compiler build && pnpm --filter @sonite/llvm build:ts && pnpm --filter @sonite/runtime build && pnpm --filter @sonite/cli build
+      - run: pnpm --filter @sonite/runtime openssl
+      - run: |
+          pnpm --filter @sonite/compiler build
+          pnpm --filter @sonite/llvm build:ts
+          pnpm --filter @sonite/runtime build
+          pnpm --filter @sonite/cli build
       - run: |
           node packages/llvm/scripts/validate-native-deps.js \
             packages/llvm-macos-x64/native/sonite_llvm.node \
             packages/llvm-macos-x64/lib
+      - run: pnpm --filter @sonite/compiler test
       - run: pnpm --filter @sonite/llvm test
-      - run: node packages/cli/dist/cli.js run examples/hello.sn
+      - run: pnpm --filter @sonite/runtime test
+      - run: pnpm --filter @sonite/cli exec vitest run tests/async-run.test.ts
+      - run: pnpm --filter @sonite/cli exec vitest run tests/fs-path-run.test.ts
+      - name: Clean PATH e2e
+        run: |
+          SCRUB=$(mktemp -d)
+          ln -s "$(command -v node)" "$SCRUB/node"
+          ln -s /bin/sh "$SCRUB/sh"
+          ln -s /usr/bin/env "$SCRUB/env"
+          env PATH="$SCRUB" HOME="$HOME" node packages/cli/dist/cli.js run examples/hello.sn
+          rm -rf "$SCRUB"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-macos-x64
+          path: packages/runtime/prebuilt/macos-x64/
+          if-no-files-found: warn
 
   windows-x64:
     runs-on: windows-latest
@@ -118,7 +206,10 @@ jobs:
       - name: Build native (Windows)
         run: pnpm build:native
         shell: bash
-      - name: Build runtime (Windows minimal)
+      - name: Fetch bundled OpenSSL
+        run: pnpm --filter @sonite/runtime openssl || true
+        shell: bash
+      - name: Build runtime (Windows)
         run: |
           pnpm --filter @sonite/runtime exec tsc -p tsconfig.build.json
           cd packages/runtime && make -f Makefile.win
@@ -126,9 +217,23 @@ jobs:
         shell: bash
       - run: pnpm --filter @sonite/compiler build && pnpm --filter @sonite/llvm build:ts && pnpm --filter @sonite/cli build
         shell: bash
+      - name: Compiler tests
+        run: pnpm --filter @sonite/compiler test
+        shell: bash
       - name: E2E hello
         run: node packages/cli/dist/cli.js run examples/hello.sn
         shell: bash
+      - name: Async / net / TLS / HTTP e2e
+        run: pnpm --filter @sonite/cli exec vitest run tests/async-run.test.ts
+        shell: bash
+      - name: FS / path e2e
+        run: pnpm --filter @sonite/cli exec vitest run tests/fs-path-run.test.ts
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-win32-x64
+          path: packages/runtime/prebuilt/win32-x64/
+          if-no-files-found: warn
 
   win32-arm64-deferred:
     runs-on: ubuntu-latest

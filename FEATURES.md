@@ -4,7 +4,7 @@ Currently supported features:
 
 - A single top-level `function main(): void` or `async function main(): void` with no parameters (return type required)
 - Types: `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `char`, `void`, `null`, arrays `T[]`, tuples `[T, U]`, `struct`, `enum`, `class`, `interface`, and `Future<T>` types
-- Async/await: `async function`, `await` expressions (async functions only), cooperative single-threaded tasks, timers, TCP/UDP/DNS/TLS via the event loop (OpenSSL; link `-lpthread -lssl -lcrypto`)
+- Async/await: `async function`, `await` expressions (async functions only), cooperative single-threaded tasks, timers, TCP/UDP/DNS/TLS via the event loop (OpenSSL is bundled with the runtime when built via `pnpm --filter @sonite/runtime openssl`)
 - Interfaces may declare `async` methods; implementations must match async-ness. `try`/`catch`/`finally` may span `await` (EH re-established on resume; failed/cancelled futures throw)
 - Generics: type parameters on structs, classes, interfaces, functions, and methods; constraints (`T extends I`); nested type arguments; call-site inference; compile-time monomorphization (no runtime generics)
 - Type aliases (`type Name = ...`), including generic aliases, unions (`|`), intersections (`&`), literal types, `keyof` / `typeof` type operators, conditional and mapped types
@@ -25,7 +25,9 @@ Currently supported features:
   - `std/random` — `random` / `randomInt` / `randomFloat` / `randomBool` / `seed` (pseudo-random, not crypto)
   - `std/collections` — `Stack`, `Queue`, `Set`, `List`, `Map`, `Deque`
   - `std/io` — `readLine`, stream write helpers, **`ByteStream`** (`async read`/`write`/`close`; empty `Bytes` = EOF)
-  - `std/fs` — file/directory/path helpers plus async **`FileStream`** (`ByteStream`)
+  - `std/fs` — file/directory/path helpers (`stat`, `isAbsolute`, `relative`, `resolve`, …) plus async **`FileStream`** (`ByteStream`)
+  - `std/os` — `platform()` / `architecture()` (`linux`/`macos`/`windows` and `x64`/`arm64`)
+  - `std/errors` — portable OS errors: `FileNotFound`, `PermissionDenied`, `ConnectionRefused`, `ConnectionReset`, `Timeout`, `DnsFailure`, `TlsError`
   - `std/process` — `args`, `getEnv`, `setEnv`, `cwd`, `exit`
   - `std/time` — `Instant`, `Duration`, async `sleep`, `sleepSync`, `now`
   - `std/async` — `sleep`, `spawn`, `all`, `race`, `timeout`
@@ -62,3 +64,5 @@ Currently supported features:
 
 `print` and `console.*` are builtins. They lower to `sn_print_*` / `sn_eprint_*` / `sn_read_line` runtime calls in the generated LLVM IR, and `sn run` links `libsn_runtime.a` (via the direct LLVM/LLD toolchain) when building the native binary.
 `createMap()` is a builtin that allocates an empty string-keyed map (for index-signature types).
+
+Supported native targets: Linux x64/ARM64, macOS x64/ARM64, Windows x64 (Windows ARM64 deferred).
